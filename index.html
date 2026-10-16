@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#4f46e5">
+<title>KS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="bar"></div>
+<div id="toasts"></div>
+
+<!-- ================= LOGIN ================= -->
+<div id="login" class="hidden">
+  <form class="login-card" id="loginForm" autocomplete="on">
+    <div class="logo">🗓️</div>
+    <h1 id="loginTitle">Welcome back</h1>
+    <p class="sub" id="loginSub">Sign in to open your attendance dashboard</p>
+    <div id="loginErr" class="err hidden"></div>
+    <div class="field"><label for="lu">Username</label><input class="input" id="lu" name="username" autocomplete="username" required></div>
+    <div class="field"><label for="lp">Password</label>
+      <div class="pw"><input class="input" id="lp" name="password" type="password" autocomplete="current-password" required>
+        <button type="button" id="togglePw">Show</button></div></div>
+    <div class="field setup-only hidden"><label for="lp2">Confirm password</label><input class="input" id="lp2" type="password" autocomplete="new-password"></div>
+    <div class="field setup-code hidden"><label for="lc">Setup code</label><input class="input" id="lc" type="password" autocomplete="off"></div>
+    <div class="linkrow"><label class="check"><input type="checkbox" id="remember" checked> Keep me signed in</label>
+      <button type="button" class="linkbtn" id="forgotBtn">Forgot password?</button></div>
+    <button class="btn block" id="loginBtn" type="submit">Sign in</button>
+    <p class="note">🔒 For security, your sign-in time, location and device are recorded for the admin.</p>
+  </form>
+
+  <form class="login-card hidden" id="resetForm" autocomplete="off">
+    <div class="logo">🔑</div>
+    <h1>Reset password</h1>
+    <p class="sub" id="rsSub">We will e-mail a 6-digit OTP to your registered e-mail.</p>
+    <div id="rsErr" class="err hidden"></div>
+    <div id="rsStep1"><div class="field"><label for="rsUser">Username <span class="muted">(empty = main admin)</span></label><input class="input" id="rsUser" autocomplete="username" autocapitalize="off"></div><button class="btn block" type="button" id="rsSend">Send OTP to my e-mail</button></div>
+    <div id="rsStep2" class="hidden">
+      <div class="field"><label for="rsOtp">OTP (6 digits)</label><input class="input" id="rsOtp" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code"></div>
+      <div class="field"><label for="rsPw">New password</label><input class="input" id="rsPw" type="password" autocomplete="new-password" minlength="6"></div>
+      <div class="field"><label for="rsPw2">Confirm new password</label><input class="input" id="rsPw2" type="password" autocomplete="new-password"></div>
+      <button class="btn block" id="rsGo" type="submit">Reset password & sign in</button>
+      <button class="btn ghost block" id="rsResend" type="button" style="margin-top:8px">Resend OTP</button>
+    </div>
+    <div style="text-align:center;margin-top:14px"><button type="button" class="linkbtn" id="rsBack">← Back to sign in</button></div>
+  </form>
+</div>
+
+<!-- ================= APP ================= -->
+<div id="app" class="hidden">
+  <aside>
+    <div class="brand"><div class="logo">🗓️</div><div id="brandTxt" style="font-size:22px;font-weight:800;letter-spacing:1.5px">KS</div></div>
+    <nav class="nav" id="nav">
+      <button data-v="dashboard"><span class="ico">📊</span>Dashboard</button>
+      <button data-v="attendance"><span class="ico">🗓️</span>Attendance</button>
+      <button data-v="expenses"><span class="ico">💸</span>Expenses</button>
+      <button data-v="work"><span class="ico">🛠️</span>Work</button>
+      <button data-v="logins" class="hidden"><span class="ico">🔐</span>Logins</button>
+      <button data-v="settings"><span class="ico">⚙️</span>Settings</button>
+    </nav>
+    <div class="spacer"></div>
+    <div class="side-user">
+      <div class="avatar" id="avatar">A</div>
+      <div style="flex:1;min-width:0"><div class="nm" id="uName">User</div><div class="rl" id="uRole"></div></div>
+      <button class="btn ghost sm" id="logoutBtn" title="Log out">⎋</button>
+    </div>
+  </aside>
+  <main>
+    <div class="topbar">
+      <div><h2 id="pageTitle"></h2><div class="sub" id="pageSub"></div></div>
+      <div class="actions">
+        <select class="select empsel hidden" id="asSel" title="View a user’s data"></select>
+        <select class="select empsel hidden" id="empSel" title="Employee"></select>
+        <button class="btn ghost sm" id="refreshBtn">↻ Refresh</button>
+        <button class="btn ghost sm" id="logoutBtn2">Log out</button>
+        <button class="btn ghost sm" id="logoutBtn3" style="display:none" title="Log out">⎋</button>
+      </div>
+    </div>
+    <div id="view"></div>
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
