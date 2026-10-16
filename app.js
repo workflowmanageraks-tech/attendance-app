@@ -2,7 +2,7 @@
 /* =====================================================================
    CONFIG — your deployed Apps Script web-app URL
    ===================================================================== */
-const API_URL = 'https://attendance-api-yjtj.onrender.com';
+const API_URL = 'https://YOUR-APP-NAME.onrender.com';   // <-- yahan apna Render URL daalein
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const MON = MONTHS.map(m => m.slice(0,3));
@@ -231,21 +231,25 @@ async function boot(){
    ===================================================================== */
 const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
-const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', emp:true, creds:true };
-const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
+const perms = () => (S.me && S.me.perms) || { dash:'edit', att:'edit', exp:'edit', work:'edit', emp:true, creds:true };
+const lvl = sec => { const v = perms()[sec]; return (sec === 'dash' && !v) ? 'edit' : v; };   // old users without a Dashboard setting keep full access
+const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : lvl(sec) === 'edit';
 function deny(){ toast('You have view-only access to this section', true); }
-const SECT = { attendance:'att', expenses:'exp', work:'work' };
-const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work' };
+const SECT = { dashboard:'dash', attendance:'att', expenses:'exp', work:'work' };
+const SECT_NAME = { dashboard:'Dashboard', attendance:'Attendance', expenses:'Expenses', work:'Work' };
 
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('logins', !isAdmin());
-  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin())) S.view = 'dashboard';
+  hide('dashboard', lvl('dash') === 'none'); hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('logins', !isAdmin());
+  if ((SECT[S.view] && lvl(SECT[S.view]) === 'none') || (S.view === 'logins' && !isAdmin())){
+    S.view = ['dashboard', 'attendance', 'expenses', 'work'].find(v => lvl(SECT[v]) !== 'none') || 'settings';   // first page this user may open
+  }
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
 function applyRO(v){
   const kill = sel => v.querySelectorAll(sel).forEach(e => e.remove());
+  if (S.view === 'dashboard' && !can('dash')) kill('.mark-row,[onclick*="markToday"]');
   if (!can('att')){
     kill('.mark-row,[onclick*="quickWeekday"],[onclick*="quickPast"]');
     v.querySelectorAll('[onclick*="dayPicker"]').forEach(e => { e.removeAttribute('onclick'); e.style.cursor = 'default'; });
@@ -261,7 +265,7 @@ function banner(){
   if (S.as && S.me && S.me.viewing)
     h += `<div class="viewas">👁 You are viewing <b>${esc(S.me.viewName)}</b>’s data — what you change is saved in their account. <button class="linkbtn" onclick="setAs('')">← Back to my data</button></div>`;
   const sec = SECT[S.view];
-  if (sec && perms()[sec] === 'view') h += `<div class="viewas ro">🔒 View-only access: you can see ${SECT_NAME[S.view]}, but cannot change it.</div>`;
+  if (sec && lvl(sec) === 'view') h += `<div class="viewas ro">🔒 View-only access: you can see ${SECT_NAME[S.view]}, but cannot change it.</div>`;
   return h;
 }
 function updateAsSel(){
@@ -364,7 +368,7 @@ async function collectClient(){
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
   const p = u.perms || {}, L = { none:'no access', view:'view only', edit:'can edit' };
-  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Employees: ${p.emp ? 'can manage' : 'no'}`;
+  return `Dashboard: ${L[p.dash || 'edit']} · Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Employees: ${p.emp ? 'can manage' : 'no'}`;
 }
 function usersCard(){
   const list = S.users || [];
@@ -377,17 +381,18 @@ function usersCard(){
     const acts = (!mine ? `<button class="btn ghost sm" onclick="setAs('${esc(u.id)}')" title="See this user’s data">👁 View</button>` : '')
       + (editable ? `<button class="btn ghost sm" onclick="userForm('${esc(u.id)}')">✎ Edit</button><button class="btn ghost sm" onclick="kickUser('${esc(u.id)}')" title="Sign out everywhere">⎋</button><button class="btn ghost sm" onclick="delUser('${esc(u.id)}')" title="Delete user">🗑</button>` : '');
     return `<div class="emp-item"><div class="avatar">${esc((u.name || u.username || '?').trim().charAt(0).toUpperCase())}</div>
-      <div class="info"><b>${esc(u.name || u.username)}${tag}${off}</b><span>@${esc(u.username)} · ${esc(last)}</span><span class="perm-sum">${esc(permSummary(u))}${u.needLoc ? ' · location required' : ''}</span></div>
+      <div class="info"><b>${esc(u.name || u.username)}${tag}${off}</b><span>@${esc(u.username)} · ${esc(last)}</span><span class="perm-sum">${esc(permSummary(u))}</span></div>
       <div class="acts">${acts}</div></div>`;
   }).join('');
   return `<div class="card"><h3>🛡️ Users & access <button class="btn sm" onclick="userForm()">＋ Add user</button></h3>
     <p class="muted" style="margin-bottom:12px">Each user signs in with their own username and password and sees only their own data. You decide what each user may open or change.
-      Use <b>👁 View</b> to look at (or fix) a user’s data. Login time, location and device of everyone are in the <b>Logins</b> tab.</p>
+      Use <b>👁 View</b> to look at (or fix) a user’s data. Login time and device of everyone are in the <b>Logins</b> tab.</p>
     <div class="emp-list">${rows || '<div class="empty-state">No users yet</div>'}</div></div>`;
 }
 function userForm(id){
   const x = id ? (S.users || []).find(u => u.id === id) : null;
-  const p = (x && x.perms) || { att:'edit', exp:'edit', work:'edit', emp:false, creds:true };
+  const p = (x && x.perms) || { dash:'edit', att:'edit', exp:'edit', work:'edit', emp:false, creds:true };
+  p.dash = p.dash || 'edit';
   const sel = (n, v) => `<select class="select" name="${n}"><option value="none" ${v==='none'?'selected':''}>No access (hidden)</option><option value="view" ${v==='view'?'selected':''}>View only</option><option value="edit" ${v==='edit'?'selected':''}>Can add / edit / delete</option></select>`;
   const isA = !!(x && x.role === 'admin');
   const w = openModal(`<h3>${x ? 'Edit user' : 'Add user'}</h3><p class="sub">${x ? 'Leave password empty to keep it.' : 'Set a username and password, then share them with the user.'}</p>
@@ -400,6 +405,7 @@ function userForm(id){
       <fieldset id="ufPerms" style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px" ${isA ? 'disabled' : ''}>
         <legend class="sec-title" style="padding:0 6px;margin:0">What can this user do?</legend>
         <div class="perm-grid">
+          <div class="field"><label>📊 Dashboard</label>${sel('p_dash', p.dash)}</div>
           <div class="field"><label>🗓️ Attendance</label>${sel('p_att', p.att)}</div>
           <div class="field"><label>💸 Expenses</label>${sel('p_exp', p.exp)}</div>
           <div class="field"><label>🛠️ Work</label>${sel('p_work', p.work)}</div>
@@ -408,7 +414,6 @@ function userForm(id){
         <label class="tog"><input type="checkbox" name="p_creds" ${p.creds ? 'checked' : ''}> Can change their own username & password</label>
       </fieldset>
       <label class="tog"><input type="checkbox" name="active" ${(!x || x.active) ? 'checked' : ''}> Account active (untick to block sign-in)</label>
-      <label class="tog"><input type="checkbox" name="needLoc" ${x && x.needLoc ? 'checked' : ''}> Location required to sign in <span class="muted">(blocks login if no location can be found)</span></label>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save user' : 'Add user'}</button></div></form>`, 'wide');
   w.querySelector('[data-x]').onclick = () => w.remove();
   const roleEl = w.querySelector('#ufRole');
@@ -417,8 +422,8 @@ function userForm(id){
     ev.preventDefault(); const f = new FormData(ev.target), btn = ev.submitter; btn.disabled = true;
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
-        role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'),
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
+        role:f.get('role') || 'user', active:!!f.get('active'), needLoc:false,
+        perms:{ dash:f.get('p_dash'), att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
       S.users = r.users; w.remove(); render(); toast(x ? 'User updated' : 'User added');
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
@@ -442,15 +447,11 @@ function fmtLogTime(t){
 }
 function logItem(l, compact){
   const good = l.result === 'Success', who = l.name || l.username || '(unknown)';
-  const loc = (l.lat != null && l.lng != null)
-    ? `📍 ${l.lat.toFixed(5)}, ${l.lng.toFixed(5)} <span class="tag">${esc(l.src === 'GPS' ? 'GPS' + (l.acc != null ? ' ±' + l.acc + ' m' : '') : (l.src || 'approx.'))}</span> <a href="https://www.google.com/maps?q=${l.lat},${l.lng}" target="_blank" rel="noopener">Open map ↗</a>`
-    : '📍 Location not available';
   const dev = [l.device, l.browser, l.os].filter(Boolean).join(' · ');
   return `<div class="log-item ${good ? '' : 'bad'}">
     <div class="l1"><b>${esc(who)} <span class="muted" style="font-weight:500">@${esc(l.username)}</span></b>
       <span><span class="pill ${good ? 'inc' : 'exp'}">${esc(l.result)}</span> <span class="muted">${esc(fmtLogTime(l.time))}</span></span></div>
     <div class="l2">📱 ${esc(dev || 'Unknown device')}${compact ? '' : (l.screen ? ' · ' + esc(l.screen) : '')}</div>
-    <div class="l2">${loc}</div>
     ${compact ? '' : `<div class="l2">🌐 ${esc([l.ip, l.city].filter(Boolean).join(' · ') || '—')}${l.deviceId ? ' · Device ID ' + esc(l.deviceId.slice(-6)) : ''}${l.tz ? ' · ' + esc(l.tz) : ''}${l.reason ? ' · ' + esc(l.reason) : ''}</div>`}
   </div>`;
 }
@@ -476,7 +477,7 @@ function vLogins(){
   const uopts = '<option value="all">All users</option>' + users.map(u => `<option value="${esc(u.id)}" ${f.u === u.id ? 'selected' : ''}>${esc(u.name || u.username)}</option>`).join('')
     + extra.map(([id, n]) => `<option value="${esc(id)}" ${f.u === id ? 'selected' : ''}>${esc(n)} (deleted)</option>`).join('');
   return `<div class="card" style="margin-bottom:16px"><h3>🔐 Login activity <button class="btn ghost sm" onclick="loadLogs()">↻ Refresh</button></h3>
-    <p class="muted" style="margin-bottom:12px">Every sign-in attempt: who, when, from where (latitude / longitude) and from which device. <b>GPS</b> = the phone’s exact location (the user must allow it); <b>IP</b> = approximate, city-level.</p>
+    <p class="muted" style="margin-bottom:12px">Every sign-in attempt: who, when and from which device.</p>
     <div class="form-grid"><div class="field"><label>User</label><select class="select" id="lfU">${uopts}</select></div>
       <div class="field"><label>Result</label><select class="select" id="lfR"><option value="all">All</option><option value="ok" ${f.r==='ok'?'selected':''}>Success only</option><option value="bad" ${f.r==='bad'?'selected':''}>Failed / blocked only</option></select></div>
       <div class="field"><label>Search</label><input class="input" id="lfQ" placeholder="device, city, IP…" value="${esc(f.q)}"></div></div>
@@ -569,7 +570,7 @@ function dayPicker(m, d){ if (!can('att')) return deny();
   w.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { w.remove(); setAtt([{month:m, day:d, code:b.dataset.c}]); });
   w.querySelector('[data-x]').onclick = () => w.remove();
 }
-function markToday(code){ if (!can('att')) return deny();
+function markToday(code){ if (!can('att') || !can('dash')) return deny();
   const n = new Date(); setAtt([{ month:n.getMonth()+1, day:n.getDate(), code }]);
 }
 
