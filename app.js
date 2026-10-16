@@ -2,7 +2,7 @@
 /* =====================================================================
    CONFIG — your deployed Apps Script web-app URL
    ===================================================================== */
-const API_URL = 'https://YOUR-APP-NAME.onrender.com';   // <-- yahan apna Render URL daalein
+const API_URL = 'https://attendance-api-yjtj.onrender.com';
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const MON = MONTHS.map(m => m.slice(0,3));
