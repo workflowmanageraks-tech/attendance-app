@@ -181,6 +181,7 @@ function ownerOf_(v) { var s = String(v === undefined || v === null ? '' : v).tr
 function buildCtx_(uid, asUser) {
   var acc = getAccount_(uid);
   if (!acc || !acc.active) fail_('Session expired. Please log in again.', 'AUTH');
+  if (acc.payDue && new Date(acc.payDue).getTime() < Date.now()) fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
   CTX = { uid: acc.id, owner: acc.id, role: acc.role, primary: acc.id === 'ADMIN', perms: acc.perms,
           name: acc.name, username: acc.username, viewing: false, viewName: '' };
   asUser = String(asUser || '').trim();
@@ -307,14 +308,14 @@ function getAccount_(id, s) {
   if (id === 'ADMIN') {
     var v = s || {};
     return { id: 'ADMIN', username: String(v.username || ''), password: v.password, name: String(v.name || v.username || ''),
-             email: String(v.email || ''), role: 'admin', active: true, perms: fullPerms_(), needLoc: false, row: 0, created: '', lastLogin: '' };
+             email: String(v.email || ''), role: 'admin', active: true, perms: fullPerms_(), needLoc: false, payDue: '', row: 0, created: '', lastLogin: '' };
   }
   return readUsers_().filter(function (x) { return x.id === id; })[0] || null;
 }
 function readUsers_() {
   var sh = getSheet_('USERS'), last = sh.getLastRow(), out = [];
   if (last < 2) return out;
-  sh.getRange(2, 1, last - 1, 11).getValues().forEach(function (r, i) {
+  sh.getRange(2, 1, last - 1, 12).getValues().forEach(function (r, i) {
     var id = String(r[0]).trim(), un = String(r[1]).trim();
     if (!id || !un) return;
     var role = /^admin/i.test(String(r[3])) ? 'admin' : 'user';
@@ -322,7 +323,8 @@ function readUsers_() {
     try { pj = JSON.parse(String(r[7] || '{}')); } catch (e) {}
     out.push({ id: id, username: un, password: r[2], role: role, name: String(r[4] || ''), email: String(r[5] || '').trim(),
       active: !/^(no|false|0)$/i.test(String(r[6]).trim()), perms: normPerms_(pj, role),
-      needLoc: /^(yes|true|1)$/i.test(String(r[8]).trim()), created: tsStr_(r[9]), lastLogin: tsStr_(r[10]), row: i + 2 });
+      needLoc: /^(yes|true|1)$/i.test(String(r[8]).trim()), created: tsStr_(r[9]), lastLogin: tsStr_(r[10]),
+      payDue: tsStr_(r[11]), row: i + 2 });
   });
   return out;
 }
@@ -376,6 +378,10 @@ function login_(req) {
   if (acc.needLoc && info.lat === '') {
     logLogin_(acc, uname, 'Blocked', 'Location not shared', info);
     fail_('Your admin requires location to sign in. Allow location access for this site and try again.', 'LOCREQ');
+  }
+  if (acc.payDue && new Date(acc.payDue).getTime() < Date.now()) {
+    logLogin_(acc, uname, 'Blocked', 'Payment pending', info);
+    fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
   }
   cache.remove(fkey);
   if (acc.row) { var c = getSheet_('USERS').getRange(acc.row, 11); c.setNumberFormat('@'); c.setValue(nowStr_()); }
@@ -538,7 +544,7 @@ function changeCredentials_(req) {
 // ---------- USER MANAGEMENT (admins) ----------
 function pubUser_(u, last) {
   return { id: u.id, username: u.username, name: u.name, email: u.email, role: u.role, active: u.active, perms: u.perms,
-    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '' };
+    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '' };
 }
 function listUsers_() {
   var s = readSettings_().values, last = {};
@@ -570,19 +576,20 @@ function saveUser_(req) {
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail_('Enter a valid e-mail address (or leave it empty).');
   var active = !(req.active === false || req.active === 'false');
   var needLoc = req.needLoc === true || req.needLoc === 'true';
+  var payDue = String(req.payDue || '').trim();   // e.g. "2026-11-17T10:30" from a datetime-local input, or '' to clear
   var permStr = JSON.stringify(normPerms_(req.perms, role));
   var sh = getSheet_('USERS');
   if (cur) {
-    var rng = sh.getRange(cur.row, 2, 1, 8);
+    var rng = sh.getRange(cur.row, 2, 1, 9);
     rng.setNumberFormat('@');
-    rng.setValues([[username, pw || cur.password, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No']]);
+    rng.setValues([[username, pw || cur.password, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', payDue]]);
     if (pw || !active) bumpVersion_(cur.id);          // new password / disabled -> signs that user out everywhere
   } else {
     if (users.length >= 100) fail_('User limit (100) reached.');
     var nid = 'U' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
-    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 11);
+    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 12);
     r2.setNumberFormat('@');
-    r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '']]);
+    r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue]]);
   }
   return listUsers_();
 }
@@ -659,9 +666,9 @@ function createSheet_(k) {
     var c = [['Category Name', 'Type', 'Owner']].concat(DEFAULT_CATS.map(function (x) { return [x[0], x[1], 'ADMIN']; }));
     sh.getRange(1, 1, c.length, 3).setValues(c);
   } else if (k === 'USERS') {
-    sh.getRange(1, 1, 1, 11).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
-      'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login']]);
-    sh.getRange('A:K').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 12).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
+      'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until']]);
+    sh.getRange('A:L').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LOG') {
     sh.getRange(1, 1, 1, 19).setValues([['Time', 'User ID', 'Username', 'Name', 'Result', 'Reason', 'Latitude', 'Longitude', 'Accuracy (m)',
