@@ -13,7 +13,7 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, pw:{ q:'' } };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, pw:{ q:'' }, link:{ q:'', type:'all' } };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -180,7 +180,7 @@ async function loadAll(){
   let r;
   try { r = await api('getAll'); }
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
-  S.d = r.data; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || [];
+  S.d = r.data; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || [];
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
   pickEmp(S.emp || store.get(EK));
@@ -232,16 +232,16 @@ async function boot(){
    ===================================================================== */
 const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
-const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', emp:true, creds:true };
+const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', emp:true, creds:true };
 const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
 function deny(){ toast('You have view-only access to this section', true); }
-const SECT = { attendance:'att', expenses:'exp', work:'work', passwords:'pw' };
-const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', passwords:'Passwords' };
+const SECT = { attendance:'att', expenses:'exp', work:'work', passwords:'pw', links:'link' };
+const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', passwords:'Passwords', links:'Links' };
 
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('passwords', p.pw === 'none'); hide('logins', !isAdmin());
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('logins', !isAdmin());
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin())) S.view = 'dashboard';
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
@@ -253,6 +253,7 @@ function applyRO(v){
   }
   if (!can('exp')) kill('[onclick*="entryForm"],[onclick*="delEntry"],[onclick*="catManager"]');
   if (!can('pw')) kill('[onclick*="pwForm"],[onclick*="pwDel"]');
+  if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
     v.querySelectorAll('tr').forEach(tr => { if (tr.querySelector('input.in')) tr.remove(); });
@@ -366,7 +367,7 @@ async function collectClient(){
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
   const p = u.perms || {}, L = { none:'no access', view:'view only', edit:'can edit' };
-  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}`;
+  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}`;
 }
 function usersCard(){
   const list = S.users || [];
@@ -406,6 +407,7 @@ function userForm(id){
           <div class="field"><label>💸 Expenses</label>${sel('p_exp', p.exp)}</div>
           <div class="field"><label>🛠️ Work</label>${sel('p_work', p.work)}</div>
           <div class="field"><label>🔑 Passwords</label>${sel('p_pw', p.pw || 'edit')}</div>
+          <div class="field"><label>🔗 Links</label>${sel('p_link', p.link || 'edit')}</div>
         </div>
         <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''}> Can add / edit / delete employees</label>
         <label class="tog"><input type="checkbox" name="p_creds" ${p.creds ? 'checked' : ''}> Can change their own username & password</label>
@@ -423,7 +425,7 @@ function userForm(id){
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
+        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
       S.users = r.users; w.remove(); render(); toast(x ? 'User updated' : 'User added');
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
@@ -503,6 +505,7 @@ const TITLES = {
   expenses:['Expenses','Track income and spending'],
   work:['Work','Daily work record — whole year'],
   passwords:['Password Manager','Save website logins and copy them in one tap'],
+  links:['Links','Save movie, web series and anime links and copy them in one tap'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   settings:['Settings','Profile, security and preferences']
 };
@@ -555,7 +558,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, passwords:vPasswords, logins:vLogins, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
@@ -1159,6 +1162,77 @@ async function pwExport(fmt){
 }
 
 /* =====================================================================
+   VIEW: LINKS  (movie / web series / anime links)
+   ===================================================================== */
+const LINK_TYPES = ['Movie','Web Series','Anime'];
+const LINK_ICON = { 'Movie':'🎬', 'Web Series':'📺', 'Anime':'🍥' };
+function filteredLinks(){
+  const q = (S.link.q || '').trim().toLowerCase(), t = S.link.type;
+  return [...(S.d.links || [])]
+    .filter(x => (t === 'all' || x.type === t) && (!q || (x.name + ' ' + x.link).toLowerCase().includes(q)))
+    .sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()));
+}
+function vLinks(){
+  const list = filteredLinks(), total = (S.d.links || []).length;
+  const rows = list.map(x => {
+    const href = pwHref(x.link);
+    return `<tr>
+      <td data-l="Name" style="white-space:normal;word-break:break-word;min-width:140px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b></td>
+      <td data-l="Type"><span class="tag">${LINK_ICON[x.type] || ''} ${esc(x.type)}</span></td>
+      <td data-l="Link" style="white-space:normal;word-break:break-all;min-width:160px">${x.link ? (href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(x.link)}</a>` : esc(x.link)) + ` <button class="btn ghost sm" onclick="linkCopy('${esc(x.id)}','link')" title="Copy link">📋</button>` : '<span class="dim">—</span>'}</td>
+      <td class="n nowrap"><button class="btn soft sm" onclick="linkCopy('${esc(x.id)}','all')" title="Copy name + type + link">📋 Copy all</button>
+        <button class="btn ghost sm" onclick="linkForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="linkDel('${esc(x.id)}')">🗑</button></td></tr>`;
+  }).join('');
+  const opts = ['all', ...LINK_TYPES].map(t => `<option value="${t}" ${S.link.type === t ? 'selected' : ''}>${t === 'all' ? 'All types' : t}</option>`).join('');
+  return `<div class="card" style="margin-bottom:16px"><div class="actions">
+      <input class="input" id="lnq" style="width:220px" placeholder="Search name or link…" value="${esc(S.link.q)}" oninput="linkSearch(this.value)">
+      <select class="select" style="width:auto" onchange="S.link.type=this.value;render()">${opts}</select>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="linkForm()">＋ Add link</button></div></div>
+    <div class="card"><h3>Saved links <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Name</th><th>Type</th><th>Link</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty-state">${total ? 'No links match your search.' : 'No links saved yet. Tap “Add link” to start.'}</div>`}
+      <p class="muted" style="margin-top:12px;font-size:13px">📋 next to a link copies just the link. <b>Copy all</b> copies name, type and link together. Saved in the “Links” tab of your Google Sheet.</p>
+    </div>`;
+}
+function linkSearch(v){
+  S.link.q = v; clearTimeout(window._lnt);
+  window._lnt = setTimeout(() => { render(); const i = $('#lnq'); if (i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
+}
+async function linkCopy(id, f){
+  const x = (S.d.links || []).find(e => e.id === id); if (!x) return;
+  const txt = f === 'all'
+    ? [x.name && 'Name: ' + x.name, x.type && 'Type: ' + x.type, x.link && 'Link: ' + x.link].filter(Boolean).join('\n')
+    : x.link;
+  if (!txt) return toast('Nothing to copy', true);
+  (await copyText(txt)) ? toast(f === 'all' ? 'Name, type and link copied' : 'Link copied') : toast('Could not copy — please copy it manually', true);
+}
+function linkForm(id){ if (!can('link')) return deny();
+  const x = id ? S.d.links.find(e => e.id === id) : null;
+  const w = openModal(`<h3>${x ? 'Edit link' : 'Add link'}</h3><p class="sub">Movie, web series or anime — name, type and link.</p>
+    <form id="lnf" autocomplete="off">
+      <div class="field"><label>Name</label><input class="input" name="name" maxlength="300" placeholder="e.g. Naruto" autocomplete="off" value="${esc(x ? x.name : '')}"></div>
+      <div class="field"><label>Type</label><select class="select" name="type">${LINK_TYPES.map(t => `<option value="${t}" ${(x ? x.type : 'Movie') === t ? 'selected' : ''}>${LINK_ICON[t]} ${t}</option>`).join('')}</select></div>
+      <div class="field"><label>Link</label><input class="input" name="link" maxlength="1000" placeholder="https://…" autocapitalize="off" autocomplete="off" value="${esc(x ? x.link : '')}"></div>
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#lnf').onsubmit = async ev => {
+    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
+    try{
+      if (x){ const r = await api('updateLink', { id:x.id, ...f }); Object.assign(x, r.link); }
+      else { const r = await api('addLink', f); S.d.links.push(r.link); }
+      w.remove(); render(); toast('Saved');
+    }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function linkDel(id){ if (!can('link')) return deny();
+  const x = S.d.links.find(e => e.id === id); if (!x) return;
+  if (!await confirmBox('Delete this link?', `${x.name || x.link || 'This entry'} will be removed from your sheet.`, 'Delete', true)) return;
+  try { await api('deleteLink', { id }); S.d.links = S.d.links.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+
+
+/* =====================================================================
    VIEW: SETTINGS
    ===================================================================== */
 function vSettingsBase(){
@@ -1683,6 +1757,18 @@ async function doExport(kind, fmt){
   else if (tn.length >= 2){ tn[0].nodeValue = '🔑'; tn[tn.length - 1].nodeValue = 'Passwords'; }
   else if (tn.length === 1) tn[0].nodeValue = '🔑 Passwords';
   else b.textContent = '🔑 Passwords';
+  src.after(b);
+})();
+
+/* ---------- add the "Links" tab to the menu (right after Passwords) ---------- */
+(function addLinksTab(){
+  const nav = $('#nav'), src = nav && nav.querySelector('[data-v="passwords"]');
+  if (!src || nav.querySelector('[data-v="links"]')) return;
+  const b = src.cloneNode(true);
+  b.dataset.v = 'links'; b.classList.remove('active', 'hidden');
+  const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT), tn = [];
+  while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
+  tn.forEach(n => { n.nodeValue = n.nodeValue.replace('🔑', '🔗').replace('Passwords', 'Links'); });
   src.after(b);
 })();
 

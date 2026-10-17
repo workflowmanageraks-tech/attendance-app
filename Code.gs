@@ -38,9 +38,10 @@ const SHEET_KEYS = {
   EMP: ['employees'],
   USERS: ['users'],
   LOG: ['login log'],
-  PW: ['password manager']
+  PW: ['password manager'],
+  LINK: ['links', 'link manager']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -77,7 +78,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'USERS', 'LOG'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'LOG'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -145,6 +146,7 @@ var WRITE_ACTIONS = {
   addCategory: 1, updateCategory: 1, deleteCategory: 1,
   addWork: 1, updateWork: 1, deleteWork: 1,
   addPw: 1, updatePw: 1, deletePw: 1,
+  addLink: 1, updateLink: 1, deleteLink: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1
 };
@@ -155,6 +157,7 @@ var NEED = {
   addExpense: 'exp', updateExpense: 'exp', deleteExpense: 'exp', addCategory: 'exp', updateCategory: 'exp', deleteCategory: 'exp',
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
+  addLink: 'link', updateLink: 'link', deleteLink: 'link',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
   changeCredentials: 'creds'
 };
@@ -166,13 +169,13 @@ var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus:
 //   (owner differs from uid only when an admin uses "View as user")
 var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '' };
 
-function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', emp: true, creds: true }; }
+function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', emp: true, creds: true }; }
 function normPerms_(p, role) {
   if (role === 'admin') return fullPerms_();
   p = p || {};
   function lvl(v) { v = String(v || '').toLowerCase(); return (v === 'none' || v === 'view' || v === 'edit') ? v : 'edit'; }
   function bool(v, d) { return (v === undefined || v === null || v === '') ? d : (v === true || v === 'true' || v === 'yes' || v === 1 || v === '1'); }
-  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), emp: bool(p.emp, false), creds: bool(p.creds, true) };
+  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), emp: bool(p.emp, false), creds: bool(p.creds, true) };
 }
 function need_(sec) {
   var p = CTX.perms || {};
@@ -249,6 +252,9 @@ function route_(req) {
       case 'addPw':             return addPw_(req);
       case 'updatePw':          return updatePw_(req);
       case 'deletePw':          return deletePw_(req);
+      case 'addLink':           return addLink_(req);
+      case 'updateLink':        return updateLink_(req);
+      case 'deleteLink':        return deleteLink_(req);
       case 'listUsers':         return listUsers_();
       case 'saveUser':          return saveUser_(req);
       case 'deleteUser':        return deleteUser_(req);
@@ -692,6 +698,10 @@ function createSheet_(k) {
     sh.setFrozenRows(1);
   } else if (k === 'PW') {
     sh.getRange(1, 1, 1, 5).setValues([['Website URL', 'User ID', 'Password', 'ID', 'Owner']]);
+    sh.getRange('A:E').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'LINK') {
+    sh.getRange(1, 1, 1, 5).setValues([['Name', 'Type', 'Link', 'ID', 'Owner']]);
     sh.getRange('A:E').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'CAT') {
@@ -1311,6 +1321,72 @@ function deletePw_(req) {
   return { ok: true };
 }
 
+// Links: Movie / Web Series / Anime bookmarks (every user only sees / changes their own rows)
+var LINK_TYPES = { Movie: 1, 'Web Series': 1, Anime: 1 };
+function readLink_() {
+  var sh = ownedSheet_('LINK', 5);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var vals = sh.getRange(2, 1, last - 1, 5).getValues();
+  var out = [], dirty = false;
+  vals.forEach(function (r) {
+    if (r[0] === '' && r[1] === '' && r[2] === '') return;
+    var id = String(r[3] || '').trim();
+    if (!id) { id = Utilities.getUuid().slice(0, 8); r[3] = id; dirty = true; }
+    if (ownerOf_(r[4]) !== CTX.owner) return;
+    out.push({ id: id, name: String(r[0]), type: String(r[1]), link: String(r[2]) });
+  });
+  if (dirty) sh.getRange(2, 4, vals.length, 1).setValues(vals.map(function (r) { return [r[3]]; }));
+  return out;
+}
+function validLink_(req) {
+  var type = String(req.type || '').trim();
+  if (!LINK_TYPES[type]) type = 'Movie';
+  var p = {
+    name: String(req.name || '').trim().slice(0, 300),
+    type: type,
+    link: String(req.link || '').trim().slice(0, 1000)
+  };
+  if (!(p.name || p.link)) fail_('Fill in at least one field.');
+  return p;
+}
+function findLinkRow_(sh, id) {
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var v = sh.getRange(2, 4, last - 1, 2).getValues();            // ID, Owner
+  for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id) && ownerOf_(v[i][1]) === CTX.owner) return i + 2;
+  return -1;
+}
+function addLink_(req) {
+  var p = validLink_(req);
+  var sh = ownedSheet_('LINK', 5);
+  var row = sh.getLastRow() + 1;
+  var id = Utilities.getUuid().slice(0, 8);
+  var rng = sh.getRange(row, 1, 1, 5);
+  rng.setNumberFormat('@');
+  rng.setValues([[p.name, p.type, p.link, id, CTX.owner]]);
+  p.id = id;
+  return { ok: true, link: p };
+}
+function updateLink_(req) {
+  var p = validLink_(req);
+  var sh = ownedSheet_('LINK', 5);
+  var row = findLinkRow_(sh, req.id);
+  if (row < 0) fail_('Entry not found. Please refresh.');
+  var rng = sh.getRange(row, 1, 1, 3);
+  rng.setNumberFormat('@');
+  rng.setValues([[p.name, p.type, p.link]]);
+  p.id = String(req.id);
+  return { ok: true, link: p };
+}
+function deleteLink_(req) {
+  var sh = ownedSheet_('LINK', 5);
+  var row = findLinkRow_(sh, req.id);
+  if (row < 0) fail_('Entry not found. Please refresh.');
+  sh.deleteRow(row);
+  return { ok: true };
+}
+
 // ---------- BUNDLE ----------
 function attAll_() {
   var out = {};
@@ -1328,6 +1404,7 @@ function getAll_() {
     expenses: p.exp === 'none' ? [] : readExpenses_(),
     categories: p.exp === 'none' ? [] : cleanCats_(readCategories_()),
     work: p.work === 'none' ? [] : readWork_(),
-    passwords: p.pw === 'none' ? [] : readPw_()
+    passwords: p.pw === 'none' ? [] : readPw_(),
+    links: p.link === 'none' ? [] : readLink_()
   };
 }
