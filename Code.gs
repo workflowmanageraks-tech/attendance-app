@@ -181,7 +181,7 @@ function ownerOf_(v) { var s = String(v === undefined || v === null ? '' : v).tr
 function buildCtx_(uid, asUser) {
   var acc = getAccount_(uid);
   if (!acc || !acc.active) fail_('Session expired. Please log in again.', 'AUTH');
-  if (acc.payDue && new Date(acc.payDue).getTime() < Date.now()) fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
+  if (payExpired_(acc.payDue)) fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
   CTX = { uid: acc.id, owner: acc.id, role: acc.role, primary: acc.id === 'ADMIN', perms: acc.perms,
           name: acc.name, username: acc.username, viewing: false, viewName: '' };
   asUser = String(asUser || '').trim();
@@ -295,6 +295,21 @@ function passMatch_(stored, given) {
   }
   return String(stored).trim() === given;
 }
+// "Payment due until" -> milliseconds (script time zone). Accepts what the website writes ("2026-11-17T10:30"),
+// what a sheet Date becomes ("2026-11-17 10:30:00") and a typed "17/11/2026 10:30". Returns NaN if unreadable.
+function parseDue_(v) {
+  var s = String(v === undefined || v === null ? '' : v).trim();
+  if (!s) return NaN;
+  var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime();
+  m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime();
+  return new Date(s).getTime();
+}
+function payExpired_(v) {
+  var t = parseDue_(v);
+  return !isNaN(t) && t < Date.now();
+}
 function nowStr_() { return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss'); }
 function tsStr_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
@@ -379,7 +394,7 @@ function login_(req) {
     logLogin_(acc, uname, 'Blocked', 'Location not shared', info);
     fail_('Your admin requires location to sign in. Allow location access for this site and try again.', 'LOCREQ');
   }
-  if (acc.payDue && new Date(acc.payDue).getTime() < Date.now()) {
+  if (payExpired_(acc.payDue)) {
     logLogin_(acc, uname, 'Blocked', 'Payment pending', info);
     fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
   }
@@ -580,9 +595,14 @@ function saveUser_(req) {
   var permStr = JSON.stringify(normPerms_(req.perms, role));
   var sh = getSheet_('USERS');
   if (cur) {
-    var rng = sh.getRange(cur.row, 2, 1, 9);
+    // columns 2..9 = Username .. Location required.  (Created = col 10 and Last Login = col 11 are left untouched)
+    var rng = sh.getRange(cur.row, 2, 1, 8);
     rng.setNumberFormat('@');
-    rng.setValues([[username, pw || cur.password, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', payDue]]);
+    rng.setValues([[username, pw || cur.password, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No']]);
+    // "Payment due until" lives in column 12 (L)
+    var pc = sh.getRange(cur.row, 12);
+    pc.setNumberFormat('@');
+    pc.setValue(payDue);
     if (pw || !active) bumpVersion_(cur.id);          // new password / disabled -> signs that user out everywhere
   } else {
     if (users.length >= 100) fail_('User limit (100) reached.');

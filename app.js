@@ -78,6 +78,7 @@ const store = {
 };
 function handleErr(e){
   if (e.code === 'AUTH'){ forceLogout('Session expired. Please sign in again.'); return; }
+  if (e.code === 'PAYDUE'){ forceLogout(e.message || 'Payment pending. Please pay to continue using this account.'); return; }
   toast(e.message || 'Something went wrong', true);
 }
 
