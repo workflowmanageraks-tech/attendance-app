@@ -13,7 +13,7 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' } };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, pw:{ q:'' } };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -180,7 +180,7 @@ async function loadAll(){
   let r;
   try { r = await api('getAll'); }
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
-  S.d = r.data; S.d.work = S.d.work || [];
+  S.d = r.data; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || [];
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
   pickEmp(S.emp || store.get(EK));
@@ -232,16 +232,16 @@ async function boot(){
    ===================================================================== */
 const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
-const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', emp:true, creds:true };
+const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', emp:true, creds:true };
 const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
 function deny(){ toast('You have view-only access to this section', true); }
-const SECT = { attendance:'att', expenses:'exp', work:'work' };
-const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work' };
+const SECT = { attendance:'att', expenses:'exp', work:'work', passwords:'pw' };
+const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', passwords:'Passwords' };
 
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('logins', !isAdmin());
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('passwords', p.pw === 'none'); hide('logins', !isAdmin());
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin())) S.view = 'dashboard';
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
@@ -252,6 +252,7 @@ function applyRO(v){
     v.querySelectorAll('[onclick*="dayPicker"]').forEach(e => { e.removeAttribute('onclick'); e.style.cursor = 'default'; });
   }
   if (!can('exp')) kill('[onclick*="entryForm"],[onclick*="delEntry"],[onclick*="catManager"]');
+  if (!can('pw')) kill('[onclick*="pwForm"],[onclick*="pwDel"]');
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
     v.querySelectorAll('tr').forEach(tr => { if (tr.querySelector('input.in')) tr.remove(); });
@@ -365,7 +366,7 @@ async function collectClient(){
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
   const p = u.perms || {}, L = { none:'no access', view:'view only', edit:'can edit' };
-  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Employees: ${p.emp ? 'can manage' : 'no'}`;
+  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}`;
 }
 function usersCard(){
   const list = S.users || [];
@@ -388,7 +389,7 @@ function usersCard(){
 }
 function userForm(id){
   const x = id ? (S.users || []).find(u => u.id === id) : null;
-  const p = (x && x.perms) || { att:'edit', exp:'edit', work:'edit', emp:false, creds:true };
+  const p = (x && x.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', emp:false, creds:true };
   const sel = (n, v) => `<select class="select" name="${n}"><option value="none" ${v==='none'?'selected':''}>No access (hidden)</option><option value="view" ${v==='view'?'selected':''}>View only</option><option value="edit" ${v==='edit'?'selected':''}>Can add / edit / delete</option></select>`;
   const isA = !!(x && x.role === 'admin');
   const w = openModal(`<h3>${x ? 'Edit user' : 'Add user'}</h3><p class="sub">${x ? 'Leave password empty to keep it.' : 'Set a username and password, then share them with the user.'}</p>
@@ -404,6 +405,7 @@ function userForm(id){
           <div class="field"><label>🗓️ Attendance</label>${sel('p_att', p.att)}</div>
           <div class="field"><label>💸 Expenses</label>${sel('p_exp', p.exp)}</div>
           <div class="field"><label>🛠️ Work</label>${sel('p_work', p.work)}</div>
+          <div class="field"><label>🔑 Passwords</label>${sel('p_pw', p.pw || 'edit')}</div>
         </div>
         <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''}> Can add / edit / delete employees</label>
         <label class="tog"><input type="checkbox" name="p_creds" ${p.creds ? 'checked' : ''}> Can change their own username & password</label>
@@ -421,7 +423,7 @@ function userForm(id){
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
+        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
       S.users = r.users; w.remove(); render(); toast(x ? 'User updated' : 'User added');
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
@@ -500,6 +502,7 @@ const TITLES = {
   attendance:['Attendance','Mark and review attendance day by day'],
   expenses:['Expenses','Track income and spending'],
   work:['Work','Daily work record — whole year'],
+  passwords:['Password Manager','Save website logins and copy them in one tap'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   settings:['Settings','Profile, security and preferences']
 };
@@ -552,7 +555,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, logins:vLogins, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, passwords:vPasswords, logins:vLogins, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
@@ -1059,6 +1062,103 @@ async function workDel(id){ if (!can('work')) return deny();
 }
 
 /* =====================================================================
+   VIEW: PASSWORDS  (website URL + user id + password, one-tap copy)
+   ===================================================================== */
+const pwHref = u => {
+  u = String(u || '').trim(); if (!u) return '';
+  if (/^https?:\/\//i.test(u)) return u;
+  if (/^[a-z][a-z0-9+.\-]*:\/\//i.test(u) || /^(javascript|data|vbscript|file):/i.test(u)) return '';   // never link odd schemes
+  return 'https://' + u;
+};
+function filteredPw(){
+  const q = S.pw.q.trim().toLowerCase();
+  return [...(S.d.passwords || [])]
+    .filter(x => !q || (x.url + ' ' + x.user).toLowerCase().includes(q))
+    .sort((a, b) => (a.url || '').toLowerCase().localeCompare((b.url || '').toLowerCase()));
+}
+function vPasswords(){
+  const list = filteredPw(), total = (S.d.passwords || []).length;
+  const cp = (id, f, label) => `<button class="btn ghost sm" onclick="pwCopy('${esc(id)}','${f}')" title="Copy ${label}">📋</button>`;
+  const rows = list.map(x => {
+    const href = pwHref(x.url);
+    return `<tr>
+      <td data-l="Website" style="white-space:normal;word-break:break-all;min-width:150px">${x.url ? (href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a>` : esc(x.url)) + ' ' + cp(x.id, 'url', 'website URL') : '<span class="dim">—</span>'}</td>
+      <td data-l="User ID" style="white-space:normal;word-break:break-all">${x.user ? esc(x.user) + ' ' + cp(x.id, 'user', 'user ID') : '<span class="dim">—</span>'}</td>
+      <td data-l="Password">${x.pass ? `<span data-pw="${esc(x.id)}" style="font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all">••••••••</span> <button class="btn ghost sm" onclick="pwToggle('${esc(x.id)}')" title="Show / hide">👁</button> ${cp(x.id, 'pass', 'password')}` : '<span class="dim">—</span>'}</td>
+      <td class="n nowrap"><button class="btn soft sm" onclick="pwCopy('${esc(x.id)}','all')" title="Copy website + user ID + password">📋 Copy all</button>
+        <button class="btn ghost sm" onclick="pwForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="pwDel('${esc(x.id)}')">🗑</button></td></tr>`;
+  }).join('');
+  return `<div class="card" style="margin-bottom:16px"><div class="actions">
+      <input class="input" id="pwq" style="width:240px" placeholder="Search website or user ID…" value="${esc(S.pw.q)}" oninput="pwSearch(this.value)">
+      <span style="flex:1"></span>
+      <button class="btn soft" onclick="pwExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="pwExport('pdf')">⬇ PDF</button>
+      <button class="btn" onclick="pwForm()">＋ Add login</button></div></div>
+    <div class="card"><h3>Saved logins <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Website URL</th><th>User ID</th><th>Password</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty-state">${total ? 'No logins match your search.' : 'No logins saved yet. Tap “Add login” to start.'}</div>`}
+      <p class="muted" style="margin-top:12px;font-size:13px">📋 next to a field copies just that field. <b>Copy all</b> copies website, user ID and password together. Saved in the “Password Manager” tab of your Google Sheet.</p>
+    </div>`;
+}
+function pwSearch(v){
+  S.pw.q = v; clearTimeout(window._pwt);
+  window._pwt = setTimeout(() => { render(); const i = $('#pwq'); if (i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
+}
+function legacyCopy(t){
+  const a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', '');
+  a.style.cssText = 'position:fixed;top:0;left:0;opacity:0'; document.body.appendChild(a);
+  a.select(); a.setSelectionRange(0, t.length);
+  let ok = false; try { ok = document.execCommand('copy'); } catch {}
+  a.remove(); return ok;
+}
+async function copyText(t){
+  try { if (navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(t); return true; } } catch {}
+  return legacyCopy(t);       // fallback: works inside the Apps Script frame / older browsers
+}
+async function pwCopy(id, f){
+  const x = (S.d.passwords || []).find(e => e.id === id); if (!x) return;
+  const L = { url:'Website URL', user:'User ID', pass:'Password', all:'Website, user ID and password' };
+  const txt = f === 'all'
+    ? [x.url && 'Website: ' + x.url, x.user && 'User ID: ' + x.user, x.pass && 'Password: ' + x.pass].filter(Boolean).join('\n')
+    : x[f];
+  if (!txt) return toast('Nothing to copy', true);
+  (await copyText(txt)) ? toast(L[f] + ' copied') : toast('Could not copy — please copy it manually', true);
+}
+function pwToggle(id){
+  const el = document.querySelector(`[data-pw="${id}"]`), x = (S.d.passwords || []).find(e => e.id === id); if (!el || !x) return;
+  const on = el.dataset.on === '1'; el.dataset.on = on ? '0' : '1'; el.textContent = on ? '••••••••' : x.pass;
+}
+function pwForm(id){ if (!can('pw')) return deny();
+  const x = id ? S.d.passwords.find(e => e.id === id) : null;
+  const w = openModal(`<h3>${x ? 'Edit login' : 'Add login'}</h3><p class="sub">Website URL, user ID and password — saved in your Google Sheet.</p>
+    <form id="pwf" autocomplete="off">
+      <div class="field"><label>Website URL</label><input class="input" name="url" maxlength="500" placeholder="https://example.com" autocapitalize="off" autocomplete="off" value="${esc(x ? x.url : '')}"></div>
+      <div class="row2"><div class="field"><label>User ID</label><input class="input" name="user" maxlength="200" autocapitalize="off" autocomplete="off" value="${esc(x ? x.user : '')}"></div>
+        <div class="field"><label>Password</label><input class="input" id="pwIn" type="password" name="pass" maxlength="200" autocapitalize="off" autocomplete="new-password" value="${esc(x ? x.pass : '')}"></div></div>
+      <label class="tog"><input type="checkbox" id="pwShow"> Show password</label>
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#pwShow').onchange = e => { w.querySelector('#pwIn').type = e.target.checked ? 'text' : 'password'; };
+  w.querySelector('#pwf').onsubmit = async ev => {
+    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
+    try{
+      if (x){ const r = await api('updatePw', { id:x.id, ...f }); Object.assign(x, r.pw); }
+      else { const r = await api('addPw', f); S.d.passwords.push(r.pw); }
+      w.remove(); render(); toast('Saved');
+    }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function pwDel(id){ if (!can('pw')) return deny();
+  const x = S.d.passwords.find(e => e.id === id); if (!x) return;
+  if (!await confirmBox('Delete this login?', `${x.url || x.user || 'This entry'} will be removed from your sheet.`, 'Delete', true)) return;
+  try { await api('deletePw', { id }); S.d.passwords = S.d.passwords.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+async function pwExport(fmt){
+  if (!(S.d.passwords || []).length) return toast('No logins to export', true);
+  if (!await confirmBox('Export passwords?', 'The file will contain your passwords as plain text. Keep it safe and delete it when you no longer need it.', 'Export')) return;
+  doExport('pw', fmt);
+}
+
+/* =====================================================================
    VIEW: SETTINGS
    ===================================================================== */
 function vSettingsBase(){
@@ -1270,7 +1370,8 @@ function exPrep(){
     const p = (x.product || '').trim(); if (p) wProd[p] = (wProd[p] || 0) + 1; });
   const wMonList = Object.values(wMon).sort((a, b) => a.k.localeCompare(b.k)).map(o => ({ k:o.k, n:o.n, days:o.days.size }));
   const wProdList = Object.entries(wProd).sort((a, b) => b[1] - a[1]);
-  return { s, e, y, sts, sm, months, yt, totalDays, log, led, inc, exp, bal, catList, monList, work, wMonList, wProdList, wDays:wDays.size };
+  const pw = [...(S.d.passwords || [])].sort((a, b) => (a.url || '').toLowerCase().localeCompare((b.url || '').toLowerCase()));
+  return { s, e, y, sts, sm, months, yt, totalDays, log, led, inc, exp, bal, catList, monList, work, wMonList, wProdList, wDays:wDays.size, pw };
 }
 
 /* ---------- EXCEL helpers ---------- */
@@ -1518,12 +1619,31 @@ function pdfWork(P, d, first){
     styles:{ fontSize:8 }, columnStyles:{ 0:{ cellWidth:25 }, 1:{ cellWidth:12, halign:'center' }, 2:{ cellWidth:34 }, 3:{ cellWidth:40 }, 4:{ cellWidth:28 }, 5:{ cellWidth:22 } } });
 }
 
+/* ---------- EXCEL + PDF: passwords ---------- */
+function xlPasswords(wb, d){
+  const ws = xSheet(wb, 'Passwords', 4, [6, 46, 34, 32], 'KS — Password Manager', `${d.pw.length} logins  |  Generated ${STAMP()}  |  Keep this file safe`, 4);
+  xHead(ws, 4, ['#', 'Website URL', 'User ID', 'Password']);
+  d.pw.forEach((x, i) => { const row = ws.getRow(5 + i), z = i % 2 ? X.zebra : null, href = pwHref(x.url);
+    xCell(row.getCell(1), i + 1, { h:'center', fill:z });
+    xCell(row.getCell(2), x.url, { h:'left', fill:z });
+    if (href && x.url){ const c = row.getCell(2); c.value = { text:x.url, hyperlink:href }; c.font = { size:10.5, color:{ argb:'FF2563EB' }, underline:true }; }
+    xCell(row.getCell(3), x.user, { h:'left', fill:z, fmt:'@' });
+    xCell(row.getCell(4), x.pass, { h:'left', fill:z, fmt:'@' }); });
+  if (d.pw.length) ws.autoFilter = { from:'A4', to:`D${4 + d.pw.length}` };
+}
+function pdfPasswords(P, d, first){
+  const y = pdfStart(P, 'Password Manager', `${d.pw.length} logins   |   Generated ${STAMP()}   |   Keep this file safe`, 'l', first);
+  pdfTable(P, { startY:y, head:[['#', 'Website URL', 'User ID', 'Password']],
+    body:d.pw.map((x, i) => [i + 1, x.url, x.user, x.pass].map(PT)),
+    styles:{ fontSize:9 }, columnStyles:{ 0:{ cellWidth:12, halign:'center' }, 1:{ cellWidth:95 }, 2:{ cellWidth:80 }, 3:{ cellWidth:80 } } });
+}
+
 /* ---------- entry point ---------- */
 async function doExport(kind, fmt){
   if (S.exBusy) return; S.exBusy = true;
   toast('Preparing your ' + (fmt === 'pdf' ? 'PDF' : 'Excel') + ' file…');
   try{
-    const d = exPrep(), names = { att:`KS-attendance-${(d.e.name || 'employee').replace(/[^\w\u0900-\u097F-]+/g,'_')}-${d.y}`, exp:'KS-expense-ledger', work:'KS-work-record', all:'KS-all-data' };
+    const d = exPrep(), names = { att:`KS-attendance-${(d.e.name || 'employee').replace(/[^\w\u0900-\u097F-]+/g,'_')}-${d.y}`, exp:'KS-expense-ledger', work:'KS-work-record', pw:'KS-passwords', all:'KS-all-data' };
     if (fmt === 'pdf'){
       await needPdf();
       const P = { doc:new window.jspdf.jsPDF({ orientation:kind === 'exp' ? 'p' : 'l', unit:'mm', format:'a4' }) };
@@ -1531,6 +1651,7 @@ async function doExport(kind, fmt){
       if (kind === 'att' || kind === 'all'){ pdfAtt(P, d, first); first = false; }
       if (kind === 'exp' || kind === 'all'){ pdfLedger(P, d, first); first = false; }
       if (kind === 'work' || kind === 'all'){ pdfWork(P, d, first); first = false; }
+      if (kind === 'pw'){ pdfPasswords(P, d, first); first = false; }
       pdfFooter(P.doc); saveBlob(names[kind] + '.pdf', P.doc.output('blob'));
     } else {
       await needExcel();
@@ -1538,6 +1659,7 @@ async function doExport(kind, fmt){
       if (kind === 'att' || kind === 'all'){ xlAttSummary(wb, d); xlAttRegister(wb, d); xlAttLog(wb, d); }
       if (kind === 'exp' || kind === 'all'){ xlLedger(wb, d); xlLedgerSummary(wb, d); }
       if (kind === 'work' || kind === 'all'){ xlWork(wb, d); xlWorkSummary(wb, d); }
+      if (kind === 'pw') xlPasswords(wb, d);
       const buf = await wb.xlsx.writeBuffer();
       saveBlob(names[kind] + '.xlsx', new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     }
@@ -1546,5 +1668,22 @@ async function doExport(kind, fmt){
   finally{ S.exBusy = false; }
 }
 
+
+/* ---------- add the "Passwords" tab to the menu (copies the look of the Work tab) ---------- */
+(function addPasswordsTab(){
+  const nav = $('#nav'), src = nav && nav.querySelector('[data-v="work"]');
+  if (!src || nav.querySelector('[data-v="passwords"]')) return;
+  const b = src.cloneNode(true);
+  b.dataset.v = 'passwords'; b.classList.remove('active', 'hidden');
+  const ic = b.querySelector('svg, img, i');
+  if (ic){ const sp = document.createElement('span'); sp.textContent = '🔑'; ic.replaceWith(sp); }
+  const tn = []; const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+  while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
+  if (ic){ if (tn.length) tn[tn.length - 1].nodeValue = 'Passwords'; else b.append(' Passwords'); }
+  else if (tn.length >= 2){ tn[0].nodeValue = '🔑'; tn[tn.length - 1].nodeValue = 'Passwords'; }
+  else if (tn.length === 1) tn[0].nodeValue = '🔑 Passwords';
+  else b.textContent = '🔑 Passwords';
+  src.after(b);
+})();
 
 boot();

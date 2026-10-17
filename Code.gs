@@ -11,6 +11,7 @@
  *   Expenses            -> Date | Category | Amount | Note | ID
  *   Categories          -> Category Name | Type (Expense / Income)
  *   Work                -> Date | Name | Product Name | Product Number | Sticker | Description | ID
+ *   Password Manager    -> Website URL | User ID | Password | ID | Owner   (each user sees only their own rows)
  *   Employees           -> ID | Name | Designation | Monthly Salary | Salary Basis | Attendance Sheet
  *   Att-xxxx            -> one attendance register per extra employee (same layout as Attendance Register)
  *   Users               -> ID | Username | Password | Role | Name | E-mail | Active | Permissions | Location required | Created | Last login
@@ -36,9 +37,10 @@ const SHEET_KEYS = {
   WORK: ['work'],
   EMP: ['employees'],
   USERS: ['users'],
-  LOG: ['login log']
+  LOG: ['login log'],
+  PW: ['password manager']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -75,7 +77,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'USERS', 'LOG'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'USERS', 'LOG'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -142,6 +144,7 @@ var WRITE_ACTIONS = {
   addExpense: 1, updateExpense: 1, deleteExpense: 1,
   addCategory: 1, updateCategory: 1, deleteCategory: 1,
   addWork: 1, updateWork: 1, deleteWork: 1,
+  addPw: 1, updatePw: 1, deletePw: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1
 };
@@ -151,6 +154,7 @@ var NEED = {
   setAttendance: 'att',
   addExpense: 'exp', updateExpense: 'exp', deleteExpense: 'exp', addCategory: 'exp', updateCategory: 'exp', deleteCategory: 'exp',
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
+  addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
   changeCredentials: 'creds'
 };
@@ -162,13 +166,13 @@ var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus:
 //   (owner differs from uid only when an admin uses "View as user")
 var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '' };
 
-function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', emp: true, creds: true }; }
+function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', emp: true, creds: true }; }
 function normPerms_(p, role) {
   if (role === 'admin') return fullPerms_();
   p = p || {};
   function lvl(v) { v = String(v || '').toLowerCase(); return (v === 'none' || v === 'view' || v === 'edit') ? v : 'edit'; }
   function bool(v, d) { return (v === undefined || v === null || v === '') ? d : (v === true || v === 'true' || v === 'yes' || v === 1 || v === '1'); }
-  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), emp: bool(p.emp, false), creds: bool(p.creds, true) };
+  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), emp: bool(p.emp, false), creds: bool(p.creds, true) };
 }
 function need_(sec) {
   var p = CTX.perms || {};
@@ -242,6 +246,9 @@ function route_(req) {
       case 'addWork':           return addWork_(req);
       case 'updateWork':        return updateWork_(req);
       case 'deleteWork':        return deleteWork_(req);
+      case 'addPw':             return addPw_(req);
+      case 'updatePw':          return updatePw_(req);
+      case 'deletePw':          return deletePw_(req);
       case 'listUsers':         return listUsers_();
       case 'saveUser':          return saveUser_(req);
       case 'deleteUser':        return deleteUser_(req);
@@ -682,6 +689,10 @@ function createSheet_(k) {
   } else if (k === 'WORK') {
     sh.getRange(1, 1, 1, 8).setValues([['Date', 'Name', 'Product Name', 'Product Number', 'Sticker', 'Description', 'ID', 'Owner']]);
     sh.getRange('A:H').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'PW') {
+    sh.getRange(1, 1, 1, 5).setValues([['Website URL', 'User ID', 'Password', 'ID', 'Owner']]);
+    sh.getRange('A:E').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'CAT') {
     var c = [['Category Name', 'Type', 'Owner']].concat(DEFAULT_CATS.map(function (x) { return [x[0], x[1], 'ADMIN']; }));
@@ -1236,6 +1247,70 @@ function deleteWork_(req) {
   return { ok: true };
 }
 
+// ---------- PASSWORD MANAGER ----------
+// Sheet "Password Manager": Website URL | User ID | Password | ID | Owner   (every user only sees / changes their own rows)
+function readPw_() {
+  var sh = ownedSheet_('PW', 5);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var vals = sh.getRange(2, 1, last - 1, 5).getValues();
+  var out = [], dirty = false;
+  vals.forEach(function (r) {
+    if (r[0] === '' && r[1] === '' && r[2] === '') return;
+    var id = String(r[3] || '').trim();
+    if (!id) { id = Utilities.getUuid().slice(0, 8); r[3] = id; dirty = true; }
+    if (ownerOf_(r[4]) !== CTX.owner) return;
+    out.push({ id: id, url: String(r[0]), user: String(r[1]), pass: String(r[2]) });
+  });
+  if (dirty) sh.getRange(2, 4, vals.length, 1).setValues(vals.map(function (r) { return [r[3]]; }));
+  return out;
+}
+function validPw_(req) {
+  var p = {
+    url: String(req.url || '').trim().slice(0, 500),
+    user: String(req.user || '').trim().slice(0, 200),
+    pass: String(req.pass === undefined || req.pass === null ? '' : req.pass).slice(0, 200)
+  };
+  if (!(p.url || p.user || p.pass)) fail_('Fill in at least one field.');
+  return p;
+}
+function findPwRow_(sh, id) {
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var v = sh.getRange(2, 4, last - 1, 2).getValues();            // ID, Owner
+  for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id) && ownerOf_(v[i][1]) === CTX.owner) return i + 2;
+  return -1;
+}
+function addPw_(req) {
+  var p = validPw_(req);
+  var sh = ownedSheet_('PW', 5);
+  var row = sh.getLastRow() + 1;
+  var id = Utilities.getUuid().slice(0, 8);
+  var rng = sh.getRange(row, 1, 1, 5);
+  rng.setNumberFormat('@');
+  rng.setValues([[p.url, p.user, p.pass, id, CTX.owner]]);
+  p.id = id;
+  return { ok: true, pw: p };
+}
+function updatePw_(req) {
+  var p = validPw_(req);
+  var sh = ownedSheet_('PW', 5);
+  var row = findPwRow_(sh, req.id);
+  if (row < 0) fail_('Entry not found. Please refresh.');
+  var rng = sh.getRange(row, 1, 1, 3);
+  rng.setNumberFormat('@');
+  rng.setValues([[p.url, p.user, p.pass]]);
+  p.id = String(req.id);
+  return { ok: true, pw: p };
+}
+function deletePw_(req) {
+  var sh = ownedSheet_('PW', 5);
+  var row = findPwRow_(sh, req.id);
+  if (row < 0) fail_('Entry not found. Please refresh.');
+  sh.deleteRow(row);
+  return { ok: true };
+}
+
 // ---------- BUNDLE ----------
 function attAll_() {
   var out = {};
@@ -1252,6 +1327,7 @@ function getAll_() {
     attendanceAll: p.att === 'none' ? {} : attAll_(),
     expenses: p.exp === 'none' ? [] : readExpenses_(),
     categories: p.exp === 'none' ? [] : cleanCats_(readCategories_()),
-    work: p.work === 'none' ? [] : readWork_()
+    work: p.work === 'none' ? [] : readWork_(),
+    passwords: p.pw === 'none' ? [] : readPw_()
   };
 }
