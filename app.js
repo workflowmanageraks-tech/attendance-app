@@ -182,7 +182,7 @@ async function loadAll(){
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
   S.d = r.data; S.d.work = S.d.work || [];
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
-  S.me = S.d.me || null; if (!isAdmin()) S.as = null;
+  S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
   pickEmp(S.emp || store.get(EK));
   if (isAdmin()) await loadUsers(); else S.users = null;
   applyAccess();
@@ -514,14 +514,49 @@ function go(v){
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
 $('#refreshBtn').onclick = async () => { try { await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); } catch(e){ handleErr(e); } };
+/* ---------- payment / access countdown (Dashboard) ---------- */
+let payTimer = null;
+const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date.now()) : 0;   // server clock minus this device's clock
+function payCountdownHtml(){
+  if (!S.me || !S.me.payDueMs) return '';
+  return `<div id="payCd" class="card" style="margin-bottom:16px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;border-left:5px solid var(--good,#16a34a)">
+    <div style="font-size:26px">⏳</div>
+    <div style="flex:1;min-width:200px"><div style="font-weight:700">Your access expires on <span id="payCdDate"></span></div>
+      <div class="muted" style="font-size:13px">Please make the payment before then to keep using this account.</div></div>
+    <div id="payCdTxt" style="font-weight:800;font-size:20px;font-variant-numeric:tabular-nums"></div></div>`;
+}
+function tickPay(){
+  const box = document.getElementById('payCd');
+  if (!box || !S.me || !S.me.payDueMs){ clearInterval(payTimer); payTimer = null; return; }
+  const left = S.me.payDueMs - (Date.now() + payOff());
+  const dt = new Date(S.me.payDueMs);
+  document.getElementById('payCdDate').textContent = dt.toLocaleString('en-IN', { day:'numeric', month:'short', year:'numeric', hour:'numeric', minute:'2-digit' });
+  if (left <= 0){
+    clearInterval(payTimer); payTimer = null;
+    box.style.borderLeftColor = 'var(--bad,#dc2626)';
+    document.getElementById('payCdTxt').textContent = 'Expired';
+    loadAll().then(render).catch(handleErr);          // server now answers "Payment pending" -> signs the user out
+    return;
+  }
+  const s = Math.floor(left / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  const p2 = n => String(n).padStart(2, '0');
+  document.getElementById('payCdTxt').textContent = (d ? d + 'd ' : '') + p2(h) + 'h ' + p2(m) + 'm ' + p2(sec) + 's';
+  box.style.borderLeftColor = d >= 7 ? 'var(--good,#16a34a)' : d >= 1 ? '#f59e0b' : 'var(--bad,#dc2626)';
+}
+function startPay(){
+  clearInterval(payTimer); payTimer = null;
+  if (!document.getElementById('payCd')) return;
+  tickPay(); payTimer = setInterval(tickPay, 1000);
+}
 function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
   let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, logins:vLogins, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
-  v.innerHTML = banner() + html;
+  v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
+  startPay();
   const after = ({settings:bindSettings, logins:bindLogins})[S.view]; if (after) after();
 }
 
@@ -603,7 +638,7 @@ function vDashboard(){
   const donut = y.marked ? `conic-gradient(${segs.join(',')})` : '#e5e9f2';
   const legend = S.d.statuses.map(x => `<div><span class="dot" style="background:${esc(x.color)}"></span>${esc(x.code)} – ${esc(x.label)}<b style="margin-left:auto">${y.counts[x.code]||0}</b></div>`).join('');
 
-  return `${mark}
+  const attHtml = `${mark}
   <div class="dsec" style="margin-top:6px"><span>🗓️ Attendance</span><button class="btn soft sm" onclick="go('attendance')">Open</button></div>
   <div class="grid kpis">
     <div class="card kpi p"><div class="lbl">Total Present</div><div class="val">${y.P}</div><div class="hint">days</div></div>
@@ -621,8 +656,9 @@ function vDashboard(){
       <div class="card"><h3>Status summary</h3><div class="donut-box"><div class="donut" style="background:${donut}" data-c="${y.marked}"></div><div class="legend" style="min-width:170px">${legend}</div></div></div>
       <div class="card"><h3>Salary earned by month</h3><div class="bars">${bars}</div></div>
     </div>
-  </div>
-  ${dashExtra()}`;
+  </div>`;
+  const P = perms(), body = (P.att === 'none' ? '' : attHtml) + dashExtra();
+  return body || `<div class="card"><div class="empty-state">No sections are enabled for your account. Please contact the admin.</div></div>`;
 }
 
 function dashExtra(){
@@ -675,7 +711,8 @@ function dashExtra(){
   </div>
   <div class="card" style="margin-bottom:10px"><h3>Recent work</h3>${recentW.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Date</th><th>Name</th><th>Product</th><th>Product no.</th><th>Sticker</th><th>Description</th></tr></thead><tbody>${wRows}</tbody></table></div>` : '<div class="empty-state">Nothing here yet</div>'}</div>`;
 
-  return expHtml + workHtml;
+  const P = perms();
+  return (P.exp === 'none' ? '' : expHtml) + (P.work === 'none' ? '' : workHtml);
 }
 
 /* =====================================================================

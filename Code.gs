@@ -160,7 +160,7 @@ var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus:
 // Who is making the current request (filled by buildCtx_ on every call; Apps Script runs each call fresh)
 //   uid   = the logged-in account         owner = whose DATA is being read / written
 //   (owner differs from uid only when an admin uses "View as user")
-var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '' };
+var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '' };
 
 function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', emp: true, creds: true }; }
 function normPerms_(p, role) {
@@ -183,7 +183,7 @@ function buildCtx_(uid, asUser) {
   if (!acc || !acc.active) fail_('Session expired. Please log in again.', 'AUTH');
   if (payExpired_(acc.payDue)) fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
   CTX = { uid: acc.id, owner: acc.id, role: acc.role, primary: acc.id === 'ADMIN', perms: acc.perms,
-          name: acc.name, username: acc.username, viewing: false, viewName: '' };
+          name: acc.name, username: acc.username, viewing: false, viewName: '', payDue: acc.payDue || '' };
   asUser = String(asUser || '').trim();
   if (asUser && asUser !== acc.id) {
     if (acc.role !== 'admin') fail_('Not allowed.', 'PERM');
@@ -363,7 +363,8 @@ function meOf_(values) {
     username: main ? String(values.username || '') : CTX.username,
     name: main ? String(values.name || values.username || '') : (CTX.name || CTX.username),
     perms: CTX.viewing ? fullPerms_() : CTX.perms,
-    viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName };
+    viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName,
+    payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), serverNow: Date.now() };
 }
 
 // ---------- LOGIN ----------
