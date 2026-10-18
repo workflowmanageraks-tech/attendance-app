@@ -1355,9 +1355,9 @@ function vTimetable(){
     + cats.map(c => `<option ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('') + '<option value="__new">＋ Add new category…</option>';
   let rows = '';
   TT_SLOTS.forEach(k => {
-    if (k === '00:00') rows += '<tr class="tt-mid"><td colspan="2">🌙 After midnight</td></tr>';
+    if (k === '00:00') rows += '<tr class="tt-mid"><td colspan="3">🌙 After midnight</td></tr>';
     const cur = day[k] || '', col = cur ? ttColor(cur) : '';
-    rows += `<tr><td class="tt-t">${ttRange(k)}</td><td><select class="select tt-sel" data-tt="${k}" ${col ? `style="background:${col}"` : ''} onchange="ttPick('${k}',this)">${opts(cur)}</select></td></tr>`;
+    rows += `<tr><td class="tt-t">${ttRange(k)}</td><td><select class="select tt-sel" data-tt="${k}" ${col ? `style="background:${col}"` : ''} onchange="ttPick('${k}',this)">${opts(cur)}</select></td><td class="tt-cal">${cur ? `<button class="btn soft sm" title="Add to Google Calendar" onclick="ttOne('${k}')">📅</button>` : ''}</td></tr>`;
   });
   return `<div class="card" style="margin-bottom:16px">
     <div class="cal-head">
@@ -1375,9 +1375,21 @@ function vTimetable(){
   </div>
   <div class="card"><h3>Time table <span class="muted" style="font-weight:500;font-size:12.5px">5:00 AM – 1:00 AM · 30-minute slots</span></h3>
     ${cats.length ? '' : '<div class="viewas">💡 No categories yet — choose “＋ Add new category…” in any dropdown, or tap ⚙ Categories to add them.</div>'}
-    <div class="tbl-wrap"><table class="tt"><thead><tr><th>Time</th><th>Category</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="tbl-wrap"><table class="tt"><thead><tr><th>Time</th><th>Category</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <p class="muted" style="margin-top:12px;font-size:13px">Pick a category for each slot — it saves instantly to the “Timetable” tab of your Google Sheet. Need a new one? Choose <b>＋ Add new category…</b> in the dropdown.</p>
   </div>`;
+}
+/* ---------- one Time Table slot -> Google Calendar (opens Calendar with the event filled in) ---------- */
+function ttOne(k){
+  const date = ttDate(), cat = (S.d.timetable[date] || {})[k];
+  if (!cat) return toast('Pick a category for this slot first');
+  const p = date.split('-').map(Number), i = TT_SLOTS.indexOf(k), st = 300 + i * 30;
+  const f = d => d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + pad2(d.getMinutes()) + '00';
+  const a = new Date(p[0], p[1] - 1, p[2], 0, st), z = new Date(p[0], p[1] - 1, p[2], 0, st + 30);
+  let tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+  const url = 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent(cat)
+    + '&dates=' + f(a) + '/' + f(z) + (tz ? '&ctz=' + encodeURIComponent(tz) : '');
+  window.open(url, '_blank');
 }
 function ttSetDate(v){ S.tt.date = v || ''; render(); }
 function ttNav(n){ const d = new Date(ttDate() + 'T00:00:00'); d.setDate(d.getDate() + n); S.tt.date = isoOf(d); render(); }
