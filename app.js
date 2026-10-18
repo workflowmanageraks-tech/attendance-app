@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals(); chatReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -237,7 +237,6 @@ function enterApp(){
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
   refreshUser();
   go(S.view);
-  chatStart();
   if (isAdmin()) loadLogs();
 }
 async function boot(){
@@ -580,7 +579,6 @@ const TITLES = {
   expenses:['Expenses','Track income and spending'],
   work:['Work','Daily work record — whole year'],
   timetable:['Time Table','Plan your day in 30-minute slots'],
-  chat:['Chat','Message other users — see who is online'],
   passwords:['Password Manager','Save website logins and copy them in one tap'],
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
@@ -605,8 +603,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(fals
 })();
 function go(v){
   setMenu(false);
-  if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
-  if (v !== 'chat') document.body.classList.remove('chat-conv');
   S.view = v; applyAccess(); v = S.view;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.v === v));
   $('#pageTitle').textContent = TITLES[v][0];
@@ -655,12 +651,12 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay();
-  const after = ({settings:bindSettings, logins:bindLogins, chat:bindChat})[S.view]; if (after) after();
+  const after = ({settings:bindSettings, logins:bindLogins})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -1370,8 +1366,6 @@ function vTimetable(){
       <button class="btn ghost sm" onclick="ttNav(1)">›</button>
       <button class="btn soft sm" onclick="ttSetDate('')">Today</button>
       <span style="flex:1"></span>
-      <button class="btn soft sm" onclick="ttAddCal(1)">📅 Add day to Calendar</button>
-      <button class="btn soft sm" onclick="ttAddCal(7)">📅 Next 7 days</button>
       <button class="btn soft sm" onclick="ttCopyPrev()">⧉ Copy previous day</button>
       <button class="btn soft sm" onclick="ttClear()">🗑 Clear day</button>
       <button class="btn sm" onclick="ttCats()">⚙ Categories</button>
@@ -1384,42 +1378,6 @@ function vTimetable(){
     <div class="tbl-wrap"><table class="tt"><thead><tr><th>Time</th><th>Category</th></tr></thead><tbody>${rows}</tbody></table></div>
     <p class="muted" style="margin-top:12px;font-size:13px">Pick a category for each slot — it saves instantly to the “Timetable” tab of your Google Sheet. Need a new one? Choose <b>＋ Add new category…</b> in the dropdown.</p>
   </div>`;
-}
-
-/* ---------- Time Table -> phone Calendar (.ics file, no Google setup needed) ---------- */
-function ttBlocks(date){
-  const day = S.d.timetable[date] || {}, out = []; let cur = null;
-  TT_SLOTS.forEach((k, i) => {
-    const c = day[k], s = 300 + i * 30;
-    if (c && cur && cur.cat === c && cur.e === s) cur.e = s + 30;
-    else if (c){ cur = { cat:c, s, e:s + 30 }; out.push(cur); }
-    else cur = null;
-  });
-  return out;
-}
-const icsDT = d => d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + pad2(d.getMinutes()) + '00';
-const icsEsc = t => String(t).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
-function ttAddCal(days){
-  const start = new Date(ttDate() + 'T00:00:00'), ev = [];
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
-  for (let n = 0; n < days; n++){
-    const d = new Date(start); d.setDate(d.getDate() + n);
-    const iso = isoOf(d), y = d.getFullYear(), m = d.getMonth(), dd = d.getDate();
-    ttBlocks(iso).forEach(b => {
-      const a = new Date(y, m, dd, 0, b.s), z = new Date(y, m, dd, 0, b.e);
-      ev.push(['BEGIN:VEVENT', 'UID:tt-' + iso + '-' + b.s + '@timetable', 'DTSTAMP:' + stamp,
-        'DTSTART:' + icsDT(a), 'DTEND:' + icsDT(z), 'SUMMARY:' + icsEsc(b.cat),
-        'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + icsEsc(b.cat), 'TRIGGER:-PT10M', 'END:VALARM', 'END:VEVENT'].join('\r\n'));
-    });
-  }
-  if (!ev.length) return toast(days === 1 ? 'No entries on this day' : 'No entries in these 7 days');
-  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Time Table//EN', 'CALSCALE:GREGORIAN'].concat(ev, ['END:VCALENDAR']).join('\r\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([ics], { type:'text/calendar;charset=utf-8' }));
-  a.download = 'timetable-' + ttDate() + (days > 1 ? '-7days' : '') + '.ics';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  toast(ev.length + ' events — open the downloaded file to add them to Calendar');
 }
 function ttSetDate(v){ S.tt.date = v || ''; render(); }
 function ttNav(n){ const d = new Date(ttDate() + 'T00:00:00'); d.setDate(d.getDate() + n); S.tt.date = isoOf(d); render(); }
@@ -1654,36 +1612,6 @@ function bindSettings(){
     try { const r = await api('addStatus', f); S.d.statuses = r.statuses; toast('Status code added'); render(); } catch(e){ handleErr(e); } finally { btn.disabled = false; }
   };
 }
-
-/* ---------- Google Calendar sync (Time Table -> your own Google Calendar) ---------- */
-function calCard(){
-  return `<div class="card"><h3>📅 Google Calendar</h3>
-    <p class="muted" style="margin-bottom:12px">Connect <b>your own</b> Google account. Everything you add in <b>Time Table</b> is then created in your Google Calendar with a reminder. Each user connects separately — nobody else’s events go into your calendar.</p>
-    <div id="calBox"><p class="muted">Loading…</p></div></div>`;
-}
-async function loadCal(){
-  const box = document.getElementById('calBox'); if (!box) return;
-  try{
-    const r = await api('calStatus');
-    let h = !r.configured ? '<p class="muted">Calendar sync is not set up on the server yet (admin: add CAL_CLIENT_ID, CAL_CLIENT_SECRET and PUBLIC_URL).</p>'
-      : r.connected ? `<p>✅ Connected: <b>${esc(r.email || 'Google account')}</b></p>
-          <div class="actions"><button class="btn soft sm" onclick="calSyncNow()">↻ Sync next 60 days</button><button class="btn ghost sm" onclick="calDisc()">Disconnect</button></div>`
-      : '<p class="muted" style="margin-bottom:10px">Not connected.</p><button class="btn" onclick="calConnect()">Connect Google Calendar</button>';
-    if (isAdmin()){
-      const t = await api('ttCalStatus');
-      h += '<div class="sec-title" style="margin-top:16px">Who has connected</div>' + t.users.map(u =>
-        `<div class="emp-item"><div class="info"><b>${esc(u.name)}</b><span>${u.connected ? '✅ ' + esc(u.email || 'connected') : '— not connected'}</span></div></div>`).join('');
-    }
-    box.innerHTML = h;
-  }catch(e){ box.innerHTML = '<p class="muted">' + esc(e.message || 'Could not load') + '</p>'; }
-}
-async function calConnect(){ try{ const r = await api('calAuthUrl'); window.open(r.url, '_blank'); toast('Allow access in the new tab, then come back'); }catch(e){ handleErr(e); } }
-async function calDisc(){
-  if (!await confirmBox('Disconnect Google Calendar?', 'New Time Table entries will stop going to your calendar. Existing events stay.', 'Disconnect', true)) return;
-  try{ await api('calDisconnect'); toast('Disconnected'); loadCal(); }catch(e){ handleErr(e); }
-}
-async function calSyncNow(){ try{ const r = await api('calSyncAll'); toast(r.queued + ' slots are syncing in the background'); }catch(e){ handleErr(e); } }
-window.addEventListener('focus', () => { if (S.view === 'settings') loadCal(); });
 function download(name, rows){
   const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type:'text/csv' })); a.download = name; a.click();
@@ -2047,273 +1975,6 @@ async function doExport(kind, fmt){
   finally{ S.exBusy = false; }
 }
 
-
-/* =====================================================================
-   VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
-   ===================================================================== */
-const chatFresh = () => ({ users:[], loaded:false, with:null, msgs:{}, peerRead:{}, peerSeen:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
-S.chat = chatFresh();
-let chatTimer = null;
-function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); document.body.classList.remove('chat-conv'); chatBadge(); }
-function chatStart(){
-  clearInterval(chatTimer);
-  chatLoadUsers();                                    // also tells the server "I am online"
-  chatTimer = setInterval(chatTick, 4000);
-}
-/* silent request (no top progress bar) — used for polling and sending */
-async function chatApi(action, payload = {}){
-  const j = await callServer({ action, token:S.token, ...payload });
-  if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; throw e; }
-  return j;
-}
-function chatErr(e){ if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
-const chatPeer = id => S.chat.users.find(u => u.id === id);
-function chatBadge(){
-  const b = $('#chatBadge'); if (!b) return;
-  const n = S.chat.unread || 0;
-  b.textContent = n > 99 ? '99+' : n; b.classList.toggle('hidden', n < 1);
-}
-function chatSumUnread(){ S.chat.unread = S.chat.users.reduce((a, u) => a + (u.unread || 0), 0); chatBadge(); }
-
-/* "5 min ago" style text (the server sends how long ago, so a wrong phone clock does not matter) */
-function chatAgo(u){
-  if (u.ago === null || u.ago === undefined) return null;
-  const ms = u.ago + (Date.now() - (u.at || Date.now())), m = Math.floor(ms / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return m + ' min ago';
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + ' hr' + (m % 60 ? ' ' + (m % 60) + ' min' : '') + ' ago';
-  const d = Math.floor(h / 24);
-  return d + (d === 1 ? ' day ago' : ' days ago');
-}
-function chatStatus(u){
-  if (u.online) return { cls:'on', txt:'Online' };
-  const a = chatAgo(u);
-  return { cls:'off', txt: a ? 'Offline · last seen ' + a : 'Offline' };
-}
-const CH_COL = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ec4899','#8b5cf6','#14b8a6','#ef4444','#64748b','#84cc16'];
-const chColor = id => CH_COL[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % CH_COL.length];
-const chInit = u => esc((u.name || u.username || '?').trim().charAt(0).toUpperCase());
-function chClock(t){ return new Date(t).toLocaleTimeString('en-IN', { hour:'numeric', minute:'2-digit' }); }
-function chDayLabel(t){
-  const d = new Date(t), n = new Date(), y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
-  const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  if (same(d, n)) return 'Today'; if (same(d, y)) return 'Yesterday';
-  return d.toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' });
-}
-function chListTime(t){
-  if (!t) return '';
-  return chDayLabel(t) === 'Today' ? chClock(t) : chDayLabel(t) === 'Yesterday' ? 'Yesterday' : new Date(t).toLocaleDateString('en-IN', { day:'numeric', month:'short' });
-}
-
-function vChat(){
-  return `<div class="chat ${S.chat.with ? 'in-conv' : ''}" id="chatRoot">
-    <div class="card ch-side">
-      <div class="ch-top"><h3>💬 Chats</h3><input class="input" id="chSearch" placeholder="Search user…" autocomplete="off" value="${esc(S.chat.q)}"></div>
-      <div class="ch-list" id="chList"></div>
-    </div>
-    <div class="card ch-pane" id="chPane"></div>
-  </div>`;
-}
-function bindChat(){
-  document.body.classList.toggle('chat-conv', !!S.chat.with);
-  $('#chSearch').oninput = e => { S.chat.q = e.target.value; chatRenderList(); };
-  chatRenderList(); chatRenderPane();
-  if (!S.chat.loaded) chatLoadUsers();
-  if (S.chat.with) chatFetchConv(true);
-}
-function chatRenderList(){
-  const el = $('#chList'); if (!el) return;
-  const q = S.chat.q.trim().toLowerCase();
-  const list = S.chat.users.filter(u => !q || (u.name + ' ' + u.username).toLowerCase().includes(q))
-    .sort((a, b) => (b.lastTime - a.lastTime) || (b.online - a.online) || String(a.name).localeCompare(String(b.name)));
-  if (S.chat.err && !S.chat.loaded){
-    el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">Could not load users</b><div style="margin:6px 0 12px;word-break:break-word">${esc(S.chat.err)}</div><button class="btn sm" onclick="S.chat.err='';chatRenderList();chatLoadUsers()">↻ Try again</button></div>`; return;
-  }
-  if (!S.chat.loaded){ el.innerHTML = '<div class="empty-state">Loading users…</div>'; return; }
-  if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No other users yet'}</div>`; return; }
-  el.innerHTML = list.map(u => {
-    const st = chatStatus(u);
-    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : ''}${esc(u.lastText)}</div>` : '';
-    return `<div class="ch-row ${S.chat.with === u.id ? 'sel' : ''}" onclick="chatOpen('${esc(u.id)}')">
-      <div class="ch-av" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot ${st.cls}"></span></div>
-      <div class="ch-info">
-        <div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot ${st.cls}"></span><span class="tm">${esc(chListTime(u.lastTime))}</span></div>
-        <div class="ch-stat ${st.cls}">${esc(st.txt)}</div>${prev}
-      </div>${u.unread ? `<span class="ch-unread">${u.unread > 99 ? '99+' : u.unread}</span>` : ''}</div>`;
-  }).join('');
-}
-function chatRenderPane(){
-  const pane = $('#chPane'); if (!pane) return;
-  const u = chatPeer(S.chat.with);
-  if (!S.chat.with || !u){
-    pane.innerHTML = '<div class="ch-empty"><div><div class="big">💬</div><b>Select a user to start chatting</b><div style="margin-top:4px">Your messages will appear here.</div></div></div>';
-    $('#chatRoot').classList.remove('in-conv'); return;
-  }
-  $('#chatRoot').classList.add('in-conv');
-  pane.innerHTML = `<div class="ch-head">
-      <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
-      <div class="ch-av" id="chHAv" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
-      <div class="ch-info"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
-    </div>
-    <div class="ch-msgs" id="chMsgs"></div>
-    <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
-      <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
-  const ta = $('#chInput');
-  ta.value = S.chat.drafts[u.id] || '';
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; };
-  ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); };
-  ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches){ e.preventDefault(); chatSend(); } };
-  grow(); chatHeader(); S.chat.sig = ''; chatRenderMsgs(true);
-}
-function chatHeader(){
-  const u = chatPeer(S.chat.with); if (!u) return;
-  const st = chatStatus(u), t = $('#chHStat'); if (!t) return;
-  t.className = 'ch-stat ' + st.cls; t.textContent = st.txt;
-  $('#chHDot').className = 'dot ' + st.cls; $('#chHAv .dot').className = 'dot ' + st.cls;
-}
-function chatRenderMsgs(toBottom){
-  const box = $('#chMsgs'); if (!box) return;
-  const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0, ps = Math.max(S.chat.peerSeen[id] || 0, pr);
-  const tk = m => m.t <= pr ? 'r' : (m.t <= ps ? 'd' : 's');
-  const sig = arr.map(m => m.id + (m.state || '') + (m.mine ? tk(m) : '')).join(',') + '|' + S.chat.histLoaded[id];
-  if (sig === S.chat.sig && !toBottom) return;
-  S.chat.sig = sig;
-  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
-  if (!arr.length){
-    box.innerHTML = `<div class="ch-load">${S.chat.histLoaded[id] ? 'No messages yet — say hi 👋' : 'Loading messages…'}</div>`;
-    return;
-  }
-  let html = '', day = '';
-  arr.forEach(m => {
-    const dl = chDayLabel(m.t);
-    if (dl !== day){ day = dl; html += `<div class="ch-day">${esc(dl)}</div>`; }
-    let meta = esc(chClock(m.t));
-    if (m.mine){
-      if (m.state === 'pending') meta = 'Sending…';
-      else if (m.state === 'failed') meta = 'Not sent · tap to retry';
-      else { const k = tk(m); meta += ` <span class="tick ${k === 'r' ? 'read' : ''}" title="${k === 'r' ? 'Read' : k === 'd' ? 'Delivered' : 'Sent'}">${k === 's' ? '✓' : '✓✓'}</span>`; }
-    }
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}><div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
-  });
-  box.innerHTML = html;
-  if (toBottom || near) box.scrollTop = box.scrollHeight;
-}
-function chatMerge(id, list){
-  const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
-  list.forEach(m => {
-    const i = a.findIndex(x => x.id === m.id);
-    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text){ a[i] = m; changed = true; } }
-    else { a.push(m); changed = true; }
-  });
-  if (changed) a.sort((x, y) => x.t - y.t);
-  return changed;
-}
-const chatAfter = id => (S.chat.msgs[id] || []).reduce((mx, m) => m.state ? mx : Math.max(mx, m.t), 0);
-
-async function chatLoadUsers(){
-  if (S.chat.loadingUsers || !S.token) return;
-  S.chat.loadingUsers = true;
-  try{
-    const r = await chatApi('chatUsers'), at = Date.now();
-    const incoming = r.unread > S.chat.unread && S.view !== 'chat' && S.chat.loaded;
-    S.chat.users = r.users.map(u => ({ ...u, at }));
-    S.chat.users.forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
-    S.chat.loaded = true; chatSumUnread();
-    if (incoming) toast('💬 New message');
-    S.chat.err = '';
-    if (S.view === 'chat'){ chatRenderList(); chatHeader(); }
-  }catch(e){ chatErr(e); S.chat.err = (e && e.message) || 'Request failed'; if (S.view === 'chat') chatRenderList(); }
-  finally{ S.chat.loadingUsers = false; }
-}
-async function chatPingNow(){
-  try{
-    const r = await chatApi('chatPing');
-    if (r.unread > S.chat.unread && S.view !== 'chat') toast('💬 New message');
-    S.chat.unread = r.unread; chatBadge();
-  }catch(e){ chatErr(e); }
-}
-async function chatFetchConv(first){
-  const c = S.chat, id = c.with;
-  if (!id || c.fetching) return;
-  c.fetching = true;
-  try{
-    const r = await chatApi('chatFetch', { with:id, after:chatAfter(id) });
-    if (c.with !== id) return;                                  // the user opened another chat meanwhile
-    let ch = chatMerge(id, r.messages);
-    if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
-    if (r.peerRead !== c.peerRead[id]){ c.peerRead[id] = r.peerRead; ch = true; }
-    if (r.peerSeen && r.peerSeen !== c.peerSeen[id]){ c.peerSeen[id] = r.peerSeen; ch = true; }
-    const u = chatPeer(id);
-    if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
-    if (u && r.messages.some(m => !m.mine)){
-      u.unread = 0; chatSumUnread();
-      const last = r.messages[r.messages.length - 1]; u.lastText = last.text.slice(0, 80); u.lastTime = last.t; u.lastMine = last.mine;
-      chatRenderList();
-    }
-    chatHeader();
-    if (ch || first) chatRenderMsgs(!!first);
-  }catch(e){ chatErr(e); }
-  finally{ c.fetching = false; }
-}
-function chatOpen(id){
-  const c = S.chat; if (!chatPeer(id)) return;
-  c.with = id; const u = chatPeer(id); if (u){ u.unread = 0; chatSumUnread(); }
-  document.body.classList.add('chat-conv'); chatFit(); window.scrollTo(0, 0);
-  chatRenderList(); chatRenderPane(); chatFetchConv(true);
-  if (!window.matchMedia('(max-width:860px)').matches){ const t = $('#chInput'); if (t) t.focus(); }
-}
-function chatBack(){
-  S.chat.with = null; document.body.classList.remove('chat-conv'); window.scrollTo(0, 0);
-  chatRenderList(); chatRenderPane(); chatLoadUsers();
-}
-async function chatSend(){
-  const c = S.chat, to = c.with, ta = $('#chInput'); if (!to || !ta) return;
-  const text = ta.value.trim(); if (!text) return;
-  ta.value = ''; c.drafts[to] = ''; ta.style.height = 'auto'; ta.focus();
-  const cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
-  const m = { id:cid, t:Date.now(), mine:true, text, state:'pending' };
-  (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
-  chatRenderMsgs(true);
-  await chatDeliver(to, m);
-}
-async function chatDeliver(to, m){
-  const c = S.chat;
-  try{
-    const r = await chatApi('chatSend', { to, cid:m.id, text:m.text });
-    const arr = c.msgs[to] || [], i = arr.findIndex(x => x.id === m.id);
-    if (i >= 0) arr[i] = r.message; else arr.push(r.message);
-    arr.sort((x, y) => x.t - y.t);
-    const u = chatPeer(to); if (u){ u.lastText = m.text.slice(0, 80); u.lastTime = r.message.t; u.lastMine = true; }
-  }catch(e){ m.state = 'failed'; chatErr(e); if (!e.code || e.code === 'ERR') toast(e.message || 'Message not sent', true); }
-  if (c.with === to) chatRenderMsgs(true);
-  chatRenderList();
-}
-function chatRetry(id){
-  const to = S.chat.with, m = (S.chat.msgs[to] || []).find(x => x.id === id);
-  if (!m || m.state !== 'failed') return;
-  m.state = 'pending'; chatRenderMsgs(); chatDeliver(to, m);
-}
-/* keeps the open chat exactly the size of the visible screen (keyboard open / closed, browser bars) */
-function chatFit(){
-  const v = window.visualViewport, r = document.documentElement.style;
-  r.setProperty('--vvh', (v ? v.height : window.innerHeight) + 'px');
-  r.setProperty('--vvt', (v ? v.offsetTop : 0) + 'px');
-  if (document.body.classList.contains('chat-conv') && window.scrollY) window.scrollTo(0, 0);
-}
-if (window.visualViewport){ visualViewport.addEventListener('resize', chatFit); visualViewport.addEventListener('scroll', chatFit); }
-window.addEventListener('resize', chatFit); window.addEventListener('orientationchange', chatFit); chatFit();
-function chatTick(){
-  const c = S.chat;
-  if (!S.token || !S.d || document.hidden) return;                 // a hidden tab stops pinging, so the person shows as offline
-  c.n++;
-  if (S.view === 'chat'){
-    if (c.with) chatFetchConv();
-    if (c.n % 3 === 0 || !c.loaded) chatLoadUsers();
-    else { chatHeader(); }
-  } else if (c.n % 5 === 0) chatPingNow();
-}
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && S.d){ chatLoadUsers(); if (S.view === 'chat' && S.chat.with) chatFetchConv(); } });
 
 /* ---------- add the "Passwords" tab to the menu (copies the look of the Work tab) ---------- */
 (function addPasswordsTab(){
