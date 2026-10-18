@@ -58,6 +58,7 @@
       <button data-v="attendance"><span class="ico">🗓️</span>Attendance</button>
       <button data-v="expenses"><span class="ico">💸</span>Expenses</button>
       <button data-v="work"><span class="ico">🛠️</span>Work</button>
+      <button data-v="timetable"><span class="ico">⏱️</span>Time Table</button>
       <button data-v="logins" class="hidden"><span class="ico">🔐</span>Logins</button>
       <button data-v="settings"><span class="ico">⚙️</span>Settings</button>
     </nav>
@@ -65,7 +66,7 @@
     <div class="side-user">
       <div class="avatar" id="avatar">A</div>
       <div style="flex:1;min-width:0"><div class="nm" id="uName">User</div><div class="rl" id="uRole"></div></div>
-      <button class="btn ghost sm" id="logoutBtn" title="Log out">⎋</button>
+      <button class="logout-btn icon" id="logoutBtn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
     </div>
   </aside>
   <main>
@@ -75,8 +76,8 @@
         <select class="select empsel hidden" id="asSel" title="View a user’s data"></select>
         <select class="select empsel hidden" id="empSel" title="Employee"></select>
         <button class="btn ghost sm" id="refreshBtn">↻ Refresh</button>
-        <button class="btn ghost sm" id="logoutBtn2">Log out</button>
-        <button class="btn ghost sm" id="logoutBtn3" style="display:none" title="Log out">⎋</button>
+        <button class="logout-btn txt" id="logoutBtn2" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span>Log out</span></button>
+        <button class="logout-btn icon" id="logoutBtn3" style="display:none" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
       </div>
     </div>
     <div id="view"></div>

@@ -17,6 +17,7 @@
  *   Users               -> ID | Username | Password | Role | Name | E-mail | Active | Permissions | Location required | Created | Last login
  *   Login Log           -> every login attempt: time, user, result, latitude / longitude, device, browser, OS, IP
  *   Groups              -> ID | Group name | Member user IDs (comma separated) | Created   (members of one group share ONE set of data)
+ *   Timetable           -> Type (Category / Day) | Key | Value | Owner   (the dropdown categories + the half-hour time-table of each date)
  *
  * LOGINS: the Username / Password in the Settings sheet is the MAIN ADMIN (id ADMIN). Extra users are added from the website:
  *   Settings > Users & access. Expenses / Work / Categories / Employees / Attendance each carry an Owner column, so every user sees only their own data.
@@ -41,9 +42,10 @@ const SHEET_KEYS = {
   LOG: ['login log'],
   PW: ['password manager'],
   LINK: ['links', 'link manager'],
-  GROUPS: ['groups']
+  GROUPS: ['groups'],
+  TT: ['timetable', 'time table']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -80,7 +82,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'LOG'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'TT', 'LOG'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -150,7 +152,8 @@ var WRITE_ACTIONS = {
   addPw: 1, updatePw: 1, deletePw: 1,
   addLink: 1, updateLink: 1, deleteLink: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
-  saveUser: 1, deleteUser: 1, kickUser: 1, saveGroup: 1, deleteGroup: 1
+  saveUser: 1, deleteUser: 1, kickUser: 1, saveGroup: 1, deleteGroup: 1,
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -161,7 +164,8 @@ var NEED = {
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
-  changeCredentials: 'creds'
+  changeCredentials: 'creds',
+  setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
 var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1 };
@@ -171,13 +175,13 @@ var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus:
 //   (owner differs from uid only when an admin uses "View as user")
 var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '', group: null };
 
-function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', emp: true, creds: true }; }
+function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', tt: 'edit', emp: true, creds: true }; }
 function normPerms_(p, role) {
   if (role === 'admin') return fullPerms_();
   p = p || {};
   function lvl(v) { v = String(v || '').toLowerCase(); return (v === 'none' || v === 'view' || v === 'edit') ? v : 'edit'; }
   function bool(v, d) { return (v === undefined || v === null || v === '') ? d : (v === true || v === 'true' || v === 'yes' || v === 1 || v === '1'); }
-  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), emp: bool(p.emp, false), creds: bool(p.creds, true) };
+  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true) };
 }
 function need_(sec) {
   var p = CTX.perms || {};
@@ -261,6 +265,10 @@ function route_(req) {
       case 'addLink':           return addLink_(req);
       case 'updateLink':        return updateLink_(req);
       case 'deleteLink':        return deleteLink_(req);
+      case 'setTimetable':      return setTimetable_(req);
+      case 'addTtCat':          return addTtCat_(req);
+      case 'updateTtCat':       return updateTtCat_(req);
+      case 'deleteTtCat':       return deleteTtCat_(req);
       case 'listUsers':         return listUsers_();
       case 'saveUser':          return saveUser_(req);
       case 'deleteUser':        return deleteUser_(req);
@@ -692,7 +700,7 @@ function listGroups_() {
 }
 // moves every row owned by `fromId` to the group, so the group starts with that person's existing data
 function adoptData_(fromId, toOwner) {
-  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['CAT', 3]].forEach(function (p) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['CAT', 3], ['TT', 4]].forEach(function (p) {
     var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
     if (last < 2) return;
     var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
@@ -807,6 +815,10 @@ function createSheet_(k) {
   } else if (k === 'CAT') {
     var c = [['Category Name', 'Type', 'Owner']].concat(DEFAULT_CATS.map(function (x) { return [x[0], x[1], 'ADMIN']; }));
     sh.getRange(1, 1, c.length, 3).setValues(c);
+  } else if (k === 'TT') {
+    sh.getRange(1, 1, 1, 4).setValues([['Type (Category / Day)', 'Key (category name / date)', 'Value (time slots as JSON)', 'Owner']]);
+    sh.getRange('A:D').setNumberFormat('@');
+    sh.setFrozenRows(1);
   } else if (k === 'USERS') {
     sh.getRange(1, 1, 1, 12).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
       'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until']]);
@@ -1491,6 +1503,120 @@ function deleteLink_(req) {
   return { ok: true };
 }
 
+// ---------- TIME TABLE ----------
+// Sheet "Timetable": Type | Key | Value | Owner
+//   Type "Category" -> Key = category name (these fill the dropdown of every slot)
+//   Type "Day"      -> Key = date (yyyy-mm-dd), Value = JSON like {"05:00":"Study","05:30":"Gym"}  (slot start time -> category)
+// 40 half-hour slots: 05:00 ... 23:30, then 00:00 and 00:30 (the last slot ends at 1 AM).
+function ttSlots_() {
+  var out = [];
+  for (var i = 0; i < 40; i++) {
+    var mn = 300 + i * 30, h = Math.floor(mn / 60) % 24, m = mn % 60;
+    out.push((h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m);
+  }
+  return out;
+}
+function readTT_() {
+  var sh = ownedSheet_('TT', 4), last = sh.getLastRow(), cats = [], days = {};
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 4).getValues().forEach(function (r, i) {
+      if (ownerOf_(r[3]) !== CTX.owner) return;
+      var type = String(r[0]).trim().toLowerCase(), key = String(r[1] instanceof Date ? fmtDate_(r[1]) : r[1]).trim();
+      if (!key) return;
+      if (type === 'category') cats.push({ name: key, row: i + 2 });
+      else if (type === 'day') {
+        var o = {};
+        try { o = JSON.parse(String(r[2] || '{}')) || {}; } catch (e) { o = {}; }
+        days[key] = { row: i + 2, slots: o };
+      }
+    });
+  }
+  return { cats: cats, days: days };
+}
+function ttDaysOut_(t) {
+  var o = {};
+  Object.keys(t.days).forEach(function (d) { if (Object.keys(t.days[d].slots).length) o[d] = t.days[d].slots; });
+  return o;
+}
+function ttReply_() {
+  var t = readTT_();
+  return { ok: true, categories: t.cats.map(function (c) { return c.name; }), timetable: ttDaysOut_(t) };
+}
+function ttCatName_(v) {
+  var n = String(v === undefined || v === null ? '' : v).trim().replace(/\s+/g, ' ').slice(0, 40);
+  if (!n) fail_('Category name is required.');
+  return n;
+}
+// writes one date's slots (an existing row is overwritten, a new date gets a new row)
+function ttWriteDay_(t, date, day) {
+  var sh = ownedSheet_('TT', 4), json = JSON.stringify(day), cur = t.days[date];
+  if (cur) { var c = sh.getRange(cur.row, 3); c.setNumberFormat('@'); c.setValue(json); return; }
+  if (!Object.keys(day).length) return;
+  var r = sh.getRange(sh.getLastRow() + 1, 1, 1, 4);
+  r.setNumberFormat('@');
+  r.setValues([['Day', date, json, CTX.owner]]);
+}
+function addTtCat_(req) {
+  var name = ttCatName_(req.name), t = readTT_();
+  if (t.cats.some(function (c) { return c.name.toLowerCase() === name.toLowerCase(); })) fail_('That category already exists.');
+  if (t.cats.length >= 100) fail_('Category limit (100) reached.');
+  var sh = ownedSheet_('TT', 4), r = sh.getRange(sh.getLastRow() + 1, 1, 1, 4);
+  r.setNumberFormat('@');
+  r.setValues([['Category', name, '', CTX.owner]]);
+  var out = ttReply_(); out.name = name;
+  return out;
+}
+function updateTtCat_(req) {
+  var t = readTT_(), old = String(req.oldName || ''), name = ttCatName_(req.name);
+  var cur = t.cats.filter(function (c) { return c.name === old; })[0];
+  if (!cur) fail_('Category not found.');
+  if (t.cats.some(function (c) { return c !== cur && c.name.toLowerCase() === name.toLowerCase(); })) fail_('Another category already has that name.');
+  var cell = ownedSheet_('TT', 4).getRange(cur.row, 2);
+  cell.setNumberFormat('@');
+  cell.setValue(name);
+  if (name !== old) {                                   // renaming also updates the slots already filled
+    Object.keys(t.days).forEach(function (d) {
+      var s = t.days[d].slots, hit = false;
+      Object.keys(s).forEach(function (k) { if (s[k] === old) { s[k] = name; hit = true; } });
+      if (hit) ttWriteDay_(t, d, s);
+    });
+  }
+  return ttReply_();
+}
+function deleteTtCat_(req) {
+  var t = readTT_(), old = String(req.name || '');
+  var cur = t.cats.filter(function (c) { return c.name === old; })[0];
+  if (!cur) fail_('Category not found.');
+  Object.keys(t.days).forEach(function (d) {            // slots that used it become empty (rows are updated BEFORE the category row is removed)
+    var s = t.days[d].slots, hit = false;
+    Object.keys(s).forEach(function (k) { if (s[k] === old) { delete s[k]; hit = true; } });
+    if (hit) ttWriteDay_(t, d, s);
+  });
+  ownedSheet_('TT', 4).deleteRow(cur.row);
+  return ttReply_();
+}
+// req: { date, slots: { "05:00": "Study", "05:30": "" }, replace: true|false }   ("" empties a slot)
+function setTimetable_(req) {
+  var date = String(req.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) fail_('Enter a valid date.');
+  var valid = {}, cats = {};
+  ttSlots_().forEach(function (k) { valid[k] = 1; });
+  var t = readTT_();
+  t.cats.forEach(function (c) { cats[c.name] = 1; });
+  var patch = (req.slots && typeof req.slots === 'object') ? req.slots : {};
+  var replace = req.replace === true || req.replace === 'true';
+  var day = replace ? {} : JSON.parse(JSON.stringify(t.days[date] ? t.days[date].slots : {}));
+  Object.keys(patch).forEach(function (k) {
+    if (!valid[k]) fail_('Invalid time slot: ' + k);
+    var c = String(patch[k] === undefined || patch[k] === null ? '' : patch[k]).trim();
+    if (!c) { delete day[k]; return; }
+    if (!cats[c]) fail_('Category "' + c + '" does not exist. Add it first.');
+    day[k] = c;
+  });
+  ttWriteDay_(t, date, day);
+  return { ok: true, slots: day };
+}
+
 // ---------- BUNDLE ----------
 function attAll_() {
   var out = {};
@@ -1499,6 +1625,7 @@ function attAll_() {
 }
 function getAll_() {
   var s = readSettings_(), p = CTX.perms;
+  var T = p.tt === 'none' ? { cats: [], days: {} } : readTT_();
   return {
     me: meOf_(s.values),
     settings: settingsView_(s),
@@ -1509,6 +1636,8 @@ function getAll_() {
     categories: p.exp === 'none' ? [] : cleanCats_(readCategories_()),
     work: p.work === 'none' ? [] : readWork_(),
     passwords: p.pw === 'none' ? [] : readPw_(),
-    links: p.link === 'none' ? [] : readLink_()
+    links: p.link === 'none' ? [] : readLink_(),
+    ttCats: T.cats.map(function (c) { return c.name; }),
+    timetable: ttDaysOut_(T)
   };
 }

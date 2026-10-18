@@ -393,3 +393,37 @@ td[data-l]::before{content:none}
 .log-item a{color:var(--brand);font-weight:600}
 #login .note{font-size:11.5px;color:var(--muted);text-align:center;margin-top:12px}
 @media (max-width:640px){.perm-grid{grid-template-columns:1fr}.emp-item .acts{flex-wrap:wrap}}
+
+
+/* ---------- LOGOUT BUTTON (clear door-and-arrow sign) ---------- */
+.logout-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:12px;font-weight:700;transition:.15s;cursor:pointer;flex:none}
+.logout-btn:hover{background:#dc2626;color:#fff;border-color:#dc2626}
+.logout-btn svg{width:22px;height:22px;flex:none}
+.logout-btn.icon{width:42px;height:42px;padding:0}
+.logout-btn.icon svg{width:24px;height:24px}
+.logout-btn.txt{padding:7px 14px;font-size:13.5px}
+.logout-btn.txt svg{width:18px;height:18px}
+.side-user .logout-btn{background:#fee2e2}
+
+/* ---------- DASHBOARD: user name ---------- */
+.hello{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:2px 14px;margin-bottom:14px}
+.hello .hi{font-size:21px;letter-spacing:-.2px}
+.hello .hw{color:var(--muted);font-weight:500}
+.hello .hi b{font-weight:800}
+
+/* ---------- TIME TABLE ---------- */
+.tt th,.tt td{white-space:nowrap;padding:6px 10px}
+.tt .tt-t{width:210px;font-weight:600;color:#334155;font-variant-numeric:tabular-nums}
+.tt .tt-sel{min-width:200px;max-width:420px;font-weight:600;transition:background .15s}
+.tt tr.tt-mid td{background:#eef0ff;color:var(--brand);font-weight:800;font-size:12.5px;padding:8px 12px}
+.tt tbody tr:hover td{background:transparent}
+.tt-cat-row{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.tt-cat-row .input{flex:1;min-width:0}
+.tt-cat-row .dot{border-radius:5px}
+@media (max-width:640px){
+  .hello .hi{font-size:17px}
+  .tt th,.tt td{padding:4px 4px}
+  .tt .tt-t{width:auto;font-size:12px}
+  .tt .tt-sel{min-width:0;max-width:none;width:100%;padding:8px 8px}
+  .logout-btn.icon{width:40px;height:40px}
+}

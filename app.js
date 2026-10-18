@@ -13,7 +13,7 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -188,6 +188,7 @@ async function loadAll(){
 function ingest(d){
   S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || [];
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
+  S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
   pickEmp(S.emp || store.get(EK));
 }
@@ -255,16 +256,16 @@ async function boot(){
    ===================================================================== */
 const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
-const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', emp:true, creds:true };
+const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', tt:'edit', emp:true, creds:true };
 const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
 function deny(){ toast('You have view-only access to this section', true); }
-const SECT = { attendance:'att', expenses:'exp', work:'work', passwords:'pw', links:'link' };
-const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', passwords:'Passwords', links:'Links' };
+const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link' };
+const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links' };
 
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('logins', !isAdmin());
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('logins', !isAdmin());
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin())) S.view = 'dashboard';
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
@@ -276,6 +277,7 @@ function applyRO(v){
   }
   if (!can('exp')) kill('[onclick*="entryForm"],[onclick*="delEntry"],[onclick*="catManager"]');
   if (!can('pw')) kill('[onclick*="pwForm"],[onclick*="pwDel"]');
+  if (!can('tt')){ kill('[onclick*="ttCats"],[onclick*="ttClear"],[onclick*="ttCopyPrev"]'); v.querySelectorAll('[data-tt]').forEach(e => { e.disabled = true; }); }
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
@@ -395,7 +397,7 @@ async function collectClient(){
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
   const p = u.perms || {}, L = { none:'no access', view:'view only', edit:'can edit' };
-  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}`;
+  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · Time Table: ${L[p.tt || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}`;
 }
 function usersCard(){
   const list = S.users || [];
@@ -436,6 +438,7 @@ function userForm(id){
           <div class="field"><label>🛠️ Work</label>${sel('p_work', p.work)}</div>
           <div class="field"><label>🔑 Passwords</label>${sel('p_pw', p.pw || 'edit')}</div>
           <div class="field"><label>🔗 Links</label>${sel('p_link', p.link || 'edit')}</div>
+          <div class="field"><label>⏱️ Time Table</label>${sel('p_tt', p.tt || 'edit')}</div>
         </div>
         <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''}> Can add / edit / delete employees</label>
         <label class="tog"><input type="checkbox" name="p_creds" ${p.creds ? 'checked' : ''}> Can change their own username & password</label>
@@ -453,7 +456,7 @@ function userForm(id){
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
+        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
       S.users = r.users; w.remove(); render(); toast(x ? 'User updated' : 'User added');
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
@@ -575,6 +578,7 @@ const TITLES = {
   attendance:['Attendance','Mark and review attendance day by day'],
   expenses:['Expenses','Track income and spending'],
   work:['Work','Daily work record — whole year'],
+  timetable:['Time Table','Plan your day in 30-minute slots'],
   passwords:['Password Manager','Save website logins and copy them in one tap'],
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
@@ -647,7 +651,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
@@ -753,7 +757,13 @@ function vDashboard(){
     </div>
   </div>`;
   const P = perms(), body = (P.att === 'none' ? '' : attHtml) + dashExtra();
-  return body || `<div class="card"><div class="empty-state">No sections are enabled for your account. Please contact the admin.</div></div>`;
+  return dashHello() + (body || `<div class="card"><div class="empty-state">No sections are enabled for your account. Please contact the admin.</div></div>`);
+}
+function dashHello(){
+  const me = S.me || {}, now = new Date(), hr = now.getHours();
+  const name = me.viewing ? (me.viewName || 'User') : (me.name || me.username || cfg().name || cfg().username || 'User');
+  const lead = me.viewing ? 'Dashboard of' : (hr < 12 ? 'Good morning,' : hr < 17 ? 'Good afternoon,' : 'Good evening,');
+  return `<div class="hello"><div class="hi"><span class="hw">${lead}</span> <b>${esc(name)}</b>${me.viewing ? '' : ' 👋'}</div><div class="muted">${WD[now.getDay()]}, ${esc(fmtDateNice(todayISO()))}</div></div>`;
 }
 
 function dashExtra(){
@@ -1320,10 +1330,151 @@ async function linkDel(id){ if (!can('link')) return deny();
   try { await api('deleteLink', { id }); S.d.links = S.d.links.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
 }
 
+/* =====================================================================
+   VIEW: TIME TABLE  (30-minute slots, 5 AM → 1 AM, a category dropdown for every slot)
+   ===================================================================== */
+const TT_SLOTS = (() => { const a = []; for (let i = 0; i < 40; i++){ const mn = 300 + i * 30; a.push(pad2(Math.floor(mn / 60) % 24) + ':' + pad2(mn % 60)); } return a; })();
+const TT_COLORS = ['#c7d2fe','#bbf7d0','#fde68a','#fecaca','#bae6fd','#e9d5ff','#fbcfe8','#fed7aa','#a7f3d0','#ddd6fe','#fef08a','#cbd5e1'];
+const ttColor = name => { const i = (S.d.ttCats || []).indexOf(name); return i < 0 ? '' : TT_COLORS[i % TT_COLORS.length]; };
+const ttAp = h => h >= 12 ? 'PM' : 'AM';
+const ttHm = (h, m) => `${h % 12 || 12}:${pad2(m)}`;
+function ttRange(k){
+  const h = +k.slice(0, 2), m = +k.slice(3), e = h * 60 + m + 30, h2 = Math.floor(e / 60) % 24, m2 = e % 60;
+  return ttAp(h) === ttAp(h2) ? `${ttHm(h, m)} – ${ttHm(h2, m2)} ${ttAp(h2)}` : `${ttHm(h, m)} ${ttAp(h)} – ${ttHm(h2, m2)} ${ttAp(h2)}`;
+}
+const ttDate = () => S.tt.date || todayISO();
+const isoOf = d => new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+function vTimetable(){
+  const date = ttDate(), day = S.d.timetable[date] || {}, cats = S.d.ttCats || [];
+  const dt = new Date(date + 'T00:00:00'), isT = date === todayISO();
+  const counts = {}; let filled = 0;
+  TT_SLOTS.forEach(k => { const c = day[k]; if (c){ filled++; counts[c] = (counts[c] || 0) + 1; } });
+  const hrs = n => (n / 2) + ' h';
+  const chips = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([n, c]) => `<span class="chip" style="background:${esc(ttColor(n) || '#f1f5f9')}">${esc(n)} · ${hrs(c)}</span>`).join('');
+  const opts = cur => '<option value="">— Select —</option>' + (cur && !cats.includes(cur) ? `<option selected>${esc(cur)}</option>` : '')
+    + cats.map(c => `<option ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('') + '<option value="__new">＋ Add new category…</option>';
+  let rows = '';
+  TT_SLOTS.forEach(k => {
+    if (k === '00:00') rows += '<tr class="tt-mid"><td colspan="2">🌙 After midnight</td></tr>';
+    const cur = day[k] || '', col = cur ? ttColor(cur) : '';
+    rows += `<tr><td class="tt-t">${ttRange(k)}</td><td><select class="select tt-sel" data-tt="${k}" ${col ? `style="background:${col}"` : ''} onchange="ttPick('${k}',this)">${opts(cur)}</select></td></tr>`;
+  });
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="cal-head">
+      <button class="btn ghost sm" onclick="ttNav(-1)">‹</button>
+      <input class="input" type="date" style="width:auto" value="${esc(date)}" onchange="ttSetDate(this.value)">
+      <button class="btn ghost sm" onclick="ttNav(1)">›</button>
+      <button class="btn soft sm" onclick="ttSetDate('')">Today</button>
+      <span style="flex:1"></span>
+      <button class="btn soft sm" onclick="ttCopyPrev()">⧉ Copy previous day</button>
+      <button class="btn soft sm" onclick="ttClear()">🗑 Clear day</button>
+      <button class="btn sm" onclick="ttCats()">⚙ Categories</button>
+    </div>
+    <div class="sec-title" style="margin:0 0 8px">${WD[dt.getDay()]}, ${esc(fmtDateNice(date))}${isT ? ' · Today' : ''}</div>
+    <div class="chips"><span class="chip" style="background:var(--good-soft)">Planned ${hrs(filled)} of 20 h</span>${chips}</div>
+  </div>
+  <div class="card"><h3>Time table <span class="muted" style="font-weight:500;font-size:12.5px">5:00 AM – 1:00 AM · 30-minute slots</span></h3>
+    ${cats.length ? '' : '<div class="viewas">💡 No categories yet — choose “＋ Add new category…” in any dropdown, or tap ⚙ Categories to add them.</div>'}
+    <div class="tbl-wrap"><table class="tt"><thead><tr><th>Time</th><th>Category</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="margin-top:12px;font-size:13px">Pick a category for each slot — it saves instantly to the “Timetable” tab of your Google Sheet. Need a new one? Choose <b>＋ Add new category…</b> in the dropdown.</p>
+  </div>`;
+}
+function ttSetDate(v){ S.tt.date = v || ''; render(); }
+function ttNav(n){ const d = new Date(ttDate() + 'T00:00:00'); d.setDate(d.getDate() + n); S.tt.date = isoOf(d); render(); }
+async function ttPick(k, el){
+  if (!can('tt')){ render(); return deny(); }
+  const date = ttDate(); let v = el.value;
+  if (v === '__new'){
+    render();                                   // put the dropdown back while the "new category" box is open
+    const name = await ttAskCat(); if (!name) return;
+    v = name;
+  }
+  const day = S.d.timetable[date] = S.d.timetable[date] || {}, prev = day[k];
+  if (v) day[k] = v; else delete day[k];
+  render();
+  try { await api('setTimetable', { date, slots:{ [k]: v } }); toast('Saved'); }
+  catch(e){ if (prev) day[k] = prev; else delete day[k]; render(); handleErr(e); }
+}
+function ttAskCat(){
+  return new Promise(res => {
+    const w = openModal(`<h3>New category</h3><p class="sub">It will show up in the dropdown of every time slot.</p>
+      <form id="ttnf" autocomplete="off"><div class="field"><label>Category name</label><input class="input" name="name" maxlength="40" placeholder="e.g. Study, Gym, Office work" required></div>
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">Add & select</button></div></form>`);
+    const inp = w.querySelector('input'); setTimeout(() => inp.focus(), 50);
+    w.querySelector('[data-x]').onclick = () => { w.remove(); res(null); };
+    w.querySelector('#ttnf').onsubmit = async ev => {
+      ev.preventDefault(); const name = inp.value.trim().replace(/\s+/g, ' '), btn = ev.submitter; if (!name) return;
+      const have = (S.d.ttCats || []).find(c => c.toLowerCase() === name.toLowerCase());
+      if (have){ w.remove(); return res(have); }
+      btn.disabled = true;
+      try { const r = await api('addTtCat', { name }); S.d.ttCats = r.categories; w.remove(); res(r.name); }
+      catch(e){ btn.disabled = false; handleErr(e); }
+    };
+  });
+}
+function ttCats(){ if (!can('tt')) return deny(); const w = openModal('', 'wide'); drawTtCats(w); }
+function drawTtCats(w){
+  const cats = S.d.ttCats || [], m = w.querySelector('.modal');
+  const used = n => Object.values(S.d.timetable).reduce((t, d) => t + Object.values(d).filter(c => c === n).length, 0);
+  const rows = cats.map((c, i) => `<div class="tt-cat-row"><span class="dot" style="background:${esc(ttColor(c))};width:16px;height:16px;flex:none"></span><input class="input" id="tc${i}" value="${esc(c)}" maxlength="40">
+    <button class="btn soft sm" data-save="${i}">Save</button><button class="btn ghost sm" data-del="${i}" title="${used(c)} slots use it">🗑${used(c) ? ' ' + used(c) : ''}</button></div>`).join('');
+  m.innerHTML = `<h3>Time table categories</h3><p class="sub">These appear in the dropdown of every time slot. Renaming also updates the slots already filled.</p>
+    ${rows || '<div class="empty-state">No categories yet — add your first one below.</div>'}
+    <div class="sec-title" style="margin-top:18px">Add new category</div>
+    <div class="tt-cat-row"><input class="input" id="tcNew" placeholder="e.g. Study, Gym, Office work" maxlength="40"><button class="btn sm" id="tcAdd">＋ Add</button></div>
+    <div class="foot"><button class="btn ghost" data-x>Done</button></div>`;
+  const sync = r => { S.d.ttCats = r.categories; S.d.timetable = r.timetable || {}; drawTtCats(w); };
+  m.querySelector('[data-x]').onclick = () => { w.remove(); render(); };
+  const add = async () => {
+    try { const r = await api('addTtCat', { name:m.querySelector('#tcNew').value }); sync(r); toast('Category added'); const n = w.querySelector('#tcNew'); if (n) n.focus(); } catch(e){ handleErr(e); }
+  };
+  m.querySelector('#tcAdd').onclick = add;
+  m.querySelector('#tcNew').onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); add(); } };
+  m.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
+    const i = +b.dataset.save;
+    try { sync(await api('updateTtCat', { oldName:cats[i], name:m.querySelector('#tc' + i).value })); toast('Category updated'); } catch(e){ handleErr(e); }
+  });
+  m.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    const i = +b.dataset.del, n = used(cats[i]);
+    if (!await confirmBox('Delete “' + cats[i] + '”?', n ? `${n} filled slot(s) that use it will become empty.` : 'This category will be removed.', 'Delete', true)) return;
+    try { sync(await api('deleteTtCat', { name:cats[i] })); toast('Category deleted'); } catch(e){ handleErr(e); }
+  });
+}
+async function ttClear(){ if (!can('tt')) return deny();
+  const date = ttDate(), n = Object.keys(S.d.timetable[date] || {}).length;
+  if (!n) return toast('This day is already empty');
+  if (!await confirmBox('Clear this day?', `${n} filled slot(s) of ${fmtDateNice(date)} will be emptied.`, 'Clear', true)) return;
+  try { await api('setTimetable', { date, slots:{}, replace:true }); delete S.d.timetable[date]; render(); toast('Day cleared'); } catch(e){ handleErr(e); }
+}
+async function ttCopyPrev(){ if (!can('tt')) return deny();
+  const date = ttDate(), d = new Date(date + 'T00:00:00'); d.setDate(d.getDate() - 1);
+  const prev = isoOf(d), src = S.d.timetable[prev] || {}, cur = S.d.timetable[date] || {};
+  if (!Object.keys(src).length) return toast('Previous day (' + fmtDateNice(prev) + ') has no entries', true);
+  if (Object.keys(cur).length && !await confirmBox('Replace this day?', `Today’s ${Object.keys(cur).length} filled slot(s) will be replaced with ${fmtDateNice(prev)}’s plan.`, 'Replace')) return;
+  try { await api('setTimetable', { date, slots:src, replace:true }); S.d.timetable[date] = { ...src }; render(); toast('Copied from ' + fmtDateNice(prev)); } catch(e){ handleErr(e); }
+}
+
+
 
 /* =====================================================================
    VIEW: SETTINGS
    ===================================================================== */
+function exportCard(){
+  const P = perms(), items = [];
+  if (P.att !== 'none') items.push(['att', '🗓️ Attendance', 'Year summary + day-wise register — how many days Present / Absent / Week off', 'Attendance']);
+  if (P.exp !== 'none') items.push(['exp', '💸 Expenses — Ledger', 'Income (in), Expense (out) and running balance, with category & month summary', 'Ledger']);
+  if (P.work !== 'none') items.push(['work', '🛠️ Work record', 'All daily work entries with month & product summary', 'Work']);
+  if (!items.length) return '';
+  if (items.length > 1) items.push(['all', '📚 All data', items.map(x => x[3]).join(' + ') + ' in a single file', '']);
+  const note = P.att !== 'none' ? ` Attendance export is for the selected employee (<b>${esc(emp().name || '—')}</b>).` : '';
+  return `<div class="card"><h3>📦 Data & export</h3>
+    <p class="muted" style="margin-bottom:14px">Your data lives in your Google Sheet.${note}</p>
+    <div class="exgrid">
+      ${items.map(([k, t, s2]) =>
+        `<div class="exitem"><div><span class="t">${t}</span><span class="s">${s2}</span></div><div class="actions"><button class="btn soft sm" onclick="doExport('${k}','xlsx')">⬇ Excel</button><button class="btn soft sm" onclick="doExport('${k}','pdf')">⬇ PDF</button></div></div>`).join('')}
+    </div>
+  </div>`;
+}
 function vSettingsBase(){
   const s = cfg(), emps = S.d.employees || [];
   const empRows = emps.map(e => `<div class="emp-item ${e.id===S.emp?'cur':''}">
@@ -1381,16 +1532,7 @@ function vSettingsBase(){
     <p class="muted" style="margin-bottom:14px">${S.d.categories.length} categories. Rename, change Income / Expense type, delete or add new ones.</p>
     <button class="btn soft" onclick="catManager()">⚙ Manage categories</button></div>
 
-  <div class="card"><h3>📦 Data & export</h3>
-    <p class="muted" style="margin-bottom:14px">Your data lives in your Google Sheet. Attendance export is for the selected employee (<b>${esc(emp().name || '—')}</b>).</p>
-    <div class="exgrid">
-      ${[['att','🗓️ Attendance','Year summary + day-wise register — how many days Present / Absent / Week off'],
-         ['exp','💸 Expenses — Ledger','Income (in), Expense (out) and running balance, with category & month summary'],
-         ['work','🛠️ Work record','All daily work entries with month & product summary'],
-         ['all','📚 All data','Attendance + Ledger + Work in a single file']].map(([k, t, s]) =>
-        `<div class="exitem"><div><span class="t">${t}</span><span class="s">${s}</span></div><div class="actions"><button class="btn soft sm" onclick="doExport('${k}','xlsx')">⬇ Excel</button><button class="btn soft sm" onclick="doExport('${k}','pdf')">⬇ PDF</button></div></div>`).join('')}
-    </div>
-  </div></div>`;
+  ${exportCard()}</div>`;
 }
 function vSettings(){
   const dom = document.createElement('div'); dom.innerHTML = vSettingsBase();
@@ -1807,21 +1949,23 @@ async function doExport(kind, fmt){
   toast('Preparing your ' + (fmt === 'pdf' ? 'PDF' : 'Excel') + ' file…');
   try{
     const d = exPrep(), names = { att:`KS-attendance-${(d.e.name || 'employee').replace(/[^\w\u0900-\u097F-]+/g,'_')}-${d.y}`, exp:'KS-expense-ledger', work:'KS-work-record', pw:'KS-passwords', all:'KS-all-data' };
+    const PP = perms(), inc = { att:(kind === 'att' || kind === 'all') && PP.att !== 'none', exp:(kind === 'exp' || kind === 'all') && PP.exp !== 'none', work:(kind === 'work' || kind === 'all') && PP.work !== 'none' };
+    if (!inc.att && !inc.exp && !inc.work && kind !== 'pw'){ toast('Nothing to export for your account', true); return; }
     if (fmt === 'pdf'){
       await needPdf();
-      const P = { doc:new window.jspdf.jsPDF({ orientation:kind === 'exp' ? 'p' : 'l', unit:'mm', format:'a4' }) };
+      const P = { doc:new window.jspdf.jsPDF({ orientation:(inc.att ? 'l' : inc.exp ? 'p' : 'l'), unit:'mm', format:'a4' }) };
       let first = true;
-      if (kind === 'att' || kind === 'all'){ pdfAtt(P, d, first); first = false; }
-      if (kind === 'exp' || kind === 'all'){ pdfLedger(P, d, first); first = false; }
-      if (kind === 'work' || kind === 'all'){ pdfWork(P, d, first); first = false; }
+      if (inc.att){ pdfAtt(P, d, first); first = false; }
+      if (inc.exp){ pdfLedger(P, d, first); first = false; }
+      if (inc.work){ pdfWork(P, d, first); first = false; }
       if (kind === 'pw'){ pdfPasswords(P, d, first); first = false; }
       pdfFooter(P.doc); saveBlob(names[kind] + '.pdf', P.doc.output('blob'));
     } else {
       await needExcel();
       const wb = new window.ExcelJS.Workbook(); wb.creator = 'KS'; wb.created = new Date();
-      if (kind === 'att' || kind === 'all'){ xlAttSummary(wb, d); xlAttRegister(wb, d); xlAttLog(wb, d); }
-      if (kind === 'exp' || kind === 'all'){ xlLedger(wb, d); xlLedgerSummary(wb, d); }
-      if (kind === 'work' || kind === 'all'){ xlWork(wb, d); xlWorkSummary(wb, d); }
+      if (inc.att){ xlAttSummary(wb, d); xlAttRegister(wb, d); xlAttLog(wb, d); }
+      if (inc.exp){ xlLedger(wb, d); xlLedgerSummary(wb, d); }
+      if (inc.work){ xlWork(wb, d); xlWorkSummary(wb, d); }
       if (kind === 'pw') xlPasswords(wb, d);
       const buf = await wb.xlsx.writeBuffer();
       saveBlob(names[kind] + '.xlsx', new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
@@ -1846,7 +1990,7 @@ async function doExport(kind, fmt){
   else if (tn.length >= 2){ tn[0].nodeValue = '🔑'; tn[tn.length - 1].nodeValue = 'Passwords'; }
   else if (tn.length === 1) tn[0].nodeValue = '🔑 Passwords';
   else b.textContent = '🔑 Passwords';
-  src.after(b);
+  (nav.querySelector('[data-v="timetable"]') || src).after(b);
 })();
 
 /* ---------- add the "Links" tab to the menu (right after Passwords) ---------- */
