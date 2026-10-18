@@ -13,7 +13,7 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -316,6 +316,12 @@ async function loadLogs(){
   try { S.logs = (await api('loginLog', { limit:300 })).logs; } catch(e){ S.logs = S.logs || []; }
   if (S.view === 'logins' || (S.view === 'dashboard' && !S.as)) render();
 }
+async function loadActivity(){
+  // Admins see everyone's activity; regular users only ever see their own (the server already scopes it by token,
+  // uid here just lets an admin re-filter the same list client-side without asking the server again).
+  try { S.acts = (await api('activityLog', { limit:300 })).logs; } catch(e){ S.acts = S.acts || []; }
+  if (S.view === 'settings') drawActivityList();
+}
 
 /* ---------- device + location (sent with every sign-in) ---------- */
 function deviceId(){
@@ -535,6 +541,36 @@ function logItem(l, compact){
     ${compact ? '' : `<div class="l2">🌐 ${esc([l.ip, l.city].filter(Boolean).join(' · ') || '—')}${l.deviceId ? ' · Device ID ' + esc(l.deviceId.slice(-6)) : ''}${l.tz ? ' · ' + esc(l.tz) : ''}${l.reason ? ' · ' + esc(l.reason) : ''}</div>`}
   </div>`;
 }
+
+/* ---------- Activity log (every save / add / delete a user makes, not just sign-ins) ---------- */
+function activityItem(a){
+  return `<div class="log-item">
+    <div class="l1"><b>${esc(a.name || a.username || '(unknown)')} <span class="muted" style="font-weight:500">@${esc(a.username)}</span></b>
+      <span><span class="pill inc">${esc(a.action)}</span> <span class="muted">${esc(fmtLogTime(a.time))}</span></span></div>
+    ${a.detail ? `<div class="l2">📝 ${esc(a.detail)}</div>` : ''}
+  </div>`;
+}
+function filteredActivity(){
+  const f = S.af, q = f.q.trim().toLowerCase();
+  return (S.acts || []).filter(a => (f.u === 'all' || a.uid === f.u)
+    && (!q || [a.name, a.username, a.action, a.detail].join(' ').toLowerCase().includes(q)));
+}
+function drawActivityList(){
+  const list = filteredActivity(), el = $('#actList'); if (!el) return;
+  el.innerHTML = list.map(a => activityItem(a)).join('') || '<div class="empty-state">No activity yet</div>';
+}
+function activityCard(){
+  const users = S.users || [];
+  const known = new Set(users.map(u => u.id)), extra = [...new Map((S.acts || []).filter(a => a.uid && !known.has(a.uid)).map(a => [a.uid, a.name || a.username])).entries()];
+  const uopts = '<option value="all">All users</option>' + users.map(u => `<option value="${esc(u.id)}" ${S.af.u === u.id ? 'selected' : ''}>${esc(u.name || u.username)}</option>`).join('')
+    + extra.map(([id, n]) => `<option value="${esc(id)}" ${S.af.u === id ? 'selected' : ''}>${esc(n)} (deleted)</option>`).join('');
+  return `<div class="card"><h3>📋 Activity log <button class="btn ghost sm" onclick="loadActivity()">↻ Refresh</button></h3>
+    <p class="muted" style="margin-bottom:12px">${isAdmin() ? 'Every save, add or delete each user made — attendance, expenses, work, time table and more.' : 'Every save, add or delete you made.'}</p>
+    ${isAdmin() ? `<div class="form-grid"><div class="field"><label>User</label><select class="select" id="afU">${uopts}</select></div>
+      <div class="field"><label>Search</label><input class="input" id="afQ" placeholder="action, detail…" value="${esc(S.af.q)}"></div></div>` : ''}
+    <div id="actList">${S.acts ? '' : '<div class="empty-state">Loading activity…</div>'}</div></div>`;
+}
+
 function recentLoginsCard(){
   const list = (S.logs || []).slice(0, 6);
   return `<div class="card" style="margin-top:16px"><h3>🔐 Recent logins <button class="btn ghost sm" onclick="go('logins')">View all →</button></h3>
@@ -1355,9 +1391,9 @@ function vTimetable(){
     + cats.map(c => `<option ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('') + '<option value="__new">＋ Add new category…</option>';
   let rows = '';
   TT_SLOTS.forEach(k => {
-    if (k === '00:00') rows += '<tr class="tt-mid"><td colspan="3">🌙 After midnight</td></tr>';
+    if (k === '00:00') rows += '<tr class="tt-mid"><td colspan="2">🌙 After midnight</td></tr>';
     const cur = day[k] || '', col = cur ? ttColor(cur) : '';
-    rows += `<tr><td class="tt-t">${ttRange(k)}</td><td><select class="select tt-sel" data-tt="${k}" ${col ? `style="background:${col}"` : ''} onchange="ttPick('${k}',this)">${opts(cur)}</select></td><td class="tt-cal">${cur ? `<button class="btn soft sm" title="Add to Google Calendar" onclick="ttOne('${k}')">📅</button>` : ''}</td></tr>`;
+    rows += `<tr><td class="tt-t">${ttRange(k)}</td><td><select class="select tt-sel" data-tt="${k}" ${col ? `style="background:${col}"` : ''} onchange="ttPick('${k}',this)">${opts(cur)}</select></td></tr>`;
   });
   return `<div class="card" style="margin-bottom:16px">
     <div class="cal-head">
@@ -1375,21 +1411,9 @@ function vTimetable(){
   </div>
   <div class="card"><h3>Time table <span class="muted" style="font-weight:500;font-size:12.5px">5:00 AM – 1:00 AM · 30-minute slots</span></h3>
     ${cats.length ? '' : '<div class="viewas">💡 No categories yet — choose “＋ Add new category…” in any dropdown, or tap ⚙ Categories to add them.</div>'}
-    <div class="tbl-wrap"><table class="tt"><thead><tr><th>Time</th><th>Category</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="tbl-wrap"><table class="tt"><thead><tr><th>Time</th><th>Category</th></tr></thead><tbody>${rows}</tbody></table></div>
     <p class="muted" style="margin-top:12px;font-size:13px">Pick a category for each slot — it saves instantly to the “Timetable” tab of your Google Sheet. Need a new one? Choose <b>＋ Add new category…</b> in the dropdown.</p>
   </div>`;
-}
-/* ---------- one Time Table slot -> Google Calendar (opens Calendar with the event filled in) ---------- */
-function ttOne(k){
-  const date = ttDate(), cat = (S.d.timetable[date] || {})[k];
-  if (!cat) return toast('Pick a category for this slot first');
-  const p = date.split('-').map(Number), i = TT_SLOTS.indexOf(k), st = 300 + i * 30;
-  const f = d => d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + pad2(d.getMinutes()) + '00';
-  const a = new Date(p[0], p[1] - 1, p[2], 0, st), z = new Date(p[0], p[1] - 1, p[2], 0, st + 30);
-  let tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
-  const url = 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent(cat)
-    + '&dates=' + f(a) + '/' + f(z) + (tz ? '&ctz=' + encodeURIComponent(tz) : '');
-  window.open(url, '_blank');
 }
 function ttSetDate(v){ S.tt.date = v || ''; render(); }
 function ttNav(n){ const d = new Date(ttDate() + 'T00:00:00'); d.setDate(d.getDate() + n); S.tt.date = isoOf(d); render(); }
@@ -1555,6 +1579,7 @@ function vSettings(){
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
   if (isAdmin()) grid.insertAdjacentHTML('afterbegin', usersCard() + groupsCard());
+  grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
 }
 function applySettings(r){
@@ -1623,6 +1648,10 @@ function bindSettings(){
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
     try { const r = await api('addStatus', f); S.d.statuses = r.statuses; toast('Status code added'); render(); } catch(e){ handleErr(e); } finally { btn.disabled = false; }
   };
+  const afU = document.getElementById('afU'), afQ = document.getElementById('afQ');
+  if (afU) afU.onchange = e => { S.af.u = e.target.value; drawActivityList(); };
+  if (afQ) afQ.oninput = e => { S.af.q = e.target.value; drawActivityList(); };
+  if (S.acts) drawActivityList(); else loadActivity();
 }
 function download(name, rows){
   const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');

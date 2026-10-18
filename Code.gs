@@ -45,9 +45,10 @@ const SHEET_KEYS = {
   LINK: ['links', 'link manager'],
   GROUPS: ['groups'],
   TT: ['timetable', 'time table'],
-  CHAT: ['chat']
+  CHAT: ['chat'],
+  ACT: ['activity log', 'activity']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', ACT: 'Activity Log' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -84,7 +85,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'LOG'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -212,6 +213,7 @@ function buildCtx_(uid, asUser) {
   }
 }
 
+function isAdminCtx_() { return CTX.role === 'admin'; }
 function route_(req) {
   var a = req.action;
 
@@ -240,57 +242,61 @@ function route_(req) {
     lock.waitLock(20000);
   }
   try {
+    var out;
     switch (a) {
       case 'setup':             return setup_(req);
       case 'logout':            CacheService.getScriptCache().remove('tok_' + req.token); markOffline_(CTX.uid); return { ok: true };
       case 'getAll':            return { ok: true, data: getAll_() };
-      case 'setAttendance':     return setAttendance_(req);
-      case 'saveSettings':      return saveSettings_(req);
-      case 'saveStatuses':      return saveStatuses_(req);
-      case 'addStatus':         return addStatus_(req);
-      case 'deleteStatus':      return deleteStatus_(req);
-      case 'addEmployee':       return addEmployee_(req);
-      case 'updateEmployee':    return updateEmployee_(req);
-      case 'deleteEmployee':    return deleteEmployee_(req);
-      case 'changeCredentials': return changeCredentials_(req);
-      case 'addExpense':        return addExpense_(req);
-      case 'updateExpense':     return updateExpense_(req);
-      case 'deleteExpense':     return deleteExpense_(req);
-      case 'addCategory':       return addCategory_(req);
-      case 'updateCategory':    return updateCategory_(req);
-      case 'deleteCategory':    return deleteCategory_(req);
-      case 'addWork':           return addWork_(req);
-      case 'updateWork':        return updateWork_(req);
-      case 'deleteWork':        return deleteWork_(req);
-      case 'addPw':             return addPw_(req);
-      case 'updatePw':          return updatePw_(req);
-      case 'deletePw':          return deletePw_(req);
-      case 'addLink':           return addLink_(req);
-      case 'updateLink':        return updateLink_(req);
-      case 'deleteLink':        return deleteLink_(req);
-      case 'setTimetable':      return setTimetable_(req);
+      case 'setAttendance':     out = setAttendance_(req); break;
+      case 'saveSettings':      out = saveSettings_(req); break;
+      case 'saveStatuses':      out = saveStatuses_(req); break;
+      case 'addStatus':         out = addStatus_(req); break;
+      case 'deleteStatus':      out = deleteStatus_(req); break;
+      case 'addEmployee':       out = addEmployee_(req); break;
+      case 'updateEmployee':    out = updateEmployee_(req); break;
+      case 'deleteEmployee':    out = deleteEmployee_(req); break;
+      case 'changeCredentials': out = changeCredentials_(req); break;
+      case 'addExpense':        out = addExpense_(req); break;
+      case 'updateExpense':     out = updateExpense_(req); break;
+      case 'deleteExpense':     out = deleteExpense_(req); break;
+      case 'addCategory':       out = addCategory_(req); break;
+      case 'updateCategory':    out = updateCategory_(req); break;
+      case 'deleteCategory':    out = deleteCategory_(req); break;
+      case 'addWork':           out = addWork_(req); break;
+      case 'updateWork':        out = updateWork_(req); break;
+      case 'deleteWork':        out = deleteWork_(req); break;
+      case 'addPw':             out = addPw_(req); break;
+      case 'updatePw':          out = updatePw_(req); break;
+      case 'deletePw':          out = deletePw_(req); break;
+      case 'addLink':           out = addLink_(req); break;
+      case 'updateLink':        out = updateLink_(req); break;
+      case 'deleteLink':        out = deleteLink_(req); break;
+      case 'setTimetable':      out = setTimetable_(req); break;
       case 'calAuthUrl':        return calAuthUrl_();
       case 'calStatus':         return calStatus_();
-      case 'calDisconnect':     return calDisconnect_();
+      case 'calDisconnect':     out = calDisconnect_(); break;
       case 'calSyncAll':        return calSyncAll_();
       case 'ttCalStatus':       return ttCalStatus_();
-      case 'addTtCat':          return addTtCat_(req);
-      case 'updateTtCat':       return updateTtCat_(req);
-      case 'deleteTtCat':       return deleteTtCat_(req);
+      case 'addTtCat':          out = addTtCat_(req); break;
+      case 'updateTtCat':       out = updateTtCat_(req); break;
+      case 'deleteTtCat':       out = deleteTtCat_(req); break;
       case 'listUsers':         return listUsers_();
-      case 'saveUser':          return saveUser_(req);
-      case 'deleteUser':        return deleteUser_(req);
-      case 'kickUser':          return kickUser_(req);
+      case 'saveUser':          out = saveUser_(req); break;
+      case 'deleteUser':        out = deleteUser_(req); break;
+      case 'kickUser':          out = kickUser_(req); break;
       case 'listGroups':        return listGroups_();
-      case 'saveGroup':         return saveGroup_(req);
-      case 'deleteGroup':       return deleteGroup_(req);
+      case 'saveGroup':         out = saveGroup_(req); break;
+      case 'deleteGroup':       out = deleteGroup_(req); break;
       case 'chatUsers':         return chatUsers_();
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
       case 'chatSend':          return chatSend_(req);
       case 'loginLog':          return { ok: true, logs: readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || '')) };
+      case 'activityLog':       return { ok: true, logs: readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid) };
       default: fail_('Unknown action: ' + a);
     }
+    if (out && out.ok !== false) logActivity_(a, CTX, req);     // only log actions that actually succeeded
+    return out;
   } finally {
     if (lock) lock.releaseLock();
   }
@@ -482,6 +488,59 @@ function readLog_(limit, uid) {
     out.push({ time: tsStr_(r[0]), uid: String(r[1]), username: String(r[2]), name: String(r[3]), result: String(r[4]), reason: String(r[5]),
       lat: nn(r[6]), lng: nn(r[7]), acc: nn(r[8]), src: String(r[9]), device: String(r[11]), browser: String(r[12]), os: String(r[13]),
       screen: String(r[14]), tz: String(r[15]), ip: String(r[16]), city: String(r[17]), deviceId: String(r[18]) });
+  }
+  return out;
+}
+
+// ---------- ACTIVITY LOG (what each user did: every save / add / delete, not just sign-ins) ----------
+// Human-readable label + a short detail builder for each action the app can log.
+var ACTIVITY_LABEL_ = {
+  setAttendance: 'Updated attendance', saveSettings: 'Changed settings', saveStatuses: 'Changed status codes',
+  addStatus: 'Added a status code', deleteStatus: 'Deleted a status code',
+  addEmployee: 'Added an employee', updateEmployee: 'Updated an employee', deleteEmployee: 'Deleted an employee',
+  changeCredentials: 'Changed login password', addExpense: 'Added an expense', updateExpense: 'Updated an expense', deleteExpense: 'Deleted an expense',
+  addCategory: 'Added a category', updateCategory: 'Updated a category', deleteCategory: 'Deleted a category',
+  addWork: 'Added a work entry', updateWork: 'Updated a work entry', deleteWork: 'Deleted a work entry',
+  addPw: 'Added a saved password', updatePw: 'Updated a saved password', deletePw: 'Deleted a saved password',
+  addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link',
+  setTimetable: 'Edited Time Table', addTtCat: 'Added a Time Table category', updateTtCat: 'Renamed a Time Table category', deleteTtCat: 'Deleted a Time Table category',
+  saveUser: 'Added/edited a user', deleteUser: 'Deleted a user', kickUser: 'Signed a user out everywhere',
+  saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group',
+  calConnect: 'Connected Google Calendar', calDisconnect: 'Disconnected Google Calendar'
+};
+function activityDetail_(a, req) {
+  try {
+    if (a === 'setAttendance') return (req.entries || []).length + ' day(s)';
+    if (a === 'setTimetable') return req.date ? req.date : '';
+    if (a === 'addExpense' || a === 'updateExpense') return [req.category, req.amount].filter(has_).join(' · ');
+    if (a === 'addWork' || a === 'updateWork') return req.productName || req.product || '';
+    if (a === 'addEmployee' || a === 'updateEmployee') return req.name || '';
+    if (a === 'saveUser') return req.username || req.name || '';
+    if (a === 'deleteUser' || a === 'deleteEmployee' || a === 'kickUser') return String(req.id || req.uid || '');
+    if (a === 'addPw' || a === 'updatePw') return req.site || req.url || '';
+    if (a === 'addLink' || a === 'updateLink') return req.name || '';
+    if (a === 'saveGroup') return req.name || '';
+  } catch (e) {}
+  return '';
+}
+// Call this AFTER a write action succeeds. ctx is the CTX object (who's doing it); req is the raw request.
+function logActivity_(a, ctx, req) {
+  try {
+    var label = ACTIVITY_LABEL_[a]; if (!label) return;        // only actions we recognise get logged
+    var sh = getSheet_('ACT');
+    sh.appendRow([nowStr_(), ctx.uid, ctx.username || '', ctx.name || '', label, activityDetail_(a, req || {})]);
+    if (sh.getLastRow() > 8000) sh.deleteRows(2, 2000);          // keep the log from growing forever
+  } catch (e) {}
+}
+function readActivity_(limit, uid) {
+  var sh = getSheet_('ACT'), last = sh.getLastRow(), out = [];
+  if (last < 2) return out;
+  var n = Math.min(last - 1, 3000);
+  var vals = sh.getRange(last - n + 1, 1, n, 6).getValues();
+  for (var i = vals.length - 1; i >= 0 && out.length < limit; i--) {
+    var r = vals[i];
+    if (uid && String(r[1]) !== uid) continue;
+    out.push({ time: tsStr_(r[0]), uid: String(r[1]), username: String(r[2]), name: String(r[3]), action: String(r[4]), detail: String(r[5]) });
   }
   return out;
 }
@@ -848,6 +907,10 @@ function createSheet_(k) {
     sh.getRange(1, 1, 1, 19).setValues([['Time', 'User ID', 'Username', 'Name', 'Result', 'Reason', 'Latitude', 'Longitude', 'Accuracy (m)',
       'Location source', 'Map link', 'Device', 'Browser', 'OS', 'Screen', 'Timezone', 'IP address', 'Place (from IP)', 'Device ID']]);
     sh.getRange('A:S').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'ACT') {
+    sh.getRange(1, 1, 1, 6).setValues([['Time', 'User ID', 'Username', 'Name', 'Action', 'Details']]);
+    sh.getRange('A:F').setNumberFormat('@');
     sh.setFrozenRows(1);
   }
   sh.getRange(1, 1, 1, sh.getLastColumn()).setFontWeight('bold');
