@@ -13,7 +13,7 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, pw:{ q:'' }, link:{ q:'', type:'all' } };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -89,6 +89,7 @@ function saveToken(t, remember){
 }
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
+  clearInterval(syncT); syncT = null; setMenu(false);
   clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
@@ -180,13 +181,35 @@ async function loadAll(){
   let r;
   try { r = await api('getAll'); }
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
-  S.d = r.data; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || [];
+  S.sig = sigOf(r.data); ingest(r.data);
+  if (isAdmin()){ await loadUsers(); await loadGroups(); } else { S.users = null; S.groups = null; }
+  applyAccess(); startSync();
+}
+function ingest(d){
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || [];
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
   pickEmp(S.emp || store.get(EK));
-  if (isAdmin()) await loadUsers(); else S.users = null;
-  applyAccess();
 }
+const sigOf = d => JSON.stringify({ ...d, me: null });
+
+/* ---------- live sync for group members: pick up what the other members changed ---------- */
+let syncT = null;
+const typing = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && $('#view').contains(a)); };
+function startSync(){
+  clearInterval(syncT); syncT = null;
+  if (S.me && S.me.group) syncT = setInterval(syncTick, 10000);
+}
+async function syncTick(){
+  if (!S.d || !S.token || document.hidden || busyN > 0 || document.querySelector('.overlay') || typing()) return;
+  let r;
+  try { r = await callServer({ action:'getAll', token:S.token, asUser:S.as || undefined }); } catch { return; }
+  if (!r || !r.ok || !S.d || document.querySelector('.overlay') || typing()) return;     // never disturb someone who is typing
+  const sg = sigOf(r.data);
+  if (sg === S.sig) return;
+  S.sig = sg; ingest(r.data); refreshUser(); applyAccess(); render();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && syncT) syncTick(); });
 const emp = () => (S.d.employees || []).find(e => e.id === S.emp) || { id:'', name:'', designation:'', salary:0, basis:0 };
 function pickEmp(id){
   const list = S.d.employees || [];
@@ -263,6 +286,10 @@ function banner(){
   let h = '';
   if (S.as && S.me && S.me.viewing)
     h += `<div class="viewas">👁 You are viewing <b>${esc(S.me.viewName)}</b>’s data — what you change is saved in their account. <button class="linkbtn" onclick="setAs('')">← Back to my data</button></div>`;
+  if (S.me && S.me.group && !S.me.viewing){
+    const g = S.me.group, others = (g.members || []).filter(n => n !== S.me.name);
+    h += `<div class="viewas grp-note">👥 Group <b>${esc(g.name)}</b>${others.length ? ' — data is shared live with <b>' + others.map(esc).join(', ') + '</b>' : ''}. Anything changed here shows for them too.</div>`;
+  }
   const sec = SECT[S.view];
   if (sec && perms()[sec] === 'view') h += `<div class="viewas ro">🔒 View-only access: you can see ${SECT_NAME[S.view]}, but cannot change it.</div>`;
   return h;
@@ -280,6 +307,7 @@ async function setAs(id){
   catch(e){ S.as = null; handleErr(e); try { await loadAll(); render(); } catch {} }
 }
 $('#asSel').onchange = e => setAs(e.target.value);
+async function loadGroups(){ try { S.groups = (await api('listGroups')).groups; } catch(e){ S.groups = S.groups || []; } }
 async function loadUsers(){ try { S.users = (await api('listUsers')).users; } catch(e){ S.users = S.users || []; } }
 async function loadLogs(){
   if (!isAdmin()) return;
@@ -441,6 +469,49 @@ async function kickUser(id){
   try { await api('kickUser', { id }); toast('Signed out'); } catch(e){ handleErr(e); }
 }
 
+/* ---------- groups (admin): members of a group see the same data ---------- */
+function groupsCard(){
+  const rows = (S.groups || []).map(g => `<div class="emp-item"><div class="avatar">👥</div>
+    <div class="info"><b>${esc(g.name)}<span class="tag adm">${g.members.length} members</span></b><span>${esc((g.memberNames || []).join(' · ') || '—')}</span></div>
+    <div class="acts"><button class="btn ghost sm" onclick="groupForm('${esc(g.id)}')">✎ Edit</button><button class="btn ghost sm" onclick="delGroup('${esc(g.id)}')" title="Delete group">🗑</button></div></div>`).join('');
+  return `<div class="card"><h3>👥 Groups <button class="btn sm" onclick="groupForm()">＋ Add group</button></h3>
+    <p class="muted" style="margin-bottom:12px">Users in the same group see exactly the same data (attendance, expenses, work, passwords, links). When one member changes something, it appears for the others within a few seconds. A group’s data is separate from everyone else’s.</p>
+    <div class="emp-list">${rows || '<div class="empty-state">No groups yet</div>'}</div></div>`;
+}
+function groupForm(id){
+  const x = id ? (S.groups || []).find(g => g.id === id) : null;
+  const users = (S.users || []).filter(u => !u.primary);
+  const inOther = uid => (S.groups || []).find(g => (!x || g.id !== x.id) && g.members.includes(uid));
+  const boxes = users.map(u => { const o = inOther(u.id);
+    return `<label class="tog"><input type="checkbox" name="m" value="${esc(u.id)}" ${x && x.members.includes(u.id) ? 'checked' : ''} ${o ? 'disabled' : ''}> ${esc(u.name || u.username)} <span class="muted">@${esc(u.username)}${o ? ' · already in “' + esc(o.name) + '”' : ''}</span></label>`; }).join('');
+  const adopt = x ? '' : `<div class="field"><label>Start with existing data of <span class="muted">(optional)</span></label>
+    <select class="select" name="adoptFrom"><option value="">Nobody — start with empty group data</option>${users.filter(u => !inOther(u.id)).map(u => `<option value="${esc(u.id)}">${esc(u.name || u.username)}</option>`).join('')}</select>
+    <p class="muted" style="margin-top:6px;font-size:12.5px">That person’s current data becomes the group’s data. The other members’ old data stays in the sheet but is hidden while they are in the group.</p></div>`;
+  const w = openModal(`<h3>${x ? 'Edit group' : 'Add group'}</h3><p class="sub">Pick the users who should always see the same data.</p>
+    <form id="gf" autocomplete="off">
+      <div class="field"><label>Group name</label><input class="input" name="name" maxlength="40" value="${esc(x ? x.name : '')}" required></div>
+      <div class="field"><label>Members <span class="muted">(at least 2)</span></label>${boxes || '<div class="muted">Add users first (Settings → Users & access).</div>'}</div>
+      ${adopt}
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save group' : 'Create group'}</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#gf').onsubmit = async ev => {
+    ev.preventDefault(); const f = new FormData(ev.target), btn = ev.submitter;
+    const members = f.getAll('m'), adoptFrom = f.get('adoptFrom') || '';
+    if (members.length < 2) return toast('Select at least 2 users', true);
+    if (adoptFrom && !members.includes(adoptFrom)) return toast('“Existing data of” must be one of the selected members', true);
+    btn.disabled = true;
+    try {
+      const r = await api('saveGroup', { id: x ? x.id : '', name: f.get('name'), members, adoptFrom });
+      S.groups = r.groups; w.remove(); await loadAll(); render(); toast(x ? 'Group updated' : 'Group created');
+    } catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function delGroup(id){
+  const g = (S.groups || []).find(x => x.id === id); if (!g) return;
+  if (!await confirmBox('Delete group “' + g.name + '”?', 'Members go back to their own separate data. The group’s shared data stays in your sheet, but nobody will see it.', 'Delete', true)) return;
+  try { const r = await api('deleteGroup', { id }); S.groups = r.groups; await loadAll(); render(); toast('Group deleted'); } catch(e){ handleErr(e); }
+}
+
 /* ---------- login activity (admin) ---------- */
 function fmtLogTime(t){
   const m = String(t).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/); if (!m) return String(t || '');
@@ -509,7 +580,25 @@ const TITLES = {
   logins:['Login activity','Who signed in, when, from where and from which device'],
   settings:['Settings','Profile, security and preferences']
 };
+function setMenu(on){ document.body.classList.toggle('menu-open', !!on); const t = $('#menuToggle'); if (t) t.setAttribute('aria-expanded', on ? 'true' : 'false'); }
+$('#menuToggle').onclick = () => setMenu(true);
+$('#scrim').onclick = () => setMenu(false);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(false); });
+(function swipeMenu(){                       // swipe right from the left edge opens, swipe left closes
+  let x0 = null, y0 = 0;
+  document.addEventListener('touchstart', e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; }, { passive:true });
+  document.addEventListener('touchend', e => {
+    if (x0 === null) return;
+    const t = e.changedTouches[0], dx = t.clientX - x0, dy = Math.abs(t.clientY - y0), open = document.body.classList.contains('menu-open');
+    if (window.innerWidth <= 860 && dy < 50){
+      if (!open && x0 < 24 && dx > 60 && !$('#app').classList.contains('hidden')) setMenu(true);
+      else if (open && dx < -60) setMenu(false);
+    }
+    x0 = null;
+  }, { passive:true });
+})();
 function go(v){
+  setMenu(false);
   S.view = v; applyAccess(); v = S.view;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.v === v));
   $('#pageTitle').textContent = TITLES[v][0];
@@ -1311,7 +1400,7 @@ function vSettings(){
   if (!isAdmin()){ drop('General'); drop('Attendance status codes'); }
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
-  if (isAdmin()) grid.insertAdjacentHTML('afterbegin', usersCard());
+  if (isAdmin()) grid.insertAdjacentHTML('afterbegin', usersCard() + groupsCard());
   return dom.innerHTML;
 }
 function applySettings(r){

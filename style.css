@@ -240,15 +240,31 @@ td[data-l]::before{content:none}
 .exitem .t{font-weight:700}
 .exitem .s{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
 
+/* ---------- LEFT MENU TOGGLE (phones / tablets) ---------- */
+.menu-toggle{display:none;position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:130;width:18px;height:68px;
+  align-items:center;justify-content:center;border:0;border-radius:0 12px 12px 0;padding:0 0 3px;
+  background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;font-size:20px;font-weight:700;line-height:1;
+  box-shadow:2px 0 10px rgba(79,70,229,.35);cursor:pointer}
+.menu-toggle::before{content:"";position:absolute;left:0;top:-14px;bottom:-14px;width:34px}   /* bigger invisible tap area */
+.scrim{display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:140;animation:fade .15s}
+.grp-note{background:#ecfdf5;color:#065f46;font-size:12.5px;padding:8px 12px}
+
 /* ---------- RESPONSIVE ---------- */
 @media (max-width:980px){.two,.two-eq{grid-template-columns:1fr}}
 @media (max-width:860px){
   #app{display:block}
-  aside{position:fixed;bottom:0;top:auto;left:0;right:0;height:auto;flex-direction:row;padding:6px 8px calc(6px + env(safe-area-inset-bottom));z-index:100;border-top:1px solid #1e293b}
-  .brand,.side-user,.spacer{display:none}
-  .nav{flex-direction:row;width:100%;justify-content:space-around}
-  .nav button{flex-direction:column;gap:2px;font-size:11px;padding:7px 10px;flex:1;align-items:center}
-  main{padding:18px 14px 100px}
+  /* menu = a drawer on the LEFT side, top to bottom, opened by the edge toggle */
+  aside{position:fixed;top:0;bottom:0;left:0;right:auto;width:min(78vw,290px);height:100%;flex-direction:column;
+    padding:calc(18px + env(safe-area-inset-top)) 12px calc(14px + env(safe-area-inset-bottom));z-index:150;overflow-y:auto;
+    transform:translateX(-105%);transition:transform .22s ease,box-shadow .22s ease,visibility 0s linear .22s;visibility:hidden}
+  body.menu-open aside{transform:none;visibility:visible;transition:transform .22s ease,box-shadow .22s ease,visibility 0s;box-shadow:14px 0 40px rgba(0,0,0,.4)}
+  .nav{flex-direction:column}
+  .nav button{font-size:15px;padding:13px 14px}
+  .menu-toggle{display:flex}
+  body.menu-open .menu-toggle{display:none}
+  body.menu-open .scrim{display:block}
+  body.menu-open{overflow:hidden}
+  main{padding:18px 14px 40px 26px}
   .day{min-height:58px;padding:5px}
   .cal{gap:4px}
   .cat-row{grid-template-columns:1fr 100px}
@@ -261,16 +277,13 @@ td[data-l]::before{content:none}
   input,select,textarea,.input,.select,.wk .in{font-size:16px}      /* 16px stops iPhone from zooming into fields */
   #login{padding:14px;align-items:flex-start;padding-top:8vh}
   .login-card{padding:24px 18px;border-radius:18px}
-  main{padding:10px 10px 84px}
+  main{padding:10px 10px 40px 22px}
   .topbar{margin-bottom:10px;gap:8px;flex-wrap:nowrap}
   .topbar h2{font-size:17px}
   .topbar .sub{display:none}
   .topbar .actions{flex-wrap:wrap;justify-content:flex-end;gap:6px}
   #logoutBtn2{display:none}
   #logoutBtn3{display:inline-flex!important}
-  .nav button{padding:6px 2px!important;min-width:0;font-size:10.5px!important}
-  .nav .ico{font-size:16px}
-  aside{padding:4px 4px calc(4px + env(safe-area-inset-bottom))!important}
   .btn{padding:8px 12px}
   .btn.sm{padding:6px 9px;font-size:12.5px}
   .card{padding:12px;border-radius:14px}
@@ -327,7 +340,7 @@ td[data-l]::before{content:none}
   .emp-item{flex-wrap:wrap}
   .emp-item .acts{width:100%}
   .emp-item .acts .btn{flex:1}
-  #toasts{bottom:76px;width:92%}
+  #toasts{bottom:22px;width:92%}
   .exitem{padding:10px 12px}
   .wfilter{gap:12px}
   .mcd{height:32px}

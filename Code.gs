@@ -16,6 +16,7 @@
  *   Att-xxxx            -> one attendance register per extra employee (same layout as Attendance Register)
  *   Users               -> ID | Username | Password | Role | Name | E-mail | Active | Permissions | Location required | Created | Last login
  *   Login Log           -> every login attempt: time, user, result, latitude / longitude, device, browser, OS, IP
+ *   Groups              -> ID | Group name | Member user IDs (comma separated) | Created   (members of one group share ONE set of data)
  *
  * LOGINS: the Username / Password in the Settings sheet is the MAIN ADMIN (id ADMIN). Extra users are added from the website:
  *   Settings > Users & access. Expenses / Work / Categories / Employees / Attendance each carry an Owner column, so every user sees only their own data.
@@ -39,9 +40,10 @@ const SHEET_KEYS = {
   USERS: ['users'],
   LOG: ['login log'],
   PW: ['password manager'],
-  LINK: ['links', 'link manager']
+  LINK: ['links', 'link manager'],
+  GROUPS: ['groups']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -78,7 +80,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'LOG'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'LOG'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -148,7 +150,7 @@ var WRITE_ACTIONS = {
   addPw: 1, updatePw: 1, deletePw: 1,
   addLink: 1, updateLink: 1, deleteLink: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
-  saveUser: 1, deleteUser: 1, kickUser: 1
+  saveUser: 1, deleteUser: 1, kickUser: 1, saveGroup: 1, deleteGroup: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -162,12 +164,12 @@ var NEED = {
   changeCredentials: 'creds'
 };
 // Only admins may do these
-var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, loginLog: 1 };
+var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1 };
 
 // Who is making the current request (filled by buildCtx_ on every call; Apps Script runs each call fresh)
 //   uid   = the logged-in account         owner = whose DATA is being read / written
 //   (owner differs from uid only when an admin uses "View as user")
-var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '' };
+var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '', group: null };
 
 function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', emp: true, creds: true }; }
 function normPerms_(p, role) {
@@ -189,14 +191,18 @@ function buildCtx_(uid, asUser) {
   var acc = getAccount_(uid);
   if (!acc || !acc.active) fail_('Session expired. Please log in again.', 'AUTH');
   if (payExpired_(acc.payDue)) fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
-  CTX = { uid: acc.id, owner: acc.id, role: acc.role, primary: acc.id === 'ADMIN', perms: acc.perms,
-          name: acc.name, username: acc.username, viewing: false, viewName: '', payDue: acc.payDue || '' };
+  // Members of a group all read / write the group's rows (owner = group id), so they always see the same data.
+  var g = groupOf_(acc.id);
+  CTX = { uid: acc.id, owner: g ? g.id : acc.id, role: acc.role, primary: acc.id === 'ADMIN', perms: acc.perms,
+          name: acc.name, username: acc.username, viewing: false, viewName: '', payDue: acc.payDue || '', group: g };
   asUser = String(asUser || '').trim();
   if (asUser && asUser !== acc.id) {
     if (acc.role !== 'admin') fail_('Not allowed.', 'PERM');
     var t = getAccount_(asUser);
     if (!t) fail_('That user was not found.');
-    CTX.owner = t.id; CTX.perms = fullPerms_(); CTX.viewing = true; CTX.viewName = t.name || t.username || 'User';
+    var tg = groupOf_(t.id);
+    CTX.owner = tg ? tg.id : t.id; CTX.group = tg; CTX.perms = fullPerms_(); CTX.viewing = true;
+    CTX.viewName = (t.name || t.username || 'User') + (tg ? ' (group “' + tg.name + '”)' : '');
   }
 }
 
@@ -259,6 +265,9 @@ function route_(req) {
       case 'saveUser':          return saveUser_(req);
       case 'deleteUser':        return deleteUser_(req);
       case 'kickUser':          return kickUser_(req);
+      case 'listGroups':        return listGroups_();
+      case 'saveGroup':         return saveGroup_(req);
+      case 'deleteGroup':       return deleteGroup_(req);
       case 'loginLog':          return { ok: true, logs: readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || '')) };
       default: fail_('Unknown action: ' + a);
     }
@@ -376,7 +385,7 @@ function meOf_(values) {
     username: main ? String(values.username || '') : CTX.username,
     name: main ? String(values.name || values.username || '') : (CTX.name || CTX.username),
     perms: CTX.viewing ? fullPerms_() : CTX.perms,
-    viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName,
+    viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName, group: CTX.group ? groupInfo_(CTX.group) : null,
     payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), serverNow: Date.now() };
 }
 
@@ -635,6 +644,9 @@ function deleteUser_(req) {
   if (!u) fail_('User not found. Please refresh.');
   if (u.role === 'admin' && !CTX.primary) fail_('Only the main admin can delete another admin.', 'PERM');
   getSheet_('USERS').deleteRow(u.row);          // their data rows stay in the sheets (tagged with the old id)
+  readGroups_().forEach(function (g) {          // take the deleted user out of any group
+    if (g.members.indexOf(id) >= 0) getSheet_('GROUPS').getRange(g.row, 3).setValue(g.members.filter(function (m) { return m !== id; }).join(','));
+  });
   return listUsers_();
 }
 function kickUser_(req) {
@@ -645,6 +657,94 @@ function kickUser_(req) {
   if (u.role === 'admin' && !CTX.primary) fail_('Only the main admin can sign out another admin.', 'PERM');
   bumpVersion_(id);
   return { ok: true };
+}
+
+// ---------- GROUPS (admins) ----------
+// A group = 2 or more users who share ONE set of data (attendance, expenses, work, passwords, links, categories, employees).
+// Their rows are tagged with the GROUP id instead of the user id, so whatever one member changes the others see too.
+function readGroups_() {
+  var sh = getSheet_('GROUPS'), last = sh.getLastRow(), out = [];
+  if (last < 2) return out;
+  sh.getRange(2, 1, last - 1, 4).getValues().forEach(function (r, i) {
+    var id = String(r[0]).trim();
+    if (!id) return;
+    out.push({ id: id, name: String(r[1] || ''), created: tsStr_(r[3]), row: i + 2,
+      members: String(r[2] || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean) });
+  });
+  return out;
+}
+function groupOf_(uid) {
+  if (!uid || uid === 'ADMIN') return null;
+  return readGroups_().filter(function (g) { return g.members.indexOf(uid) >= 0; })[0] || null;
+}
+function memberNames_(g, users) {
+  return g.members.map(function (id) {
+    var u = users.filter(function (x) { return x.id === id; })[0];
+    return u ? (u.name || u.username) : '';
+  }).filter(Boolean);
+}
+function groupInfo_(g) { return { id: g.id, name: g.name, members: memberNames_(g, readUsers_()) }; }
+function listGroups_() {
+  var users = readUsers_();
+  return { ok: true, groups: readGroups_().map(function (g) {
+    return { id: g.id, name: g.name, members: g.members, memberNames: memberNames_(g, users), created: g.created };
+  }) };
+}
+// moves every row owned by `fromId` to the group, so the group starts with that person's existing data
+function adoptData_(fromId, toOwner) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['CAT', 3]].forEach(function (p) {
+    var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
+    if (last < 2) return;
+    var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
+    var vals = rng.getValues().map(function (r) {
+      if (String(r[0]).trim() === fromId) { changed = true; return [toOwner]; }
+      return r;
+    });
+    if (changed) rng.setValues(vals);
+  });
+}
+function saveGroup_(req) {
+  var groups = readGroups_(), users = readUsers_();
+  var id = String(req.id || '').trim(), cur = null;
+  if (id) {
+    cur = groups.filter(function (g) { return g.id === id; })[0];
+    if (!cur) fail_('Group not found. Please refresh.');
+  }
+  var name = String(req.name || '').trim().slice(0, 40);
+  if (!name) fail_('Group name is required.');
+  if (groups.some(function (g) { return (!cur || g.id !== cur.id) && g.name.toLowerCase() === name.toLowerCase(); })) fail_('A group with that name already exists.');
+  var ids = [];
+  (Array.isArray(req.members) ? req.members : []).forEach(function (m) { m = String(m).trim(); if (m && ids.indexOf(m) < 0) ids.push(m); });
+  if (ids.length < 2) fail_('Select at least 2 users for a group.');
+  ids.forEach(function (m) {
+    var u = users.filter(function (x) { return x.id === m; })[0];
+    if (!u) fail_('One of the selected users was not found. Please refresh.');
+    groups.forEach(function (g) {
+      if ((!cur || g.id !== cur.id) && g.members.indexOf(m) >= 0) fail_((u.name || u.username) + ' is already in the group “' + g.name + '”.');
+    });
+  });
+  var sh = getSheet_('GROUPS');
+  if (cur) {
+    var rng = sh.getRange(cur.row, 2, 1, 2);
+    rng.setNumberFormat('@');
+    rng.setValues([[name, ids.join(',')]]);
+  } else {
+    var adopt = String(req.adoptFrom || '').trim();
+    if (adopt && ids.indexOf(adopt) < 0) fail_('Choose the data owner from the selected members.');
+    var gid = 'GR' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
+    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 4);
+    r2.setNumberFormat('@');
+    r2.setValues([[gid, name, ids.join(','), nowStr_()]]);
+    if (adopt) adoptData_(adopt, gid);
+  }
+  return listGroups_();
+}
+function deleteGroup_(req) {
+  var id = String(req.id || '').trim();
+  var g = readGroups_().filter(function (x) { return x.id === id; })[0];
+  if (!g) fail_('Group not found. Please refresh.');
+  getSheet_('GROUPS').deleteRow(g.row);          // the group's data rows stay in the sheets (tagged with the group id)
+  return listGroups_();
 }
 
 // ---------- SHEETS ----------
@@ -711,6 +811,10 @@ function createSheet_(k) {
     sh.getRange(1, 1, 1, 12).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
       'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until']]);
     sh.getRange('A:L').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'GROUPS') {
+    sh.getRange(1, 1, 1, 4).setValues([['ID', 'Group name', 'Member user IDs (comma separated)', 'Created']]);
+    sh.getRange('A:D').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LOG') {
     sh.getRange(1, 1, 1, 19).setValues([['Time', 'User ID', 'Username', 'Name', 'Result', 'Reason', 'Latitude', 'Longitude', 'Accuracy (m)',
@@ -837,7 +941,7 @@ function seedEmployee_(sh) {
     return;
   }
   // a new user gets one employee (themselves) with its own attendance register
-  var u = getAccount_(CTX.owner) || { name: '', username: '' };
+  var u = getAccount_(CTX.owner) || (CTX.group ? { name: CTX.group.name, username: '' } : { name: '', username: '' });
   var id = 'E' + Utilities.getUuid().replace(/-/g, '').slice(0, 5), nm = 'Att-' + id;
   fillAttSheet_(SpreadsheetApp.getActiveSpreadsheet().insertSheet(nm));
   sh.appendRow([id, u.name || u.username, '', 0, 0, nm, CTX.owner]);
