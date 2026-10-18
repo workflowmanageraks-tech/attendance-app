@@ -1370,6 +1370,8 @@ function vTimetable(){
       <button class="btn ghost sm" onclick="ttNav(1)">›</button>
       <button class="btn soft sm" onclick="ttSetDate('')">Today</button>
       <span style="flex:1"></span>
+      <button class="btn soft sm" onclick="ttAddCal(1)">📅 Add day to Calendar</button>
+      <button class="btn soft sm" onclick="ttAddCal(7)">📅 Next 7 days</button>
       <button class="btn soft sm" onclick="ttCopyPrev()">⧉ Copy previous day</button>
       <button class="btn soft sm" onclick="ttClear()">🗑 Clear day</button>
       <button class="btn sm" onclick="ttCats()">⚙ Categories</button>
@@ -1382,6 +1384,42 @@ function vTimetable(){
     <div class="tbl-wrap"><table class="tt"><thead><tr><th>Time</th><th>Category</th></tr></thead><tbody>${rows}</tbody></table></div>
     <p class="muted" style="margin-top:12px;font-size:13px">Pick a category for each slot — it saves instantly to the “Timetable” tab of your Google Sheet. Need a new one? Choose <b>＋ Add new category…</b> in the dropdown.</p>
   </div>`;
+}
+
+/* ---------- Time Table -> phone Calendar (.ics file, no Google setup needed) ---------- */
+function ttBlocks(date){
+  const day = S.d.timetable[date] || {}, out = []; let cur = null;
+  TT_SLOTS.forEach((k, i) => {
+    const c = day[k], s = 300 + i * 30;
+    if (c && cur && cur.cat === c && cur.e === s) cur.e = s + 30;
+    else if (c){ cur = { cat:c, s, e:s + 30 }; out.push(cur); }
+    else cur = null;
+  });
+  return out;
+}
+const icsDT = d => d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + pad2(d.getMinutes()) + '00';
+const icsEsc = t => String(t).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+function ttAddCal(days){
+  const start = new Date(ttDate() + 'T00:00:00'), ev = [];
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  for (let n = 0; n < days; n++){
+    const d = new Date(start); d.setDate(d.getDate() + n);
+    const iso = isoOf(d), y = d.getFullYear(), m = d.getMonth(), dd = d.getDate();
+    ttBlocks(iso).forEach(b => {
+      const a = new Date(y, m, dd, 0, b.s), z = new Date(y, m, dd, 0, b.e);
+      ev.push(['BEGIN:VEVENT', 'UID:tt-' + iso + '-' + b.s + '@timetable', 'DTSTAMP:' + stamp,
+        'DTSTART:' + icsDT(a), 'DTEND:' + icsDT(z), 'SUMMARY:' + icsEsc(b.cat),
+        'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + icsEsc(b.cat), 'TRIGGER:-PT10M', 'END:VALARM', 'END:VEVENT'].join('\r\n'));
+    });
+  }
+  if (!ev.length) return toast(days === 1 ? 'No entries on this day' : 'No entries in these 7 days');
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Time Table//EN', 'CALSCALE:GREGORIAN'].concat(ev, ['END:VCALENDAR']).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([ics], { type:'text/calendar;charset=utf-8' }));
+  a.download = 'timetable-' + ttDate() + (days > 1 ? '-7days' : '') + '.ics';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast(ev.length + ' events — open the downloaded file to add them to Calendar');
 }
 function ttSetDate(v){ S.tt.date = v || ''; render(); }
 function ttNav(n){ const d = new Date(ttDate() + 'T00:00:00'); d.setDate(d.getDate() + n); S.tt.date = isoOf(d); render(); }
@@ -1547,7 +1585,6 @@ function vSettings(){
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
   if (isAdmin()) grid.insertAdjacentHTML('afterbegin', usersCard() + groupsCard());
-  if (can('tt')) grid.insertAdjacentHTML('beforeend', calCard());
   return dom.innerHTML;
 }
 function applySettings(r){
@@ -1616,7 +1653,6 @@ function bindSettings(){
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
     try { const r = await api('addStatus', f); S.d.statuses = r.statuses; toast('Status code added'); render(); } catch(e){ handleErr(e); } finally { btn.disabled = false; }
   };
-  loadCal();
 }
 
 /* ---------- Google Calendar sync (Time Table -> your own Google Calendar) ---------- */
