@@ -1983,7 +1983,7 @@ async function doExport(kind, fmt){
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
    ===================================================================== */
-const chatFresh = () => ({ users:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, sig:'', histLoaded:{} });
+const chatFresh = () => ({ users:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
 S.chat = chatFresh();
 let chatTimer = null;
 function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); document.body.classList.remove('chat-conv'); chatBadge(); }
@@ -2059,6 +2059,9 @@ function chatRenderList(){
   const q = S.chat.q.trim().toLowerCase();
   const list = S.chat.users.filter(u => !q || (u.name + ' ' + u.username).toLowerCase().includes(q))
     .sort((a, b) => (b.lastTime - a.lastTime) || (b.online - a.online) || String(a.name).localeCompare(String(b.name)));
+  if (S.chat.err && !S.chat.loaded){
+    el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">Could not load users</b><div style="margin:6px 0 12px;word-break:break-word">${esc(S.chat.err)}</div><button class="btn sm" onclick="S.chat.err='';chatRenderList();chatLoadUsers()">↻ Try again</button></div>`; return;
+  }
   if (!S.chat.loaded){ el.innerHTML = '<div class="empty-state">Loading users…</div>'; return; }
   if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No other users yet'}</div>`; return; }
   el.innerHTML = list.map(u => {
@@ -2149,8 +2152,9 @@ async function chatLoadUsers(){
     S.chat.users.forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
     S.chat.loaded = true; chatSumUnread();
     if (incoming) toast('💬 New message');
+    S.chat.err = '';
     if (S.view === 'chat'){ chatRenderList(); chatHeader(); }
-  }catch(e){ chatErr(e); }
+  }catch(e){ chatErr(e); S.chat.err = (e && e.message) || 'Request failed'; if (S.view === 'chat') chatRenderList(); }
   finally{ S.chat.loadingUsers = false; }
 }
 async function chatPingNow(){

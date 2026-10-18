@@ -158,6 +158,12 @@ function install(wb, env, rt) {
       const r = s.getRange(2, 1, last - 1, 2).getValues().find(x => String(x[0]) === k);
       return r ? String(r[1]) : null;
     },
+    getProperties() {
+      const s = propsSheet(), last = s.getLastRow(), out = {};
+      if (last < 2) return out;
+      s.getRange(2, 1, last - 1, 2).getValues().forEach(r => { if (String(r[0]) !== '') out[String(r[0])] = String(r[1]); });
+      return out;
+    },
     setProperty(k, v) {
       const s = propsSheet(), last = s.getLastRow();
       const vals = last < 2 ? [] : s.getRange(2, 1, last - 1, 2).getValues();
@@ -171,6 +177,7 @@ function install(wb, env, rt) {
     CacheService: { getScriptCache: () => ({
       get(k) { const e = cache.get(k); if (!e) return null; if (e.t < Date.now()) { cache.delete(k); return null; } return e.v; },
       put(k, v, ttl) { cache.set(k, { v: String(v), t: Date.now() + (ttl || 600) * 1000 }); },
+      getAll(keys) { const out = {}; (keys || []).forEach(k => { const e = cache.get(k); if (e && e.t >= Date.now()) out[k] = e.v; }); return out; },
       remove(k) { cache.delete(k); }
     }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },   // requests already run one at a time
