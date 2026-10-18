@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.acts = null; S.view = 'dashboard'; closeModals(); chatReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -114,6 +114,7 @@ function showLogin(needsSetup, message, needsCode){
   $('#lp').autocomplete = needsSetup ? 'new-password' : 'current-password';
   const er = $('#loginErr'); er.classList.toggle('hidden', !message); er.textContent = message || '';
   $('#lp').value = ''; $('#lp2').value = '';
+  bioShowBtn();
 }
 $('#togglePw').onclick = () => {
   const p = $('#lp'); const show = p.type === 'password';
@@ -139,6 +140,92 @@ $('#loginForm').addEventListener('submit', async ev => {
   }catch(e){ showLoginErr(e.message); }
   finally{ btn.disabled = false; btn.textContent = S.setup ? 'Create login & continue' : 'Sign in'; }
 });
+/* ---------- fingerprint / face unlock (WebAuthn passkey on this device) ---------- */
+const BK = 'att_tracker_bio';
+const BIO = { ok:false };
+const b64e = buf => { let s = ''; new Uint8Array(buf).forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); };
+const b64d = str => { str = String(str).replace(/-/g,'+').replace(/_/g,'/'); while (str.length % 4) str += '='; const bin = atob(str), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; };
+function bioSaved(){ try { return JSON.parse(store.get(BK) || 'null'); } catch { return null; } }
+async function bioDetect(){
+  try { BIO.ok = !!(window.isSecureContext && window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); }
+  catch { BIO.ok = false; }
+}
+function bioShowBtn(){ const b = $('#bioBtn'); if (b) b.classList.toggle('hidden', !(BIO.ok && bioSaved() && !S.setup)); }
+function bioErr(e){
+  if (e && (e.name === 'NotAllowedError' || e.name === 'AbortError')) return 'Cancelled. You can try again or use your password.';
+  if (e && e.name === 'SecurityError') return 'Biometric unlock needs the secure (https) website address.';
+  return (e && e.message) || 'Biometric unlock failed. Use your password.';
+}
+async function bioLoginGo(silent){
+  const saved = bioSaved(); if (!saved || !BIO.ok) return;
+  const btn = $('#bioBtn'); btn.disabled = true;
+  try{
+    const c = await api('bioChallenge');
+    const a = await navigator.credentials.get({ publicKey:{ challenge:b64d(c.challenge), rpId:location.hostname, timeout:60000,
+      allowCredentials:[{ type:'public-key', id:b64d(saved.credId) }], userVerification:'required' } });
+    btn.textContent = 'Signing in…';
+    const client = await collectClient();
+    const r = await api('bioLogin', { chId:c.chId, credId:b64e(a.rawId), clientDataJSON:b64e(a.response.clientDataJSON),
+      authenticatorData:b64e(a.response.authenticatorData), signature:b64e(a.response.signature), client });
+    saveToken(r.token, $('#remember').checked);
+    await loadAll(); enterApp();
+  }catch(e){
+    const quiet = e && (e.name === 'NotAllowedError' || e.name === 'AbortError');
+    if (!(silent && quiet)) showLoginErr(bioErr(e));
+  }finally{ btn.disabled = false; btn.textContent = '👆 Unlock with fingerprint / face'; }
+}
+$('#bioBtn').onclick = () => bioLoginGo(false);
+
+function bioCard(){
+  return `<div class="card"><h3>👆 Fingerprint / Face unlock</h3>
+    <p class="muted" style="margin-bottom:12px">Sign in with this phone’s fingerprint, face or screen lock instead of typing your password. Your fingerprint or face never leaves the phone — only a secure key is saved on the server.</p>
+    <div id="bioList"><div class="empty-state">Loading…</div></div>
+    <div style="margin-top:12px"><button class="btn" id="bioAdd" type="button">Enable on this device</button></div></div>`;
+}
+function bioDraw(list){
+  const here = (bioSaved() || {}).credId, el = document.querySelector('#bioList'); if (!el) return;
+  const mine = list.find(x => here && here.slice(0,16) === x.id);
+  el.innerHTML = list.length ? list.map(x => `<div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line)">
+      <div style="min-width:0"><b>${esc(x.label)}</b>${mine && mine.id === x.id ? ' <span class="muted">(this device)</span>' : ''}<div class="muted" style="font-size:12px">Added ${esc((x.at||'').slice(0,10))}${x.last ? ' · last used ' + esc(x.last.slice(0,10)) : ''}</div></div>
+      <button class="btn ghost sm" type="button" data-bio-rm="${esc(x.id)}">Remove</button></div>`).join('')
+    : '<div class="muted">Not enabled on any device yet.</div>';
+  const add = document.querySelector('#bioAdd');
+  if (add){ add.classList.toggle('hidden', !BIO.ok || !!mine); }
+  if (!BIO.ok) el.insertAdjacentHTML('beforeend', '<div class="muted" style="margin-top:8px">This browser/device does not support fingerprint or face unlock (it needs https and a phone/PC with a screen lock set up).</div>');
+  el.querySelectorAll('[data-bio-rm]').forEach(b => b.onclick = async () => {
+    if (!await confirmBox('Remove this device?', 'You will need your password to sign in on it again.', 'Remove', true)) return;
+    try{
+      const r = await api('bioRemove', { id:b.dataset.bioRm });
+      if (here && here.slice(0,16) === b.dataset.bioRm) store.del(BK);
+      bioDraw(r.list); toast('Removed');
+    }catch(e){ handleErr(e); }
+  });
+}
+async function bindBio(){
+  const add = document.querySelector('#bioAdd'); if (!add) return;
+  try{ bioDraw((await api('bioList')).list); }catch(e){ const el = document.querySelector('#bioList'); if (el) el.textContent = ''; }
+  add.onclick = async () => {
+    if (!BIO.ok) return toast('This device does not support biometric unlock', true);
+    add.disabled = true;
+    try{
+      const c = await api('bioChallenge', { purpose:'register' });
+      const cred = await navigator.credentials.create({ publicKey:{
+        rp:{ name:'KS', id:location.hostname },
+        user:{ id:b64d(c.userId), name:(S.me && S.me.username) || 'user', displayName:(S.me && (S.me.name || S.me.username)) || 'user' },
+        challenge:b64d(c.challenge), timeout:60000, attestation:'none',
+        pubKeyCredParams:[{ type:'public-key', alg:-7 }, { type:'public-key', alg:-257 }],
+        authenticatorSelection:{ authenticatorAttachment:'platform', userVerification:'required', residentKey:'discouraged' } } });
+      const pk = cred.response.getPublicKey && cred.response.getPublicKey();
+      if (!pk) throw new Error('This browser is too old for biometric unlock. Please update it.');
+      const label = ((navigator.userAgent.match(/Android|iPhone|iPad|Windows|Mac OS X|Linux/) || ['Device'])[0]).replace('Mac OS X','Mac') + ' · ' + new Date().toISOString().slice(0,10);
+      const r = await api('bioRegister', { chId:c.chId, credId:b64e(cred.rawId), clientDataJSON:b64e(cred.response.clientDataJSON), publicKey:b64e(pk), label });
+      store.set(BK, JSON.stringify({ credId:b64e(cred.rawId), username:(S.me && S.me.username) || '' }), true);
+      bioDraw(r.list); toast('Fingerprint / face unlock enabled');
+    }catch(e){ if (e && e.code) handleErr(e); else toast(bioErr(e), true); }
+    finally{ add.disabled = false; }
+  };
+}
+
 /* ---------- forgot password (OTP by e-mail) ---------- */
 function rsErr(m){ const e = $('#rsErr'); e.textContent = m || ''; e.classList.toggle('hidden', !m); }
 function showReset(){
@@ -237,8 +324,7 @@ function enterApp(){
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
   refreshUser();
   go(S.view);
-  chatStart();
-  if (isAdmin()){ loadLogs(); loadActivity(); }
+  if (isAdmin()) loadLogs();
 }
 async function boot(){
   const t = store.get(TK);
@@ -249,7 +335,9 @@ async function boot(){
     S.token = t;
     try { await loadAll(); enterApp(); return; } catch { clearToken(); }
   }
+  await bioDetect();
   showLogin(st.needsSetup, '', st.needsSetupCode);
+  if (BIO.ok && bioSaved() && !st.needsSetup) bioLoginGo(true);
 }
 
 /* =====================================================================
@@ -322,7 +410,6 @@ async function loadActivity(){
   // uid here just lets an admin re-filter the same list client-side without asking the server again).
   try { S.acts = (await api('activityLog', { limit:300 })).logs; } catch(e){ S.acts = S.acts || []; }
   if (S.view === 'settings') drawActivityList();
-  else if (S.view === 'dashboard' && isAdmin() && !S.as) render();
 }
 
 /* ---------- device + location (sent with every sign-in) ---------- */
@@ -417,7 +504,7 @@ function usersCard(){
     const editable = !u.primary && (S.me.primary || u.role !== 'admin') && !(mine && !S.me.primary);
     const acts = (!mine ? `<button class="btn ghost sm" onclick="setAs('${esc(u.id)}')" title="See this user’s data">👁 View</button>` : '')
       + (editable ? `<button class="btn ghost sm" onclick="userForm('${esc(u.id)}')">✎ Edit</button><button class="btn ghost sm" onclick="kickUser('${esc(u.id)}')" title="Sign out everywhere">⎋</button><button class="btn ghost sm" onclick="delUser('${esc(u.id)}')" title="Delete user">🗑</button>` : '');
-    return `<div class="emp-item">${u.avatar ? ppAvatar(u, 'sm') : `<div class="avatar">${esc((u.name || u.username || '?').trim().charAt(0).toUpperCase())}</div>`}
+    return `<div class="emp-item"><div class="avatar">${esc((u.name || u.username || '?').trim().charAt(0).toUpperCase())}</div>
       <div class="info"><b>${esc(u.name || u.username)}${tag}${off}</b><span>@${esc(u.username)} · ${esc(last)}</span><span class="perm-sum">${esc(permSummary(u))}${u.needLoc ? ' · location required' : ''}</span></div>
       <div class="acts">${acts}</div></div>`;
   }).join('');
@@ -437,7 +524,6 @@ function userForm(id){
         <div class="field"><label>Username</label><input class="input" name="username" maxlength="40" autocomplete="off" autocapitalize="off" value="${esc(x ? x.username : '')}" required></div></div>
       <div class="row2"><div class="field"><label>${x ? 'New password' : 'Password'} <span class="muted">(min 6)</span></label><input class="input" name="password" type="text" autocomplete="off" autocapitalize="off" ${x ? '' : 'required'} minlength="6" placeholder="${x ? 'unchanged' : ''}"></div>
         <div class="field"><label>Recovery e-mail <span class="muted">(optional — for “Forgot password”)</span></label><input class="input" type="email" name="email" value="${esc(x ? x.email : '')}"></div></div>
-      <div class="field"><label>Icon</label><select class="select" name="avatar"><option value="">🧑 Default</option>${Object.entries(AVATARS).map(([k, v]) => `<option value="${k}" ${x && x.avatar === k ? 'selected' : ''}>${v[0]} ${v[1]}</option>`).join('')}</select></div>
       ${S.me.primary ? `<div class="field"><label>Role</label><select class="select" name="role" id="ufRole"><option value="user" ${isA?'':'selected'}>User — limited by the permissions below</option><option value="admin" ${isA?'selected':''}>Admin — full access, can manage users</option></select></div>` : '<input type="hidden" name="role" value="user">'}
       <fieldset id="ufPerms" style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px" ${isA ? 'disabled' : ''}>
         <legend class="sec-title" style="padding:0 6px;margin:0">What can this user do?</legend>
@@ -464,7 +550,7 @@ function userForm(id){
     ev.preventDefault(); const f = new FormData(ev.target), btn = ev.submitter; btn.disabled = true;
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
-        role:f.get('role') || 'user', avatar:f.get('avatar') || '', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
+        role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
         perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
       S.users = r.users; w.remove(); render(); toast(x ? 'User updated' : 'User added');
     } catch(e){ btn.disabled = false; handleErr(e); }
@@ -567,7 +653,7 @@ function activityCard(){
   const known = new Set(users.map(u => u.id)), extra = [...new Map((S.acts || []).filter(a => a.uid && !known.has(a.uid)).map(a => [a.uid, a.name || a.username])).entries()];
   const uopts = '<option value="all">All users</option>' + users.map(u => `<option value="${esc(u.id)}" ${S.af.u === u.id ? 'selected' : ''}>${esc(u.name || u.username)}</option>`).join('')
     + extra.map(([id, n]) => `<option value="${esc(id)}" ${S.af.u === id ? 'selected' : ''}>${esc(n)} (deleted)</option>`).join('');
-  return `<div class="card" id="actCard"><h3>📋 User Log <button class="btn ghost sm" onclick="loadActivity()">↻ Refresh</button></h3>
+  return `<div class="card"><h3>📋 Activity log <button class="btn ghost sm" onclick="loadActivity()">↻ Refresh</button></h3>
     <p class="muted" style="margin-bottom:12px">${isAdmin() ? 'Every save, add or delete each user made — attendance, expenses, work, time table and more.' : 'Every save, add or delete you made.'}</p>
     ${isAdmin() ? `<div class="form-grid"><div class="field"><label>User</label><select class="select" id="afU">${uopts}</select></div>
       <div class="field"><label>Search</label><input class="input" id="afQ" placeholder="action, detail…" value="${esc(S.af.q)}"></div></div>` : ''}
@@ -618,7 +704,6 @@ const TITLES = {
   expenses:['Expenses','Track income and spending'],
   work:['Work','Daily work record — whole year'],
   timetable:['Time Table','Plan your day in 30-minute slots'],
-  chat:['Chat','Message other users — see who is online'],
   passwords:['Password Manager','Save website logins and copy them in one tap'],
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
@@ -643,8 +728,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(fals
 })();
 function go(v){
   setMenu(false);
-  if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
-  if (v !== 'chat') document.body.classList.remove('chat-conv');
   S.view = v; applyAccess(); v = S.view;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.v === v));
   $('#pageTitle').textContent = TITLES[v][0];
@@ -654,7 +737,7 @@ function go(v){
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
-$('#refreshBtn').onclick = async () => { try { await loadAll(); render(); toast('Data refreshed'); if (isAdmin()){ loadLogs(); loadActivity(); } } catch(e){ handleErr(e); } };
+$('#refreshBtn').onclick = async () => { try { await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); } catch(e){ handleErr(e); } };
 /* ---------- payment / access countdown (Dashboard) ---------- */
 let payTimer = null;
 const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date.now()) : 0;   // server clock minus this device's clock
@@ -693,12 +776,12 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay();
-  const after = ({settings:bindSettings, logins:bindLogins, chat:bindChat})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -799,68 +882,8 @@ function vDashboard(){
     </div>
   </div>`;
   const P = perms(), body = (P.att === 'none' ? '' : attHtml) + dashExtra();
-  return dashHello() + adminTop() + (body || `<div class="card"><div class="empty-state">No sections are enabled for your account. Please contact the admin.</div></div>`);
+  return dashHello() + (body || `<div class="card"><div class="empty-state">No sections are enabled for your account. Please contact the admin.</div></div>`);
 }
-
-/* ---------- ADMIN DASHBOARD TOP: "Your people" + "User Log" ---------- */
-const AVATARS = {
-  boy:['👦','Boy'], girl:['👧','Girl'], man:['👨','Man'], woman:['👩','Woman'], grandpa:['👴','Grandpa'], grandma:['👵','Grandma'],
-  beard:['🧔','Beard'], lady:['👩‍🦰','Lady'], student:['🧑‍🎓','Student'], boss:['🧑‍💼','Boss'], worker:['👷','Worker'], doctor:['🧑‍⚕️','Doctor'],
-  king:['🤴','King'], queen:['👸','Queen'], dog:['🐶','Dog'], cat:['🐱','Cat']
-};
-const PP_BG = ['#fde7c8','#cdeedd','#fbd5e0','#fdeab8','#dbe4ff','#e5dbff','#d0f0f4','#ffd9d0'];
-const ppBg = id => PP_BG[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % PP_BG.length];
-const ppIcon = u => (AVATARS[u.avatar] || ['🧑'])[0];
-function ppAvatar(u, cls){ return `<span class="pp-av ${cls||''}" style="background:${ppBg(u.id)}">${ppIcon(u)}</span>`; }
-function actToday(id){ const t = todayISO(); return (S.acts || []).filter(a => a.uid === id && String(a.time).slice(0, 10) === t).length; }
-function peopleRow(){
-  const list = S.users || [];
-  const tiles = list.map(u => { const n = actToday(u.id), me = S.me && u.id === S.me.id;
-    return `<button class="pp" onclick="openPerson('${esc(u.id)}')" title="${n ? n + ' change' + (n > 1 ? 's' : '') + ' today' : 'No changes today'}">
-      ${ppAvatar(u)}${n ? '<i class="pp-dot"></i>' : ''}<span class="pp-nm">${esc(me ? 'You' : (u.name || u.username).split(' ')[0])}</span></button>`; }).join('');
-  return `<div class="pp-head"><span class="pp-lbl">YOUR PEOPLE</span><button class="linkbtn" style="text-decoration:none" onclick="go('settings')">View all</button></div>
-    <div class="pp-row">${tiles || '<div class="muted">No users yet</div>'}</div>`;
-}
-function userLogCard(){
-  const list = (S.acts || []).slice(0, 6), byId = Object.fromEntries((S.users || []).map(u => [u.id, u]));
-  const items = list.map(a => { const u = byId[a.uid] || { id:a.uid || '?' };
-    return `<div class="ul-item">${ppAvatar(u, 'sm')}
-      <div class="ul-body"><div class="ul-l1"><b>${esc(a.name || a.username || '(unknown)')}</b><span class="muted">${esc(fmtLogTime(a.time))}</span></div>
-        <div class="ul-l2"><span class="pill inc">${esc(a.action)}</span>${a.detail ? ' <span class="muted">' + esc(a.detail) + '</span>' : ''}</div></div></div>`; }).join('');
-  return `<div class="card ul-card"><h3>📋 User Log <span><button class="btn ghost sm" onclick="loadActivity()">↻</button> <button class="btn soft sm" onclick="openUserLog()">View all →</button></span></h3>
-    <p class="muted" style="margin:-6px 0 10px;font-size:12.5px">What each user changed most recently</p>
-    ${S.acts ? (items || '<div class="empty-state">No changes recorded yet</div>') : '<div class="empty-state">Loading…</div>'}</div>`;
-}
-function adminTop(){
-  if (!isAdmin() || S.as) return '';
-  return `<div class="admin-top">${peopleRow()}${userLogCard()}</div>`;
-}
-function openUserLog(){
-  go('settings');
-  setTimeout(() => { const el = document.getElementById('actCard'); if (el) el.scrollIntoView({ behavior:'smooth', block:'start' }); }, 80);
-}
-function openPerson(id){
-  const u = (S.users || []).find(x => x.id === id); if (!u) return;
-  const mine = S.me && u.id === S.me.id;
-  const canIcon = S.me && (S.me.primary || (u.role !== 'admin') || mine);
-  const acts = (S.acts || []).filter(a => a.uid === id).slice(0, 12);
-  const tag = u.primary ? '<span class="tag main">Main admin</span>' : u.role === 'admin' ? '<span class="tag adm">Admin</span>' : '<span class="tag">User</span>';
-  const w = openModal(`<div class="pp-modal-head">${ppAvatar(u, 'lg')}<div><h3 style="margin:0">${esc(u.name || u.username)} ${tag}</h3>
-      <div class="muted" style="font-size:13px">@${esc(u.username)} · ${u.lastLogin ? 'Last login ' + esc(fmtLogTime(u.lastLogin)) : 'Never signed in'}</div></div></div>
-    ${!mine ? '<div style="margin:12px 0"><button class="btn soft sm" id="ppView">👁 View this user’s data</button></div>' : ''}
-    ${canIcon ? `<div class="sec-title">Choose icon</div><div class="pp-pick" id="ppPick">${Object.entries(AVATARS).map(([k, v]) =>
-        `<button type="button" class="${u.avatar === k ? 'on' : ''}" data-k="${k}" title="${v[1]}">${v[0]}</button>`).join('')}</div>` : ''}
-    <div class="sec-title" style="margin-top:14px">Recent changes</div>
-    <div class="loglist">${acts.map(a => activityItem(a)).join('') || '<div class="empty-state">No changes recorded yet</div>'}</div>
-    <div class="foot"><button class="btn ghost" data-x>Close</button></div>`, 'wide');
-  w.querySelector('[data-x]').onclick = () => w.remove();
-  const vb = w.querySelector('#ppView'); if (vb) vb.onclick = () => { w.remove(); setAs(u.id); };
-  const pk = w.querySelector('#ppPick');
-  if (pk) pk.onclick = async e => { const b = e.target.closest('button[data-k]'); if (!b) return;
-    try { const r = await api('setAvatar', { id:u.id, avatar:b.dataset.k }); S.users = r.users; w.remove(); render(); toast('Icon updated'); openPerson(id); }
-    catch(err){ handleErr(err); } };
-}
-
 function dashHello(){
   const me = S.me || {}, now = new Date(), hr = now.getHours();
   const name = me.viewing ? (me.viewName || 'User') : (me.name || me.username || cfg().name || cfg().username || 'User');
@@ -1645,6 +1668,7 @@ function vSettings(){
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
   if (isAdmin()) grid.insertAdjacentHTML('afterbegin', usersCard() + groupsCard());
+  grid.insertAdjacentHTML('beforeend', bioCard());
   grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
 }
@@ -2082,262 +2106,6 @@ async function doExport(kind, fmt){
   finally{ S.exBusy = false; }
 }
 
-
-/* =====================================================================
-   VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
-   ===================================================================== */
-const chatFresh = () => ({ users:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
-S.chat = chatFresh();
-let chatTimer = null;
-function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); document.body.classList.remove('chat-conv'); chatBadge(); }
-function chatStart(){
-  clearInterval(chatTimer);
-  chatLoadUsers();                                    // also tells the server "I am online"
-  chatTimer = setInterval(chatTick, 4000);
-}
-/* silent request (no top progress bar) — used for polling and sending */
-async function chatApi(action, payload = {}){
-  const j = await callServer({ action, token:S.token, ...payload });
-  if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; throw e; }
-  return j;
-}
-function chatErr(e){ if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
-const chatPeer = id => S.chat.users.find(u => u.id === id);
-function chatBadge(){
-  const b = $('#chatBadge'); if (!b) return;
-  const n = S.chat.unread || 0;
-  b.textContent = n > 99 ? '99+' : n; b.classList.toggle('hidden', n < 1);
-}
-function chatSumUnread(){ S.chat.unread = S.chat.users.reduce((a, u) => a + (u.unread || 0), 0); chatBadge(); }
-
-/* "5 min ago" style text (the server sends how long ago, so a wrong phone clock does not matter) */
-function chatAgo(u){
-  if (u.ago === null || u.ago === undefined) return null;
-  const ms = u.ago + (Date.now() - (u.at || Date.now())), m = Math.floor(ms / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return m + ' min ago';
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + ' hr' + (m % 60 ? ' ' + (m % 60) + ' min' : '') + ' ago';
-  const d = Math.floor(h / 24);
-  return d + (d === 1 ? ' day ago' : ' days ago');
-}
-function chatStatus(u){
-  if (u.online) return { cls:'on', txt:'Online' };
-  const a = chatAgo(u);
-  return { cls:'off', txt: a ? 'Offline · last seen ' + a : 'Offline' };
-}
-const CH_COL = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ec4899','#8b5cf6','#14b8a6','#ef4444','#64748b','#84cc16'];
-const chColor = id => CH_COL[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % CH_COL.length];
-const chInit = u => esc((u.name || u.username || '?').trim().charAt(0).toUpperCase());
-function chClock(t){ return new Date(t).toLocaleTimeString('en-IN', { hour:'numeric', minute:'2-digit' }); }
-function chDayLabel(t){
-  const d = new Date(t), n = new Date(), y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
-  const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  if (same(d, n)) return 'Today'; if (same(d, y)) return 'Yesterday';
-  return d.toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' });
-}
-function chListTime(t){
-  if (!t) return '';
-  return chDayLabel(t) === 'Today' ? chClock(t) : chDayLabel(t) === 'Yesterday' ? 'Yesterday' : new Date(t).toLocaleDateString('en-IN', { day:'numeric', month:'short' });
-}
-
-function vChat(){
-  return `<div class="chat ${S.chat.with ? 'in-conv' : ''}" id="chatRoot">
-    <div class="card ch-side">
-      <div class="ch-top"><h3>💬 Chats</h3><input class="input" id="chSearch" placeholder="Search user…" autocomplete="off" value="${esc(S.chat.q)}"></div>
-      <div class="ch-list" id="chList"></div>
-    </div>
-    <div class="card ch-pane" id="chPane"></div>
-  </div>`;
-}
-function bindChat(){
-  document.body.classList.toggle('chat-conv', !!S.chat.with);
-  $('#chSearch').oninput = e => { S.chat.q = e.target.value; chatRenderList(); };
-  chatRenderList(); chatRenderPane();
-  if (!S.chat.loaded) chatLoadUsers();
-  if (S.chat.with) chatFetchConv(true);
-}
-function chatRenderList(){
-  const el = $('#chList'); if (!el) return;
-  const q = S.chat.q.trim().toLowerCase();
-  const list = S.chat.users.filter(u => !q || (u.name + ' ' + u.username).toLowerCase().includes(q))
-    .sort((a, b) => (b.lastTime - a.lastTime) || (b.online - a.online) || String(a.name).localeCompare(String(b.name)));
-  if (S.chat.err && !S.chat.loaded){
-    el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">Could not load users</b><div style="margin:6px 0 12px;word-break:break-word">${esc(S.chat.err)}</div><button class="btn sm" onclick="S.chat.err='';chatRenderList();chatLoadUsers()">↻ Try again</button></div>`; return;
-  }
-  if (!S.chat.loaded){ el.innerHTML = '<div class="empty-state">Loading users…</div>'; return; }
-  if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No other users yet'}</div>`; return; }
-  el.innerHTML = list.map(u => {
-    const st = chatStatus(u);
-    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : ''}${esc(u.lastText)}</div>` : '';
-    return `<div class="ch-row ${S.chat.with === u.id ? 'sel' : ''}" onclick="chatOpen('${esc(u.id)}')">
-      <div class="ch-av" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot ${st.cls}"></span></div>
-      <div class="ch-info">
-        <div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot ${st.cls}"></span><span class="tm">${esc(chListTime(u.lastTime))}</span></div>
-        <div class="ch-stat ${st.cls}">${esc(st.txt)}</div>${prev}
-      </div>${u.unread ? `<span class="ch-unread">${u.unread > 99 ? '99+' : u.unread}</span>` : ''}</div>`;
-  }).join('');
-}
-function chatRenderPane(){
-  const pane = $('#chPane'); if (!pane) return;
-  const u = chatPeer(S.chat.with);
-  if (!S.chat.with || !u){
-    pane.innerHTML = '<div class="ch-empty"><div><div class="big">💬</div><b>Select a user to start chatting</b><div style="margin-top:4px">Your messages will appear here.</div></div></div>';
-    $('#chatRoot').classList.remove('in-conv'); return;
-  }
-  $('#chatRoot').classList.add('in-conv');
-  pane.innerHTML = `<div class="ch-head">
-      <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
-      <div class="ch-av" id="chHAv" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
-      <div class="ch-info"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
-    </div>
-    <div class="ch-msgs" id="chMsgs"></div>
-    <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
-      <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
-  const ta = $('#chInput');
-  ta.value = S.chat.drafts[u.id] || '';
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; };
-  ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); };
-  ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches){ e.preventDefault(); chatSend(); } };
-  grow(); chatHeader(); S.chat.sig = ''; chatRenderMsgs(true);
-}
-function chatHeader(){
-  const u = chatPeer(S.chat.with); if (!u) return;
-  const st = chatStatus(u), t = $('#chHStat'); if (!t) return;
-  t.className = 'ch-stat ' + st.cls; t.textContent = st.txt;
-  $('#chHDot').className = 'dot ' + st.cls; $('#chHAv .dot').className = 'dot ' + st.cls;
-}
-function chatRenderMsgs(toBottom){
-  const box = $('#chMsgs'); if (!box) return;
-  const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0;
-  const sig = arr.map(m => m.id + (m.state || '') + (m.mine && m.t <= pr ? 'r' : '')).join(',') + '|' + S.chat.histLoaded[id];
-  if (sig === S.chat.sig && !toBottom) return;
-  S.chat.sig = sig;
-  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
-  if (!arr.length){
-    box.innerHTML = `<div class="ch-load">${S.chat.histLoaded[id] ? 'No messages yet — say hi 👋' : 'Loading messages…'}</div>`;
-    return;
-  }
-  let html = '', day = '';
-  arr.forEach(m => {
-    const dl = chDayLabel(m.t);
-    if (dl !== day){ day = dl; html += `<div class="ch-day">${esc(dl)}</div>`; }
-    let meta = esc(chClock(m.t));
-    if (m.mine){
-      if (m.state === 'pending') meta = 'Sending…';
-      else if (m.state === 'failed') meta = 'Not sent · tap to retry';
-      else meta += ` <span class="tick ${m.t <= pr ? 'read' : ''}">${m.t <= pr ? '✓✓' : '✓'}</span>`;
-    }
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}><div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
-  });
-  box.innerHTML = html;
-  if (toBottom || near) box.scrollTop = box.scrollHeight;
-}
-function chatMerge(id, list){
-  const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
-  list.forEach(m => {
-    const i = a.findIndex(x => x.id === m.id);
-    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text){ a[i] = m; changed = true; } }
-    else { a.push(m); changed = true; }
-  });
-  if (changed) a.sort((x, y) => x.t - y.t);
-  return changed;
-}
-const chatAfter = id => (S.chat.msgs[id] || []).reduce((mx, m) => m.state ? mx : Math.max(mx, m.t), 0);
-
-async function chatLoadUsers(){
-  if (S.chat.loadingUsers || !S.token) return;
-  S.chat.loadingUsers = true;
-  try{
-    const r = await chatApi('chatUsers'), at = Date.now();
-    const incoming = r.unread > S.chat.unread && S.view !== 'chat' && S.chat.loaded;
-    S.chat.users = r.users.map(u => ({ ...u, at }));
-    S.chat.users.forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
-    S.chat.loaded = true; chatSumUnread();
-    if (incoming) toast('💬 New message');
-    S.chat.err = '';
-    if (S.view === 'chat'){ chatRenderList(); chatHeader(); }
-  }catch(e){ chatErr(e); S.chat.err = (e && e.message) || 'Request failed'; if (S.view === 'chat') chatRenderList(); }
-  finally{ S.chat.loadingUsers = false; }
-}
-async function chatPingNow(){
-  try{
-    const r = await chatApi('chatPing');
-    if (r.unread > S.chat.unread && S.view !== 'chat') toast('💬 New message');
-    S.chat.unread = r.unread; chatBadge();
-  }catch(e){ chatErr(e); }
-}
-async function chatFetchConv(first){
-  const c = S.chat, id = c.with;
-  if (!id || c.fetching) return;
-  c.fetching = true;
-  try{
-    const r = await chatApi('chatFetch', { with:id, after:chatAfter(id) });
-    if (c.with !== id) return;                                  // the user opened another chat meanwhile
-    let ch = chatMerge(id, r.messages);
-    if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
-    if (r.peerRead !== c.peerRead[id]){ c.peerRead[id] = r.peerRead; ch = true; }
-    const u = chatPeer(id);
-    if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
-    if (u && r.messages.some(m => !m.mine)){
-      u.unread = 0; chatSumUnread();
-      const last = r.messages[r.messages.length - 1]; u.lastText = last.text.slice(0, 80); u.lastTime = last.t; u.lastMine = last.mine;
-      chatRenderList();
-    }
-    chatHeader();
-    if (ch || first) chatRenderMsgs(!!first);
-  }catch(e){ chatErr(e); }
-  finally{ c.fetching = false; }
-}
-function chatOpen(id){
-  const c = S.chat; if (!chatPeer(id)) return;
-  c.with = id; const u = chatPeer(id); if (u){ u.unread = 0; chatSumUnread(); }
-  document.body.classList.add('chat-conv');
-  chatRenderList(); chatRenderPane(); chatFetchConv(true);
-  if (!window.matchMedia('(max-width:860px)').matches){ const t = $('#chInput'); if (t) t.focus(); }
-}
-function chatBack(){
-  S.chat.with = null; document.body.classList.remove('chat-conv');
-  chatRenderList(); chatRenderPane(); chatLoadUsers();
-}
-async function chatSend(){
-  const c = S.chat, to = c.with, ta = $('#chInput'); if (!to || !ta) return;
-  const text = ta.value.trim(); if (!text) return;
-  ta.value = ''; c.drafts[to] = ''; ta.style.height = 'auto'; ta.focus();
-  const cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
-  const m = { id:cid, t:Date.now(), mine:true, text, state:'pending' };
-  (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
-  chatRenderMsgs(true);
-  await chatDeliver(to, m);
-}
-async function chatDeliver(to, m){
-  const c = S.chat;
-  try{
-    const r = await chatApi('chatSend', { to, cid:m.id, text:m.text });
-    const arr = c.msgs[to] || [], i = arr.findIndex(x => x.id === m.id);
-    if (i >= 0) arr[i] = r.message; else arr.push(r.message);
-    arr.sort((x, y) => x.t - y.t);
-    const u = chatPeer(to); if (u){ u.lastText = m.text.slice(0, 80); u.lastTime = r.message.t; u.lastMine = true; }
-  }catch(e){ m.state = 'failed'; chatErr(e); if (!e.code || e.code === 'ERR') toast(e.message || 'Message not sent', true); }
-  if (c.with === to) chatRenderMsgs(true);
-  chatRenderList();
-}
-function chatRetry(id){
-  const to = S.chat.with, m = (S.chat.msgs[to] || []).find(x => x.id === id);
-  if (!m || m.state !== 'failed') return;
-  m.state = 'pending'; chatRenderMsgs(); chatDeliver(to, m);
-}
-function chatTick(){
-  const c = S.chat;
-  if (!S.token || !S.d || document.hidden) return;                 // a hidden tab stops pinging, so the person shows as offline
-  c.n++;
-  if (S.view === 'chat'){
-    if (c.with) chatFetchConv();
-    if (c.n % 3 === 0 || !c.loaded) chatLoadUsers();
-    else { chatHeader(); }
-  } else if (c.n % 5 === 0) chatPingNow();
-}
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && S.d){ chatLoadUsers(); if (S.view === 'chat' && S.chat.with) chatFetchConv(); } });
 
 /* ---------- add the "Passwords" tab to the menu (copies the look of the Work tab) ---------- */
 (function addPasswordsTab(){
