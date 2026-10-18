@@ -1983,7 +1983,7 @@ async function doExport(kind, fmt){
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
    ===================================================================== */
-const chatFresh = () => ({ users:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
+const chatFresh = () => ({ users:[], loaded:false, with:null, msgs:{}, peerRead:{}, peerSeen:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
 S.chat = chatFresh();
 let chatTimer = null;
 function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); document.body.classList.remove('chat-conv'); chatBadge(); }
@@ -2106,8 +2106,9 @@ function chatHeader(){
 }
 function chatRenderMsgs(toBottom){
   const box = $('#chMsgs'); if (!box) return;
-  const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0;
-  const sig = arr.map(m => m.id + (m.state || '') + (m.mine && m.t <= pr ? 'r' : '')).join(',') + '|' + S.chat.histLoaded[id];
+  const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0, ps = Math.max(S.chat.peerSeen[id] || 0, pr);
+  const tk = m => m.t <= pr ? 'r' : (m.t <= ps ? 'd' : 's');
+  const sig = arr.map(m => m.id + (m.state || '') + (m.mine ? tk(m) : '')).join(',') + '|' + S.chat.histLoaded[id];
   if (sig === S.chat.sig && !toBottom) return;
   S.chat.sig = sig;
   const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
@@ -2123,7 +2124,7 @@ function chatRenderMsgs(toBottom){
     if (m.mine){
       if (m.state === 'pending') meta = 'Sending…';
       else if (m.state === 'failed') meta = 'Not sent · tap to retry';
-      else meta += ` <span class="tick ${m.t <= pr ? 'read' : ''}">${m.t <= pr ? '✓✓' : '✓'}</span>`;
+      else { const k = tk(m); meta += ` <span class="tick ${k === 'r' ? 'read' : ''}" title="${k === 'r' ? 'Read' : k === 'd' ? 'Delivered' : 'Sent'}">${k === 's' ? '✓' : '✓✓'}</span>`; }
     }
     html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}><div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
   });
@@ -2174,6 +2175,7 @@ async function chatFetchConv(first){
     let ch = chatMerge(id, r.messages);
     if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
     if (r.peerRead !== c.peerRead[id]){ c.peerRead[id] = r.peerRead; ch = true; }
+    if (r.peerSeen && r.peerSeen !== c.peerSeen[id]){ c.peerSeen[id] = r.peerSeen; ch = true; }
     const u = chatPeer(id);
     if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
     if (u && r.messages.some(m => !m.mine)){
@@ -2189,12 +2191,12 @@ async function chatFetchConv(first){
 function chatOpen(id){
   const c = S.chat; if (!chatPeer(id)) return;
   c.with = id; const u = chatPeer(id); if (u){ u.unread = 0; chatSumUnread(); }
-  document.body.classList.add('chat-conv');
+  document.body.classList.add('chat-conv'); chatFit(); window.scrollTo(0, 0);
   chatRenderList(); chatRenderPane(); chatFetchConv(true);
   if (!window.matchMedia('(max-width:860px)').matches){ const t = $('#chInput'); if (t) t.focus(); }
 }
 function chatBack(){
-  S.chat.with = null; document.body.classList.remove('chat-conv');
+  S.chat.with = null; document.body.classList.remove('chat-conv'); window.scrollTo(0, 0);
   chatRenderList(); chatRenderPane(); chatLoadUsers();
 }
 async function chatSend(){
@@ -2224,6 +2226,15 @@ function chatRetry(id){
   if (!m || m.state !== 'failed') return;
   m.state = 'pending'; chatRenderMsgs(); chatDeliver(to, m);
 }
+/* keeps the open chat exactly the size of the visible screen (keyboard open / closed, browser bars) */
+function chatFit(){
+  const v = window.visualViewport, r = document.documentElement.style;
+  r.setProperty('--vvh', (v ? v.height : window.innerHeight) + 'px');
+  r.setProperty('--vvt', (v ? v.offsetTop : 0) + 'px');
+  if (document.body.classList.contains('chat-conv') && window.scrollY) window.scrollTo(0, 0);
+}
+if (window.visualViewport){ visualViewport.addEventListener('resize', chatFit); visualViewport.addEventListener('scroll', chatFit); }
+window.addEventListener('resize', chatFit); window.addEventListener('orientationchange', chatFit); chatFit();
 function chatTick(){
   const c = S.chat;
   if (!S.token || !S.d || document.hidden) return;                 // a hidden tab stops pinging, so the person shows as offline

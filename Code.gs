@@ -1727,7 +1727,7 @@ function chatFetch_(req) {
   var peerRead = Number(readPtr_(w)[CTX.uid] || 0);
   var ms = seenMap_([w])[w] || 0;
   var pr = ms ? presence_(ms, now) : null;
-  return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, now: now, presence: pr };
+  return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, peerSeen: ms, now: now, presence: pr };
 }
 function chatSend_(req) {
   var peer = chatPeerOk_(req.to);
