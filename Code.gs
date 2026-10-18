@@ -17,6 +17,7 @@
  *   Users               -> ID | Username | Password | Role | Name | E-mail | Active | Permissions | Location required | Created | Last login
  *   Login Log           -> every login attempt: time, user, result, latitude / longitude, device, browser, OS, IP
  *   Groups              -> ID | Group name | Member user IDs (comma separated) | Created   (members of one group share ONE set of data)
+ *   Chat                -> ID | Time (ms) | From (user ID) | To (user ID) | Message | Sent at   (one-to-one messages between users)
  *   Timetable           -> Type (Category / Day) | Key | Value | Owner   (the dropdown categories + the half-hour time-table of each date)
  *
  * LOGINS: the Username / Password in the Settings sheet is the MAIN ADMIN (id ADMIN). Extra users are added from the website:
@@ -43,9 +44,10 @@ const SHEET_KEYS = {
   PW: ['password manager'],
   LINK: ['links', 'link manager'],
   GROUPS: ['groups'],
-  TT: ['timetable', 'time table']
+  TT: ['timetable', 'time table'],
+  CHAT: ['chat']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -82,7 +84,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'TT', 'LOG'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'LOG'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -153,7 +155,7 @@ var WRITE_ACTIONS = {
   addLink: 1, updateLink: 1, deleteLink: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, saveGroup: 1, deleteGroup: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -227,6 +229,7 @@ function route_(req) {
     var uid = checkToken_(req.token);
     if (!uid) fail_('Session expired. Please log in again.', 'AUTH');
     buildCtx_(uid, req.asUser);
+    touchSeen_(CTX.uid);                       // every request counts as "online" (chat presence)
     if (NEED[a]) need_(NEED[a]);
     if (ADMIN_ONLY[a]) needAdmin_();
   }
@@ -239,7 +242,7 @@ function route_(req) {
   try {
     switch (a) {
       case 'setup':             return setup_(req);
-      case 'logout':            CacheService.getScriptCache().remove('tok_' + req.token); return { ok: true };
+      case 'logout':            CacheService.getScriptCache().remove('tok_' + req.token); markOffline_(CTX.uid); return { ok: true };
       case 'getAll':            return { ok: true, data: getAll_() };
       case 'setAttendance':     return setAttendance_(req);
       case 'saveSettings':      return saveSettings_(req);
@@ -276,6 +279,10 @@ function route_(req) {
       case 'listGroups':        return listGroups_();
       case 'saveGroup':         return saveGroup_(req);
       case 'deleteGroup':       return deleteGroup_(req);
+      case 'chatUsers':         return chatUsers_();
+      case 'chatPing':          return chatPing_();
+      case 'chatFetch':         return chatFetch_(req);
+      case 'chatSend':          return chatSend_(req);
       case 'loginLog':          return { ok: true, logs: readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || '')) };
       default: fail_('Unknown action: ' + a);
     }
@@ -818,6 +825,10 @@ function createSheet_(k) {
   } else if (k === 'TT') {
     sh.getRange(1, 1, 1, 4).setValues([['Type (Category / Day)', 'Key (category name / date)', 'Value (time slots as JSON)', 'Owner']]);
     sh.getRange('A:D').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'CHAT') {
+    sh.getRange(1, 1, 1, 6).setValues([['ID', 'Time (ms)', 'From (user ID)', 'To (user ID)', 'Message', 'Sent at']]);
+    sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:F').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
     sh.setFrozenRows(1);
   } else if (k === 'USERS') {
     sh.getRange(1, 1, 1, 12).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
@@ -1615,6 +1626,128 @@ function setTimetable_(req) {
   });
   ttWriteDay_(t, date, day);
   return { ok: true, slots: day };
+}
+
+// ---------- CHAT (one-to-one messages + online / last-seen) ----------
+// Sheet "Chat": ID | Time (ms) | From | To | Message | Sent at.   Presence ("online") = the person made any request in the last ~70 seconds.
+// The website pings the server every ~20 s while it is open, so a closed / hidden tab turns "offline" quickly.
+var CHAT_ONLINE_MS = 70000;
+var CHAT_MAX_LEN = 2000;
+var CHAT_SCAN = 2500;                    // newest rows looked at on every call
+
+function touchSeen_(uid) {
+  try {
+    var now = Date.now(), cache = CacheService.getScriptCache();
+    cache.put('seen_' + uid, String(now), 21600);
+    if (!cache.get('seenp_' + uid)) {                      // persist at most every 2 minutes (survives the 6 h cache limit)
+      PropertiesService.getScriptProperties().setProperty('LS_' + uid, String(now));
+      cache.put('seenp_' + uid, '1', 120);
+    }
+  } catch (e) {}
+}
+function markOffline_(uid) {
+  try {
+    var t = Date.now() - CHAT_ONLINE_MS - 1000;            // shows offline right away, "last seen" ~ now
+    CacheService.getScriptCache().put('seen_' + uid, String(t), 21600);
+    PropertiesService.getScriptProperties().setProperty('LS_' + uid, String(t));
+    CacheService.getScriptCache().remove('seenp_' + uid);
+  } catch (e) {}
+}
+function seenMap_(ids) {
+  var out = {}, cache = CacheService.getScriptCache(), props = PropertiesService.getScriptProperties().getProperties();
+  var keys = ids.map(function (i) { return 'seen_' + i; }), got = ids.length ? cache.getAll(keys) : {};
+  ids.forEach(function (i) {
+    var a = Number(got['seen_' + i] || 0), b = Number(props['LS_' + i] || 0);
+    out[i] = Math.max(a, b);
+  });
+  return out;
+}
+function presence_(ms, now) {
+  return { online: !!ms && (now - ms) <= CHAT_ONLINE_MS, ago: ms ? Math.max(0, now - ms) : null };
+}
+function readPtr_(uid) {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('CR_' + uid) || '{}') || {}; } catch (e) { return {}; }
+}
+function chatRows_() {
+  var sh = getSheet_('CHAT'), last = sh.getLastRow();
+  if (last < 2) return [];
+  var n = Math.min(last - 1, CHAT_SCAN);
+  return sh.getRange(last - n + 1, 1, n, 5).getValues().map(function (r) {
+    return { id: String(r[0]), t: Number(r[1]) || 0, from: String(r[2]), to: String(r[3]), text: String(r[4]) };
+  });
+}
+function chatPeers_() {
+  var s = readSettings_().values;
+  var list = [getAccount_('ADMIN', s)].concat(readUsers_());
+  return list.filter(function (a) { return a.id !== CTX.uid && a.active && has_(a.username); });
+}
+function chatUsers_() {
+  var now = Date.now(), peers = chatPeers_(), ids = peers.map(function (a) { return a.id; });
+  var seen = seenMap_(ids), ptr = readPtr_(CTX.uid), info = {}, total = 0;
+  chatRows_().forEach(function (r) {                    // oldest -> newest
+    var peer = r.from === CTX.uid ? r.to : (r.to === CTX.uid ? r.from : '');
+    if (!peer) return;
+    var o = info[peer] || (info[peer] = { unread: 0, last: null });
+    if (r.to === CTX.uid && r.t > (ptr[peer] || 0)) o.unread++;
+    o.last = r;
+  });
+  var users = peers.map(function (a) {
+    var ms = seen[a.id] || 0;
+    if (!ms && a.lastLogin) { var t = parseDue_(a.lastLogin); if (!isNaN(t)) ms = t; }     // never pinged yet -> last login
+    var p = presence_(ms, now), o = info[a.id] || { unread: 0, last: null };
+    total += o.unread;
+    return { id: a.id, name: a.name || a.username, username: a.username, role: a.role, online: p.online, ago: p.ago,
+      unread: o.unread, lastText: o.last ? o.last.text.slice(0, 80) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false };
+  });
+  return { ok: true, users: users, unread: total, now: now, me: CTX.uid };
+}
+function chatPing_() {
+  var ptr = readPtr_(CTX.uid), total = 0;
+  chatRows_().forEach(function (r) { if (r.to === CTX.uid && r.t > (ptr[r.from] || 0)) total++; });
+  return { ok: true, unread: total, now: Date.now() };
+}
+function chatPeerOk_(id) {
+  id = String(id || '').trim();
+  if (!id || id === CTX.uid) fail_('Choose a user to chat with.');
+  var acc = getAccount_(id, readSettings_().values);
+  if (!acc || !acc.active || !has_(acc.username)) fail_('That user was not found.');
+  return acc;
+}
+function chatMsgOut_(r) { return { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text }; }
+// req: { with: userId, after: lastTimeSeen }  -> new messages of this conversation + whether the other person has read mine
+function chatFetch_(req) {
+  var w = chatPeerOk_(req.with).id, after = Number(req.after) || 0, now = Date.now();
+  var rows = chatRows_().filter(function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); });
+  var out = rows.filter(function (r) { return r.t > after; });
+  if (!after && out.length > 300) out = out.slice(-300);
+  var latestIn = 0;
+  rows.forEach(function (r) { if (r.from === w && r.t > latestIn) latestIn = r.t; });
+  var ptr = readPtr_(CTX.uid);
+  if (latestIn > (ptr[w] || 0)) { ptr[w] = latestIn; PropertiesService.getScriptProperties().setProperty('CR_' + CTX.uid, JSON.stringify(ptr)); }
+  var peerRead = Number(readPtr_(w)[CTX.uid] || 0);
+  var ms = seenMap_([w])[w] || 0;
+  var pr = ms ? presence_(ms, now) : null;
+  return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, now: now, presence: pr };
+}
+function chatSend_(req) {
+  var peer = chatPeerOk_(req.to);
+  var text = String(req.text === undefined || req.text === null ? '' : req.text).replace(/\r\n?/g, '\n').trim();
+  if (!text) fail_('Type a message first.');
+  if (text.length > CHAT_MAX_LEN) text = text.slice(0, CHAT_MAX_LEN);
+  var cid = String(req.cid || '');
+  var id = /^[A-Za-z0-9]{8,24}$/.test(cid) ? cid : Utilities.getUuid().replace(/-/g, '').slice(0, 12);
+  var tail = chatRows_().slice(-300), dup = null;
+  tail.forEach(function (r) { if (r.id === id && r.from === CTX.uid) dup = r; });
+  if (dup) return { ok: true, message: chatMsgOut_(dup) };          // the same message sent twice (network retry) is stored once
+  var sh = getSheet_('CHAT'), row = sh.getLastRow() + 1, t = Date.now();
+  var last = tail.length ? tail[tail.length - 1].t : 0;
+  if (t <= last) t = last + 1;                                       // keep times strictly increasing
+  var rng = sh.getRange(row, 1, 1, 6);
+  rng.setNumberFormat('@');
+  sh.getRange(row, 2).setNumberFormat('0');
+  rng.setValues([[id, t, CTX.uid, peer.id, text, nowStr_()]]);
+  if (sh.getLastRow() > 20000) sh.deleteRows(2, 2000);              // keep the sheet from growing forever
+  return { ok: true, message: { id: id, t: t, mine: true, text: text } };
 }
 
 // ---------- BUNDLE ----------
