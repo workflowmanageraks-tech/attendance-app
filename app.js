@@ -149,6 +149,7 @@ function bioSaved(){ try { return JSON.parse(store.get(BK) || 'null'); } catch {
 async function bioDetect(){
   try { BIO.ok = !!(window.isSecureContext && window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); }
   catch { BIO.ok = false; }
+  BIO.why = !window.isSecureContext ? 'The page is not on https (address: ' + location.protocol + '//' + location.hostname + ').' : !window.PublicKeyCredential ? 'This browser has no passkey support (try Chrome).' : (BIO.ok ? '' : 'No fingerprint / face / screen lock is set up on this phone, or this in-app browser blocks it.');
 }
 function bioShowBtn(){ const b = $('#bioBtn'); if (b) b.classList.toggle('hidden', !(BIO.ok && bioSaved() && !S.setup)); }
 function bioErr(e){
@@ -191,7 +192,7 @@ function bioDraw(list){
     : '<div class="muted">Not enabled on any device yet.</div>';
   const add = document.querySelector('#bioAdd');
   if (add){ add.classList.toggle('hidden', !BIO.ok || !!mine); }
-  if (!BIO.ok) el.insertAdjacentHTML('beforeend', '<div class="muted" style="margin-top:8px">This browser/device does not support fingerprint or face unlock (it needs https and a phone/PC with a screen lock set up).</div>');
+  if (!BIO.ok) el.insertAdjacentHTML('beforeend', '<div class="muted" style="margin-top:8px">This browser/device does not support fingerprint or face unlock </div>'.replace('</div>', ' ' + esc(BIO.why || '') + '</div>'));
   el.querySelectorAll('[data-bio-rm]').forEach(b => b.onclick = async () => {
     if (!await confirmBox('Remove this device?', 'You will need your password to sign in on it again.', 'Remove', true)) return;
     try{
@@ -327,6 +328,7 @@ function enterApp(){
   if (isAdmin()) loadLogs();
 }
 async function boot(){
+  await bioDetect();
   const t = store.get(TK);
   let st;
   try { st = await api('status'); }
@@ -335,7 +337,6 @@ async function boot(){
     S.token = t;
     try { await loadAll(); enterApp(); return; } catch { clearToken(); }
   }
-  await bioDetect();
   showLogin(st.needsSetup, '', st.needsSetupCode);
   if (BIO.ok && bioSaved() && !st.needsSetup) bioLoginGo(true);
 }
