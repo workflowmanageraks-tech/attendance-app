@@ -155,7 +155,7 @@ var WRITE_ACTIONS = {
   addPw: 1, updatePw: 1, deletePw: 1,
   addLink: 1, updateLink: 1, deleteLink: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
-  saveUser: 1, deleteUser: 1, kickUser: 1, saveGroup: 1, deleteGroup: 1,
+  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, calDisconnect: 1
 };
 
@@ -171,7 +171,7 @@ var NEED = {
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
-var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1 };
+var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1 };
 
 // Who is making the current request (filled by buildCtx_ on every call; Apps Script runs each call fresh)
 //   uid   = the logged-in account         owner = whose DATA is being read / written
@@ -282,6 +282,7 @@ function route_(req) {
       case 'deleteTtCat':       out = deleteTtCat_(req); break;
       case 'listUsers':         return listUsers_();
       case 'saveUser':          out = saveUser_(req); break;
+      case 'setAvatar':         out = setAvatar_(req); break;
       case 'deleteUser':        out = deleteUser_(req); break;
       case 'kickUser':          out = kickUser_(req); break;
       case 'listGroups':        return listGroups_();
@@ -371,14 +372,16 @@ function getAccount_(id, s) {
   if (id === 'ADMIN') {
     var v = s || {};
     return { id: 'ADMIN', username: String(v.username || ''), password: v.password, name: String(v.name || v.username || ''),
-             email: String(v.email || ''), role: 'admin', active: true, perms: fullPerms_(), needLoc: false, payDue: '', row: 0, created: '', lastLogin: '' };
+             email: String(v.email || ''), role: 'admin', active: true, perms: fullPerms_(), needLoc: false, payDue: '', row: 0, created: '', lastLogin: '',
+             avatar: String(PropertiesService.getScriptProperties().getProperty('AVATAR_ADMIN') || '') };
   }
   return readUsers_().filter(function (x) { return x.id === id; })[0] || null;
 }
 function readUsers_() {
   var sh = getSheet_('USERS'), last = sh.getLastRow(), out = [];
   if (last < 2) return out;
-  sh.getRange(2, 1, last - 1, 12).getValues().forEach(function (r, i) {
+  if (sh.getMaxColumns() < 13) sh.insertColumnsAfter(sh.getMaxColumns(), 13 - sh.getMaxColumns());
+  sh.getRange(2, 1, last - 1, 13).getValues().forEach(function (r, i) {
     var id = String(r[0]).trim(), un = String(r[1]).trim();
     if (!id || !un) return;
     var role = /^admin/i.test(String(r[3])) ? 'admin' : 'user';
@@ -387,7 +390,7 @@ function readUsers_() {
     out.push({ id: id, username: un, password: r[2], role: role, name: String(r[4] || ''), email: String(r[5] || '').trim(),
       active: !/^(no|false|0)$/i.test(String(r[6]).trim()), perms: normPerms_(pj, role),
       needLoc: /^(yes|true|1)$/i.test(String(r[8]).trim()), created: tsStr_(r[9]), lastLogin: tsStr_(r[10]),
-      payDue: tsStr_(r[11]), row: i + 2 });
+      payDue: tsStr_(r[11]), avatar: String(r[12] || '').trim(), row: i + 2 });
   });
   return out;
 }
@@ -661,7 +664,7 @@ function changeCredentials_(req) {
 // ---------- USER MANAGEMENT (admins) ----------
 function pubUser_(u, last) {
   return { id: u.id, username: u.username, name: u.name, email: u.email, role: u.role, active: u.active, perms: u.perms,
-    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '' };
+    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '' };
 }
 function listUsers_() {
   var s = readSettings_().values, last = {};
@@ -695,7 +698,10 @@ function saveUser_(req) {
   var needLoc = req.needLoc === true || req.needLoc === 'true';
   var payDue = String(req.payDue || '').trim();   // e.g. "2026-11-17T10:30" from a datetime-local input, or '' to clear
   var permStr = JSON.stringify(normPerms_(req.perms, role));
+  var avatar = String(req.avatar === undefined || req.avatar === null ? (cur ? cur.avatar : '') : req.avatar).trim();
+  if (avatar && !/^[a-z]{2,12}$/.test(avatar)) avatar = '';
   var sh = getSheet_('USERS');
+  ensureAvatarCol_(sh);
   if (cur) {
     // columns 2..9 = Username .. Location required.  (Created = col 10 and Last Login = col 11 are left untouched)
     var rng = sh.getRange(cur.row, 2, 1, 8);
@@ -705,14 +711,36 @@ function saveUser_(req) {
     var pc = sh.getRange(cur.row, 12);
     pc.setNumberFormat('@');
     pc.setValue(payDue);
+    var ac = sh.getRange(cur.row, 13); ac.setNumberFormat('@'); ac.setValue(avatar);
     if (pw || !active) bumpVersion_(cur.id);          // new password / disabled -> signs that user out everywhere
   } else {
     if (users.length >= 100) fail_('User limit (100) reached.');
     var nid = 'U' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
-    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 12);
+    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 13);
     r2.setNumberFormat('@');
-    r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue]]);
+    r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue, avatar]]);
   }
+  return listUsers_();
+}
+// Column 13 (M) of the Users sheet holds each user's dashboard icon (a short key such as "boy" or "girl").
+function ensureAvatarCol_(sh) {
+  if (sh.getMaxColumns() < 13) sh.insertColumnsAfter(sh.getMaxColumns(), 13 - sh.getMaxColumns());
+  if (!String(sh.getRange(1, 13).getValue() || '').trim()) sh.getRange(1, 13).setValue('Avatar (icon)');
+}
+function setAvatar_(req) {
+  var id = String(req.id || '').trim(), av = String(req.avatar || '').trim();
+  if (av && !/^[a-z]{2,12}$/.test(av)) fail_('Invalid icon.');
+  if (id === 'ADMIN') {
+    if (!CTX.primary) fail_('Only the main admin can change the main admin\'s icon.', 'PERM');
+    PropertiesService.getScriptProperties().setProperty('AVATAR_ADMIN', av);
+    return listUsers_();
+  }
+  var u = readUsers_().filter(function (x) { return x.id === id; })[0];
+  if (!u) fail_('User not found. Please refresh.');
+  if (u.role === 'admin' && !CTX.primary && u.id !== CTX.uid) fail_('Only the main admin can change another admin.', 'PERM');
+  var sh = getSheet_('USERS');
+  ensureAvatarCol_(sh);
+  var c = sh.getRange(u.row, 13); c.setNumberFormat('@'); c.setValue(av);
   return listUsers_();
 }
 function deleteUser_(req) {
@@ -895,9 +923,9 @@ function createSheet_(k) {
     sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:F').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
     sh.setFrozenRows(1);
   } else if (k === 'USERS') {
-    sh.getRange(1, 1, 1, 12).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
-      'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until']]);
-    sh.getRange('A:L').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 13).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
+      'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until', 'Avatar (icon)']]);
+    sh.getRange('A:M').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'GROUPS') {
     sh.getRange(1, 1, 1, 4).setValues([['ID', 'Group name', 'Member user IDs (comma separated)', 'Created']]);
