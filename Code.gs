@@ -155,7 +155,7 @@ var WRITE_ACTIONS = {
   addLink: 1, updateLink: 1, deleteLink: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, saveGroup: 1, deleteGroup: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -170,7 +170,7 @@ var NEED = {
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
-var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1 };
+var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1 };
 
 // Who is making the current request (filled by buildCtx_ on every call; Apps Script runs each call fresh)
 //   uid   = the logged-in account         owner = whose DATA is being read / written
@@ -269,6 +269,11 @@ function route_(req) {
       case 'updateLink':        return updateLink_(req);
       case 'deleteLink':        return deleteLink_(req);
       case 'setTimetable':      return setTimetable_(req);
+      case 'calAuthUrl':        return calAuthUrl_();
+      case 'calStatus':         return calStatus_();
+      case 'calDisconnect':     return calDisconnect_();
+      case 'calSyncAll':        return calSyncAll_();
+      case 'ttCalStatus':       return ttCalStatus_();
       case 'addTtCat':          return addTtCat_(req);
       case 'updateTtCat':       return updateTtCat_(req);
       case 'deleteTtCat':       return deleteTtCat_(req);
@@ -1616,7 +1621,8 @@ function setTimetable_(req) {
   t.cats.forEach(function (c) { cats[c.name] = 1; });
   var patch = (req.slots && typeof req.slots === 'object') ? req.slots : {};
   var replace = req.replace === true || req.replace === 'true';
-  var day = replace ? {} : JSON.parse(JSON.stringify(t.days[date] ? t.days[date].slots : {}));
+  var before = JSON.parse(JSON.stringify(t.days[date] ? t.days[date].slots : {}));
+  var day = replace ? {} : JSON.parse(JSON.stringify(before));
   Object.keys(patch).forEach(function (k) {
     if (!valid[k]) fail_('Invalid time slot: ' + k);
     var c = String(patch[k] === undefined || patch[k] === null ? '' : patch[k]).trim();
@@ -1625,6 +1631,7 @@ function setTimetable_(req) {
     day[k] = c;
   });
   ttWriteDay_(t, date, day);
+  calQueueDay_(date, before, day);          // Google Calendar (only if this user connected one)
   return { ok: true, slots: day };
 }
 
@@ -1773,4 +1780,75 @@ function getAll_() {
     ttCats: T.cats.map(function (c) { return c.name; }),
     timetable: ttDaysOut_(T)
   };
+}
+
+
+// =====================================================================
+// GOOGLE CALENDAR SYNC  (one-way: Time Table -> the user's OWN Google Calendar)
+// ---------------------------------------------------------------------
+// * Every user connects THEIR OWN Google account (Settings > Google Calendar). Events go to that
+//   account's primary calendar only - never to the admin's, unless the admin connected theirs.
+// * The refresh token is stored ENCRYPTED (key = TOKEN_SECRET) by server.js; this file only keeps
+//   a small "meta" record (e-mail + time) so the Settings screen can show the status.
+// * The real Calendar calls are made by server.js after the request is saved (see CAL_RT_.cal).
+// * Needs the Node/Render server (server.js). Under plain Apps Script these calls are skipped.
+// =====================================================================
+function calTarget_() { return CTX.viewing ? CTX.owner : CTX.uid; }   // admin "view as" edits go to that user's calendar
+function calMeta_(uid) {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('CAL_META_' + uid) || 'null'); } catch (e) { return null; }
+}
+function calPush_(uid, date, slot, cat) {
+  if (typeof CAL_RT_ === 'undefined' || !CAL_RT_.cal) return;
+  CAL_RT_.cal.push({ uid: uid, date: date, slot: slot, cat: cat || '' });
+}
+function calQueueDay_(date, before, after) {
+  var uid = calTarget_();
+  if (!calMeta_(uid)) return;                                        // this user has not connected a calendar
+  var keys = {};
+  Object.keys(before).forEach(function (k) { keys[k] = 1; });
+  Object.keys(after).forEach(function (k) { keys[k] = 1; });
+  Object.keys(keys).forEach(function (k) {
+    if ((before[k] || '') !== (after[k] || '')) calPush_(uid, date, k, after[k] || '');
+  });
+}
+function calAuthUrl_() {
+  if (typeof CAL_CFG_ === 'undefined' || !CAL_CFG_.ready) fail_('Calendar sync is not set up on the server yet (CAL_CLIENT_ID / CAL_CLIENT_SECRET / PUBLIC_URL).');
+  var url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(CAL_CFG_.clientId) +
+    '&redirect_uri=' + encodeURIComponent(CAL_CFG_.redirect) + '&response_type=code&access_type=offline&prompt=consent&include_granted_scopes=true' +
+    '&scope=' + encodeURIComponent('https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email') +
+    '&state=' + encodeURIComponent(calState_(CTX.uid));
+  return { ok: true, url: url };
+}
+function calStatus_() {
+  var m = calMeta_(CTX.uid);
+  return { ok: true, configured: typeof CAL_CFG_ !== 'undefined' && !!CAL_CFG_.ready, connected: !!m, email: m ? m.email : '', at: m ? m.at : 0 };
+}
+function calDisconnect_() {
+  var p = PropertiesService.getScriptProperties();
+  p.setProperty('CAL_META_' + CTX.uid, '');
+  p.setProperty('CAL_TOK_' + CTX.uid, '');
+  return { ok: true };
+}
+// Push all filled slots of the next 60 days (use right after connecting, for entries made before)
+function calSyncAll_() {
+  var uid = calTarget_();
+  if (!calMeta_(uid)) fail_('Connect Google Calendar first.');
+  var tz = Session.getScriptTimeZone();
+  var from = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  var to = Utilities.formatDate(new Date(Date.now() + 60 * 86400000), tz, 'yyyy-MM-dd');
+  var t = readTT_(), n = 0;
+  Object.keys(t.days).sort().forEach(function (d) {
+    if (d < from || d > to) return;
+    var s = t.days[d].slots;
+    Object.keys(s).forEach(function (k) { if (n < 800) { calPush_(uid, d, k, s[k]); n++; } });
+  });
+  return { ok: true, queued: n };
+}
+// Admin overview: who has connected a calendar (no event content is ever read)
+function ttCalStatus_() {
+  var list = [getAccount_('ADMIN', readSettings_().values)].concat(readUsers_());
+  return { ok: true, users: list.filter(function (a) { return a.active; }).map(function (a) {
+    var m = calMeta_(a.id);
+    return { id: a.id, name: a.name || a.username, connected: !!m, email: m ? m.email : '', at: m ? m.at : 0 };
+  }) };
 }

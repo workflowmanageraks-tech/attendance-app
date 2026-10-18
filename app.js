@@ -1547,6 +1547,7 @@ function vSettings(){
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
   if (isAdmin()) grid.insertAdjacentHTML('afterbegin', usersCard() + groupsCard());
+  if (can('tt')) grid.insertAdjacentHTML('beforeend', calCard());
   return dom.innerHTML;
 }
 function applySettings(r){
@@ -1615,7 +1616,38 @@ function bindSettings(){
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
     try { const r = await api('addStatus', f); S.d.statuses = r.statuses; toast('Status code added'); render(); } catch(e){ handleErr(e); } finally { btn.disabled = false; }
   };
+  loadCal();
 }
+
+/* ---------- Google Calendar sync (Time Table -> your own Google Calendar) ---------- */
+function calCard(){
+  return `<div class="card"><h3>📅 Google Calendar</h3>
+    <p class="muted" style="margin-bottom:12px">Connect <b>your own</b> Google account. Everything you add in <b>Time Table</b> is then created in your Google Calendar with a reminder. Each user connects separately — nobody else’s events go into your calendar.</p>
+    <div id="calBox"><p class="muted">Loading…</p></div></div>`;
+}
+async function loadCal(){
+  const box = document.getElementById('calBox'); if (!box) return;
+  try{
+    const r = await api('calStatus');
+    let h = !r.configured ? '<p class="muted">Calendar sync is not set up on the server yet (admin: add CAL_CLIENT_ID, CAL_CLIENT_SECRET and PUBLIC_URL).</p>'
+      : r.connected ? `<p>✅ Connected: <b>${esc(r.email || 'Google account')}</b></p>
+          <div class="actions"><button class="btn soft sm" onclick="calSyncNow()">↻ Sync next 60 days</button><button class="btn ghost sm" onclick="calDisc()">Disconnect</button></div>`
+      : '<p class="muted" style="margin-bottom:10px">Not connected.</p><button class="btn" onclick="calConnect()">Connect Google Calendar</button>';
+    if (isAdmin()){
+      const t = await api('ttCalStatus');
+      h += '<div class="sec-title" style="margin-top:16px">Who has connected</div>' + t.users.map(u =>
+        `<div class="emp-item"><div class="info"><b>${esc(u.name)}</b><span>${u.connected ? '✅ ' + esc(u.email || 'connected') : '— not connected'}</span></div></div>`).join('');
+    }
+    box.innerHTML = h;
+  }catch(e){ box.innerHTML = '<p class="muted">' + esc(e.message || 'Could not load') + '</p>'; }
+}
+async function calConnect(){ try{ const r = await api('calAuthUrl'); window.open(r.url, '_blank'); toast('Allow access in the new tab, then come back'); }catch(e){ handleErr(e); } }
+async function calDisc(){
+  if (!await confirmBox('Disconnect Google Calendar?', 'New Time Table entries will stop going to your calendar. Existing events stay.', 'Disconnect', true)) return;
+  try{ await api('calDisconnect'); toast('Disconnected'); loadCal(); }catch(e){ handleErr(e); }
+}
+async function calSyncNow(){ try{ const r = await api('calSyncAll'); toast(r.queued + ' slots are syncing in the background'); }catch(e){ handleErr(e); } }
+window.addEventListener('focus', () => { if (S.view === 'settings') loadCal(); });
 function download(name, rows){
   const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type:'text/csv' })); a.download = name; a.click();

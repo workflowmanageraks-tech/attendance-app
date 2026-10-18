@@ -164,6 +164,7 @@ function install(wb, env, rt) {
       s.getRange(2, 1, last - 1, 2).getValues().forEach(r => { if (String(r[0]) !== '') out[String(r[0])] = String(r[1]); });
       return out;
     },
+    deleteProperty(k) { this.setProperty(k, ''); },
     setProperty(k, v) {
       const s = propsSheet(), last = s.getLastRow();
       const vals = last < 2 ? [] : s.getRange(2, 1, last - 1, 2).getValues();
@@ -171,6 +172,7 @@ function install(wb, env, rt) {
       if (i >= 0) s.getRange(i + 2, 2).setValue(String(v)); else s.appendRow([k, String(v)]);
     }
   };
+  globalThis.CAL_RT_ = rt;                       // Google Calendar jobs queued by Code.gs, run by server.js
   Object.assign(globalThis, {
     SpreadsheetApp: { getActiveSpreadsheet: () => wb, getUi: () => ({ alert() {}, ButtonSet: {}, Button: {} }) },
     PropertiesService: { getScriptProperties: () => props },
