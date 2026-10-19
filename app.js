@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals(); chatReset(); vcReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -325,6 +325,7 @@ function enterApp(){
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
   refreshUser();
   go(S.view);
+  chatStart(); vcStart();
   if (isAdmin()) loadLogs();
 }
 async function boot(){
@@ -705,6 +706,7 @@ const TITLES = {
   expenses:['Expenses','Track income and spending'],
   work:['Work','Daily work record — whole year'],
   timetable:['Time Table','Plan your day in 30-minute slots'],
+  chat:['Chat','Message other users — see who is online'],
   passwords:['Password Manager','Save website logins and copy them in one tap'],
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
@@ -729,6 +731,8 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(fals
 })();
 function go(v){
   setMenu(false);
+  if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
+  if (v !== 'chat') document.body.classList.remove('chat-conv');
   S.view = v; applyAccess(); v = S.view;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.v === v));
   $('#pageTitle').textContent = TITLES[v][0];
@@ -777,12 +781,12 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay();
-  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -2138,3 +2142,494 @@ async function doExport(kind, fmt){
 })();
 
 boot();
+
+/* =====================================================================
+   VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
+   ===================================================================== */
+const chatFresh = () => ({ users:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
+S.chat = chatFresh();
+let chatTimer = null;
+function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); document.body.classList.remove('chat-conv'); chatBadge(); }
+function chatStart(){
+  clearInterval(chatTimer);
+  chatLoadUsers();                                    // also tells the server "I am online"
+  chatTimer = setInterval(chatTick, 4000);
+}
+/* silent request (no top progress bar) — used for polling and sending */
+async function chatApi(action, payload = {}){
+  const j = await callServer({ action, token:S.token, ...payload });
+  if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; throw e; }
+  return j;
+}
+function chatErr(e){ if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
+const chatPeer = id => S.chat.users.find(u => u.id === id);
+function chatBadge(){
+  const b = $('#chatBadge'); if (!b) return;
+  const n = S.chat.unread || 0;
+  b.textContent = n > 99 ? '99+' : n; b.classList.toggle('hidden', n < 1);
+}
+function chatSumUnread(){ S.chat.unread = S.chat.users.reduce((a, u) => a + (u.unread || 0), 0); chatBadge(); }
+
+/* "5 min ago" style text (the server sends how long ago, so a wrong phone clock does not matter) */
+function chatAgo(u){
+  if (u.ago === null || u.ago === undefined) return null;
+  const ms = u.ago + (Date.now() - (u.at || Date.now())), m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' hr' + (m % 60 ? ' ' + (m % 60) + ' min' : '') + ' ago';
+  const d = Math.floor(h / 24);
+  return d + (d === 1 ? ' day ago' : ' days ago');
+}
+function chatStatus(u){
+  if (u.online) return { cls:'on', txt:'Online' };
+  const a = chatAgo(u);
+  return { cls:'off', txt: a ? 'Offline · last seen ' + a : 'Offline' };
+}
+const CH_COL = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ec4899','#8b5cf6','#14b8a6','#ef4444','#64748b','#84cc16'];
+const chColor = id => CH_COL[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % CH_COL.length];
+const chInit = u => esc((u.name || u.username || '?').trim().charAt(0).toUpperCase());
+function chClock(t){ return new Date(t).toLocaleTimeString('en-IN', { hour:'numeric', minute:'2-digit' }); }
+function chDayLabel(t){
+  const d = new Date(t), n = new Date(), y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
+  const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (same(d, n)) return 'Today'; if (same(d, y)) return 'Yesterday';
+  return d.toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' });
+}
+function chListTime(t){
+  if (!t) return '';
+  return chDayLabel(t) === 'Today' ? chClock(t) : chDayLabel(t) === 'Yesterday' ? 'Yesterday' : new Date(t).toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+}
+
+function vChat(){
+  return `<div class="chat ${S.chat.with ? 'in-conv' : ''}" id="chatRoot">
+    <div class="card ch-side">
+      <div class="ch-top"><h3>💬 Chats</h3><input class="input" id="chSearch" placeholder="Search user…" autocomplete="off" value="${esc(S.chat.q)}"></div>
+      <div class="ch-list" id="chList"></div>
+    </div>
+    <div class="card ch-pane" id="chPane"></div>
+  </div>`;
+}
+function bindChat(){
+  document.body.classList.toggle('chat-conv', !!S.chat.with);
+  $('#chSearch').oninput = e => { S.chat.q = e.target.value; chatRenderList(); };
+  chatRenderList(); chatRenderPane();
+  if (!S.chat.loaded) chatLoadUsers();
+  if (S.chat.with) chatFetchConv(true);
+}
+function chatRenderList(){
+  const el = $('#chList'); if (!el) return;
+  const q = S.chat.q.trim().toLowerCase();
+  const list = S.chat.users.filter(u => !q || (u.name + ' ' + u.username).toLowerCase().includes(q))
+    .sort((a, b) => (b.lastTime - a.lastTime) || (b.online - a.online) || String(a.name).localeCompare(String(b.name)));
+  if (S.chat.err && !S.chat.loaded){
+    el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">Could not load users</b><div style="margin:6px 0 12px;word-break:break-word">${esc(S.chat.err)}</div><button class="btn sm" onclick="S.chat.err='';chatRenderList();chatLoadUsers()">↻ Try again</button></div>`; return;
+  }
+  if (!S.chat.loaded){ el.innerHTML = '<div class="empty-state">Loading users…</div>'; return; }
+  if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No other users yet'}</div>`; return; }
+  el.innerHTML = list.map(u => {
+    const st = chatStatus(u);
+    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : ''}${esc(u.lastText)}</div>` : '';
+    return `<div class="ch-row ${S.chat.with === u.id ? 'sel' : ''}" onclick="chatOpen('${esc(u.id)}')">
+      <div class="ch-av" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot ${st.cls}"></span></div>
+      <div class="ch-info">
+        <div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot ${st.cls}"></span><span class="tm">${esc(chListTime(u.lastTime))}</span></div>
+        <div class="ch-stat ${st.cls}">${esc(st.txt)}</div>${prev}
+      </div>${u.unread ? `<span class="ch-unread">${u.unread > 99 ? '99+' : u.unread}</span>` : ''}</div>`;
+  }).join('');
+}
+function chatRenderPane(){
+  const pane = $('#chPane'); if (!pane) return;
+  const u = chatPeer(S.chat.with);
+  if (!S.chat.with || !u){
+    pane.innerHTML = '<div class="ch-empty"><div><div class="big">💬</div><b>Select a user to start chatting</b><div style="margin-top:4px">Your messages will appear here.</div></div></div>';
+    $('#chatRoot').classList.remove('in-conv'); return;
+  }
+  $('#chatRoot').classList.add('in-conv');
+  pane.innerHTML = `<div class="ch-head">
+      <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
+      <div class="ch-av" id="chHAv" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
+      <div class="ch-info"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
+      <div class="ch-calls"><button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button></div>
+    </div>
+    <div class="ch-msgs" id="chMsgs"></div>
+    <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
+      <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
+  const ta = $('#chInput');
+  ta.value = S.chat.drafts[u.id] || '';
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; };
+  ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); };
+  ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches){ e.preventDefault(); chatSend(); } };
+  grow(); chatHeader(); S.chat.sig = ''; chatRenderMsgs(true);
+}
+function chatHeader(){
+  const u = chatPeer(S.chat.with); if (!u) return;
+  const st = chatStatus(u), t = $('#chHStat'); if (!t) return;
+  t.className = 'ch-stat ' + st.cls; t.textContent = st.txt;
+  $('#chHDot').className = 'dot ' + st.cls; $('#chHAv .dot').className = 'dot ' + st.cls;
+}
+function chatRenderMsgs(toBottom){
+  const box = $('#chMsgs'); if (!box) return;
+  const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0;
+  const sig = arr.map(m => m.id + (m.state || '') + (m.mine && m.t <= pr ? 'r' : '')).join(',') + '|' + S.chat.histLoaded[id];
+  if (sig === S.chat.sig && !toBottom) return;
+  S.chat.sig = sig;
+  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+  if (!arr.length){
+    box.innerHTML = `<div class="ch-load">${S.chat.histLoaded[id] ? 'No messages yet — say hi 👋' : 'Loading messages…'}</div>`;
+    return;
+  }
+  let html = '', day = '';
+  arr.forEach(m => {
+    const dl = chDayLabel(m.t);
+    if (dl !== day){ day = dl; html += `<div class="ch-day">${esc(dl)}</div>`; }
+    let meta = esc(chClock(m.t));
+    if (m.mine){
+      if (m.state === 'pending') meta = 'Sending…';
+      else if (m.state === 'failed') meta = 'Not sent · tap to retry';
+      else meta += ` <span class="tick ${m.t <= pr ? 'read' : ''}">${m.t <= pr ? '✓✓' : '✓'}</span>`;
+    }
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}><div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
+  });
+  box.innerHTML = html;
+  if (toBottom || near) box.scrollTop = box.scrollHeight;
+}
+function chatMerge(id, list){
+  const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
+  list.forEach(m => {
+    const i = a.findIndex(x => x.id === m.id);
+    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text){ a[i] = m; changed = true; } }
+    else { a.push(m); changed = true; }
+  });
+  if (changed) a.sort((x, y) => x.t - y.t);
+  return changed;
+}
+const chatAfter = id => (S.chat.msgs[id] || []).reduce((mx, m) => m.state ? mx : Math.max(mx, m.t), 0);
+
+async function chatLoadUsers(){
+  if (S.chat.loadingUsers || !S.token) return;
+  S.chat.loadingUsers = true;
+  try{
+    const r = await chatApi('chatUsers'), at = Date.now();
+    const incoming = r.unread > S.chat.unread && S.view !== 'chat' && S.chat.loaded;
+    S.chat.users = r.users.map(u => ({ ...u, at }));
+    S.chat.users.forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
+    S.chat.loaded = true; chatSumUnread();
+    if (incoming) toast('💬 New message');
+    S.chat.err = '';
+    if (S.view === 'chat'){ chatRenderList(); chatHeader(); }
+  }catch(e){ chatErr(e); S.chat.err = (e && e.message) || 'Request failed'; if (S.view === 'chat') chatRenderList(); }
+  finally{ S.chat.loadingUsers = false; }
+}
+async function chatPingNow(){
+  try{
+    const r = await chatApi('chatPing');
+    if (r.unread > S.chat.unread && S.view !== 'chat') toast('💬 New message');
+    S.chat.unread = r.unread; chatBadge();
+  }catch(e){ chatErr(e); }
+}
+async function chatFetchConv(first){
+  const c = S.chat, id = c.with;
+  if (!id || c.fetching) return;
+  c.fetching = true;
+  try{
+    const r = await chatApi('chatFetch', { with:id, after:chatAfter(id) });
+    if (c.with !== id) return;                                  // the user opened another chat meanwhile
+    let ch = chatMerge(id, r.messages);
+    if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
+    if (r.peerRead !== c.peerRead[id]){ c.peerRead[id] = r.peerRead; ch = true; }
+    const u = chatPeer(id);
+    if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
+    if (u && r.messages.some(m => !m.mine)){
+      u.unread = 0; chatSumUnread();
+      const last = r.messages[r.messages.length - 1]; u.lastText = last.text.slice(0, 80); u.lastTime = last.t; u.lastMine = last.mine;
+      chatRenderList();
+    }
+    chatHeader();
+    if (ch || first) chatRenderMsgs(!!first);
+  }catch(e){ chatErr(e); }
+  finally{ c.fetching = false; }
+}
+function chatOpen(id){
+  const c = S.chat; if (!chatPeer(id)) return;
+  c.with = id; const u = chatPeer(id); if (u){ u.unread = 0; chatSumUnread(); }
+  document.body.classList.add('chat-conv');
+  chatRenderList(); chatRenderPane(); chatFetchConv(true);
+  if (!window.matchMedia('(max-width:860px)').matches){ const t = $('#chInput'); if (t) t.focus(); }
+}
+function chatBack(){
+  S.chat.with = null; document.body.classList.remove('chat-conv');
+  chatRenderList(); chatRenderPane(); chatLoadUsers();
+}
+async function chatSend(){
+  const c = S.chat, to = c.with, ta = $('#chInput'); if (!to || !ta) return;
+  const text = ta.value.trim(); if (!text) return;
+  ta.value = ''; c.drafts[to] = ''; ta.style.height = 'auto'; ta.focus();
+  const cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
+  const m = { id:cid, t:Date.now(), mine:true, text, state:'pending' };
+  (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
+  chatRenderMsgs(true);
+  await chatDeliver(to, m);
+}
+async function chatDeliver(to, m){
+  const c = S.chat;
+  try{
+    const r = await chatApi('chatSend', { to, cid:m.id, text:m.text });
+    const arr = c.msgs[to] || [], i = arr.findIndex(x => x.id === m.id);
+    if (i >= 0) arr[i] = r.message; else arr.push(r.message);
+    arr.sort((x, y) => x.t - y.t);
+    const u = chatPeer(to); if (u){ u.lastText = m.text.slice(0, 80); u.lastTime = r.message.t; u.lastMine = true; }
+  }catch(e){ m.state = 'failed'; chatErr(e); if (!e.code || e.code === 'ERR') toast(e.message || 'Message not sent', true); }
+  if (c.with === to) chatRenderMsgs(true);
+  chatRenderList();
+}
+function chatRetry(id){
+  const to = S.chat.with, m = (S.chat.msgs[to] || []).find(x => x.id === id);
+  if (!m || m.state !== 'failed') return;
+  m.state = 'pending'; chatRenderMsgs(); chatDeliver(to, m);
+}
+function chatTick(){
+  const c = S.chat;
+  if (!S.token || !S.d || document.hidden) return;                 // a hidden tab stops pinging, so the person shows as offline
+  c.n++;
+  if (S.view === 'chat'){
+    if (c.with) chatFetchConv();
+    if (c.n % 3 === 0 || !c.loaded) chatLoadUsers();
+    else { chatHeader(); }
+  } else if (c.n % 5 === 0) chatPingNow();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && S.d){ chatLoadUsers(); if (S.view === 'chat' && S.chat.with) chatFetchConv(); } });
+
+/* ---------- add the "Passwords" tab to the menu (copies the look of the Work tab) ---------- */
+(function addPasswordsTab(){
+  const nav = $('#nav'), src = nav && nav.querySelector('[data-v="work"]');
+  if (!src || nav.querySelector('[data-v="passwords"]')) return;
+  const b = src.cloneNode(true);
+  b.dataset.v = 'passwords'; b.classList.remove('active', 'hidden');
+  const ic = b.querySelector('svg, img, i');
+  if (ic){ const sp = document.createElement('span'); sp.textContent = '🔑'; ic.replaceWith(sp); }
+  const tn = []; const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+  while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
+  if (ic){ if (tn.length) tn[tn.length - 1].nodeValue = 'Passwords'; else b.append(' Passwords'); }
+  else if (tn.length >= 2){ tn[0].nodeValue = '🔑'; tn[tn.length - 1].nodeValue = 'Passwords'; }
+  else if (tn.length === 1) tn[0].nodeValue = '🔑 Passwords';
+  else b.textContent = '🔑 Passwords';
+  (nav.querySelector('[data-v="timetable"]') || src).after(b);
+})();
+
+/* ---------- add the "Links" tab to the menu (right after Passwords) ---------- */
+(function addLinksTab(){
+  const nav = $('#nav'), src = nav && nav.querySelector('[data-v="passwords"]');
+  if (!src || nav.querySelector('[data-v="links"]')) return;
+  const b = src.cloneNode(true);
+  b.dataset.v = 'links'; b.classList.remove('active', 'hidden');
+  const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT), tn = [];
+  while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
+  tn.forEach(n => { n.nodeValue = n.nodeValue.replace('🔑', '🔗').replace('Passwords', 'Links'); });
+  src.after(b);
+})();
+
+boot();
+
+/* =====================================================================
+   VOICE / VIDEO CALLS  (WebRTC — the audio/video goes phone-to-phone; the server only passes the offer/answer)
+   ===================================================================== */
+const VC = { timer:null, polling:false, busy:false, cid:null, pc:null, local:null, role:'', kind:'audio', peer:null, incoming:null,
+  started:0, tick:null, ring:null, ice:null, muted:false, camOff:false, ending:false, lost:null, answered:false };
+let vcActx = null;
+function vcUnlock(){ try { vcActx = vcActx || new (window.AudioContext || window.webkitAudioContext)(); if (vcActx.state === 'suspended') vcActx.resume(); } catch {} }
+['pointerdown', 'touchend', 'keydown'].forEach(ev => document.addEventListener(ev, vcUnlock, { passive:true }));
+function vcBeep(freq, dur){
+  if (!vcActx) return;
+  try {
+    const o = vcActx.createOscillator(), g = vcActx.createGain(), t = vcActx.currentTime;
+    o.type = 'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(vcActx.destination); o.start(t); o.stop(t + dur + 0.05);
+  } catch {}
+}
+function vcRingStart(incoming){
+  vcRingStop();
+  const once = () => {
+    if (incoming){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); try { navigator.vibrate && navigator.vibrate([350, 150, 350]); } catch {} }
+    else vcBeep(440, .7);
+  };
+  once(); VC.ring = setInterval(once, incoming ? 2200 : 3200);
+}
+function vcRingStop(){ clearInterval(VC.ring); VC.ring = null; try { navigator.vibrate && navigator.vibrate(0); } catch {} }
+
+/* ---------- full-screen call screen ---------- */
+function vcRoot(){
+  let el = document.getElementById('vcUI'); if (el) return el;
+  el = document.createElement('div'); el.id = 'vcUI'; el.className = 'vc hidden';
+  el.innerHTML = `<video id="vcRemote" class="vc-remote" autoplay playsinline></video>
+    <video id="vcLocal" class="vc-local hidden" autoplay playsinline muted></video>
+    <div class="vc-top"><div class="vc-av" id="vcAv"></div><div class="vc-name" id="vcName"></div><div class="vc-stat" id="vcStat"></div></div>
+    <div class="vc-bar" id="vcBar"></div>`;
+  document.body.appendChild(el); return el;
+}
+function vcOpen(name, id, stat){
+  const el = vcRoot(); el.classList.remove('hidden', 'vc-live'); el.classList.toggle('vc-audio', VC.kind !== 'video');
+  document.getElementById('vcName').textContent = name || '';
+  const av = document.getElementById('vcAv'); av.textContent = (name || '?').trim().charAt(0).toUpperCase(); av.style.background = chColor(id || name);
+  vcStat(stat || '');
+  document.body.classList.add('vc-open');
+}
+const vcStat = t => { const e = document.getElementById('vcStat'); if (e) e.textContent = t; };
+function vcBar(mode){
+  const b = (cls, ico, label, fn) => `<button class="vc-btn ${cls}" onclick="${fn}" aria-label="${label}"><span>${ico}</span><small>${label}</small></button>`;
+  let h = '';
+  if (mode === 'incoming') h = b('red', '✖', 'Decline', 'vcDecline()') + b('green', '📞', 'Accept', 'vcAccept()');
+  else {
+    h = b('dark' + (VC.muted ? ' on' : ''), VC.muted ? '🔇' : '🎤', VC.muted ? 'Unmute' : 'Mute', 'vcMute()');
+    if (VC.kind === 'video') h += b('dark' + (VC.camOff ? ' on' : ''), VC.camOff ? '🚫' : '📷', VC.camOff ? 'Camera on' : 'Camera off', 'vcCam()');
+    h += b('red', '✖', 'End', 'vcHangup()');
+  }
+  document.getElementById('vcBar').innerHTML = h;
+}
+function vcClose(){
+  const el = document.getElementById('vcUI'); if (el) el.classList.add('hidden');
+  document.body.classList.remove('vc-open');
+}
+
+/* ---------- WebRTC plumbing ---------- */
+async function vcIce(){
+  if (VC.ice) return VC.ice;
+  try { VC.ice = (await chatApi('callConfig')).iceServers; } catch { VC.ice = [{ urls:'stun:stun.l.google.com:19302' }]; }
+  return VC.ice;
+}
+async function vcMedia(kind){
+  const video = kind === 'video' ? { facingMode:'user', width:{ ideal:640 }, height:{ ideal:480 } } : false;
+  VC.local = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true }, video });
+  const lv = document.getElementById('vcLocal');
+  if (kind === 'video'){ lv.srcObject = VC.local; lv.classList.remove('hidden'); lv.play && lv.play().catch(() => {}); }
+  else lv.classList.add('hidden');
+}
+function vcMakePc(){
+  const pc = new RTCPeerConnection({ iceServers: VC.ice }), remote = new MediaStream(), rv = document.getElementById('vcRemote');
+  rv.srcObject = remote;
+  pc.ontrack = e => { remote.addTrack(e.track); rv.play && rv.play().catch(() => {}); };
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === 'connected'){ clearTimeout(VC.lost); vcConnected(); }
+    else if (s === 'failed') vcEnd('Call failed — check the internet', true);
+    else if (s === 'disconnected'){ clearTimeout(VC.lost); VC.lost = setTimeout(() => { if (VC.pc && VC.pc.connectionState !== 'connected') vcEnd('Connection lost', true); }, 10000); }
+  };
+  VC.local.getTracks().forEach(t => pc.addTrack(t, VC.local));
+  return pc;
+}
+/* wait (max 3 s) until the phone has found its network addresses, so the offer/answer carries them all */
+function vcGathered(pc){
+  return new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    const done = () => { pc.removeEventListener('icegatheringstatechange', chk); clearTimeout(t); res(); };
+    const chk = () => { if (pc.iceGatheringState === 'complete') done(); };
+    const t = setTimeout(done, 3000);
+    pc.addEventListener('icegatheringstatechange', chk);
+  });
+}
+const vcDesc = pc => ({ type:pc.localDescription.type, sdp:pc.localDescription.sdp });
+function vcConnected(){
+  if (VC.started) return;
+  VC.started = Date.now(); vcRingStop(); vcBar('call');
+  document.getElementById('vcUI').classList.add('vc-live');
+  const upd = () => { const s = Math.floor((Date.now() - VC.started) / 1000); vcStat(String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0')); };
+  upd(); VC.tick = setInterval(upd, 1000);
+}
+function vcErrText(e){
+  if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) return 'Please allow microphone' + (VC.kind === 'video' ? ' and camera' : '') + ' access for this site.';
+  if (e && (e.name === 'NotFoundError' || e.name === 'OverconstrainedError')) return 'No microphone' + (VC.kind === 'video' ? ' / camera' : '') + ' found on this device.';
+  if (e && e.name === 'NotReadableError') return 'The microphone or camera is being used by another app.';
+  return (e && e.message) || 'Could not start the call.';
+}
+function vcCleanup(){
+  vcRingStop(); clearInterval(VC.tick); clearTimeout(VC.lost);
+  try { VC.pc && VC.pc.close(); } catch {}
+  try { VC.local && VC.local.getTracks().forEach(t => t.stop()); } catch {}
+  ['vcRemote', 'vcLocal'].forEach(id => { const v = document.getElementById(id); if (v){ v.srcObject = null; } });
+  Object.assign(VC, { busy:false, cid:null, pc:null, local:null, role:'', peer:null, incoming:null, started:0, tick:null, muted:false, camOff:false, ending:false, answered:false });
+  vcClose();
+}
+async function vcFail(e){
+  const msg = vcErrText(e), cid = VC.cid;
+  if (cid){ try { await chatApi('callEnd', { cid, reason:'failed' }); } catch {} }
+  vcCleanup(); toast(msg, true); chatErr(e);
+}
+async function vcEnd(msg, notify){
+  if (VC.ending) return; VC.ending = true;
+  const cid = VC.cid || (VC.incoming && VC.incoming.id), dur = VC.started ? Math.round((Date.now() - VC.started) / 1000) : 0;
+  if (notify && cid){ try { await chatApi('callEnd', { cid, reason: /fail|lost/i.test(msg || '') ? 'failed' : '' }); } catch {} }
+  vcCleanup();
+  toast(msg || (dur ? 'Call ended · ' + Math.floor(dur / 60) + ':' + String(dur % 60).padStart(2, '0') : 'Call ended'), !!msg && /fail|lost/i.test(msg));
+}
+
+/* ---------- caller ---------- */
+async function vcDial(kind){
+  const u = chatPeer(S.chat.with); if (!u) return;
+  if (VC.busy || VC.cid || VC.incoming) return toast('You are already in a call', true);
+  if (!(window.isSecureContext && navigator.mediaDevices && window.RTCPeerConnection)) return toast('Calls need the https address and an up-to-date browser', true);
+  vcUnlock();
+  VC.busy = true; VC.role = 'caller'; VC.kind = kind; VC.peer = { id:u.id, name:u.name || u.username }; VC.ending = false;
+  vcOpen(VC.peer.name, u.id, 'Starting…'); vcBar('call');
+  try {
+    await vcMedia(kind); await vcIce();
+    VC.pc = vcMakePc();
+    await VC.pc.setLocalDescription(await VC.pc.createOffer());
+    await vcGathered(VC.pc);
+    const r = await chatApi('callStart', { to:u.id, kind, offer:vcDesc(VC.pc) });
+    VC.cid = r.id; vcStat('Calling…'); vcRingStart(false); vcTick();
+  } catch (e) { vcFail(e); }
+}
+
+/* ---------- receiver ---------- */
+function vcShowIncoming(inc){
+  VC.incoming = inc; VC.kind = inc.kind; VC.peer = { id:inc.from, name:inc.fromName };
+  vcOpen(inc.fromName, inc.from, 'Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call…'); vcBar('incoming'); vcRingStart(true);
+}
+async function vcAccept(){
+  const inc = VC.incoming; if (!inc || VC.busy) return;
+  vcUnlock(); vcRingStop(); VC.busy = true; VC.role = 'callee'; VC.ending = false;
+  vcStat('Connecting…'); vcBar('call');
+  try {
+    await vcMedia(inc.kind); await vcIce();
+    VC.pc = vcMakePc();
+    await VC.pc.setRemoteDescription(inc.offer);
+    await VC.pc.setLocalDescription(await VC.pc.createAnswer());
+    await vcGathered(VC.pc);
+    await chatApi('callAnswer', { cid:inc.id, answer:vcDesc(VC.pc) });
+    VC.cid = inc.id; VC.incoming = null; VC.answered = true;
+  } catch (e) { VC.cid = inc.id; vcFail(e); }
+}
+function vcDecline(){ vcEnd('Call declined', true); }
+function vcHangup(){ vcEnd('', true); }
+function vcMute(){ VC.muted = !VC.muted; VC.local && VC.local.getAudioTracks().forEach(t => t.enabled = !VC.muted); vcBar('call'); }
+function vcCam(){ VC.camOff = !VC.camOff; VC.local && VC.local.getVideoTracks().forEach(t => t.enabled = !VC.camOff); vcBar('call'); }
+
+/* ---------- polling (idle: look for incoming calls ; in a call: follow its state) ---------- */
+async function vcTick(){
+  if (!S.token || !S.d || VC.polling || VC.ending) return;
+  if (document.hidden && !VC.cid && !VC.incoming) return;
+  VC.polling = true;
+  try {
+    if (VC.cid){
+      const { call } = await chatApi('callPoll', { cid:VC.cid });
+      if (!VC.cid) return;
+      if (call.state === 'ended'){
+        const why = { declined:'Call declined', cancelled:'Call cancelled', missed:'No answer', lost:'Connection lost', failed:'Call failed', gone:'Call ended' }[call.reason];
+        return vcEnd(call.byMe ? '' : (why || ''), false);
+      }
+      if (call.state === 'active' && call.answer && VC.role === 'caller' && !VC.answered && VC.pc){
+        VC.answered = true; vcRingStop(); vcStat('Connecting…');
+        await VC.pc.setRemoteDescription(call.answer);
+      }
+    } else if (!VC.busy){
+      const r = await chatApi('callPoll', {});
+      if (r.incoming && !VC.incoming) vcShowIncoming(r.incoming);
+      else if (!r.incoming && VC.incoming){ VC.ending = true; vcCleanup(); toast('Missed call'); }
+    }
+  } catch (e) { chatErr(e); }
+  finally { VC.polling = false; }
+}
+function vcStart(){ clearInterval(VC.timer); VC.timer = setInterval(vcTick, 1500); }
+function vcReset(){ clearInterval(VC.timer); VC.timer = null; if (VC.cid || VC.incoming || VC.busy) { VC.ending = false; vcEnd('', true); } else vcCleanup(); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) vcTick(); });

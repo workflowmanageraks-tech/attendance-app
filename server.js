@@ -199,6 +199,79 @@ function makeApp(store, env) {
     return { ok: true, token: globalThis.newToken_(acc.id), username: acc.username };
   }
 
+  // ---------- Voice / video calls (WebRTC signalling over plain HTTPS polling, kept in memory) ----------
+  // Audio and video never pass through this server: it only hands the "offer" / "answer" between the two phones.
+  const CALL_ACTIONS = new Set(['callConfig', 'callStart', 'callPoll', 'callAnswer', 'callEnd']);
+  const vcalls = new Map(), vbusy = new Map();          // callId -> call ; userId -> callId
+  let iceCache = { at: 0, v: null };
+  async function iceServers() {
+    if (iceCache.v && Date.now() - iceCache.at < 600000) return iceCache.v;   // { servers, turn }
+    let v = null;
+    if (env.ICE_SERVERS) { try { v = JSON.parse(env.ICE_SERVERS); } catch (e) { v = null; } }
+    else if (env.METERED_APP && env.METERED_API_KEY) {
+      try { const r = await fetch('https://' + env.METERED_APP + '.metered.live/api/v1/turn/credentials?apiKey=' + encodeURIComponent(env.METERED_API_KEY)); v = await r.json(); } catch (e) { v = null; }
+    }
+    const hasTurn = Array.isArray(v) && v.length > 0;
+    if (!hasTurn) v = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+    iceCache = { at: Date.now(), v: { servers: v, turn: hasTurn } }; return iceCache.v;
+  }
+  function vcSweep() {
+    const now = Date.now();
+    for (const c of vcalls.values()) {
+      if (c.state === 'ringing' && now - c.t0 > 45000) vcFinish(c, '', 'missed');
+      else if (c.state === 'active' && now - Math.min(c.seen.from, c.seen.to) > 20000) vcFinish(c, '', 'lost');
+      else if (c.state === 'ended' && now - c.endAt > 30000) vcalls.delete(c.id);
+    }
+  }
+  function vcFinish(c, by, reason) {
+    if (c.state === 'ended') return;
+    c.state = 'ended'; c.endedBy = by; c.reason = reason; c.endAt = Date.now();
+    if (vbusy.get(c.from) === c.id) vbusy.delete(c.from);
+    if (vbusy.get(c.to) === c.id) vbusy.delete(c.to);
+  }
+  const vcSdp = o => { if (!o || typeof o !== 'object' || typeof o.sdp !== 'string' || o.sdp.length > 60000 || (o.type !== 'offer' && o.type !== 'answer')) globalThis.fail_('Bad call data.', 'CALL'); return { type: o.type, sdp: o.sdp }; };
+  async function callRoute(req) {
+    const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    vcSweep(); const a = req.action, now = Date.now();
+    if (a === 'callConfig') { const r = await iceServers(); return { ok: true, iceServers: r.servers, turn: r.turn }; }
+    if (a === 'callStart') {
+      const to = String(req.to || ''), kind = req.kind === 'video' ? 'video' : 'audio';
+      const S0 = globalThis.readSettings_().values, peer = to && to !== uid ? globalThis.getAccount_(to, S0) : null;
+      if (!peer || !peer.active || !peer.username) globalThis.fail_('That user was not found.', 'CALL');
+      if (vbusy.has(uid)) globalThis.fail_('You are already in a call.', 'BUSY');
+      if (vbusy.has(to)) globalThis.fail_((peer.name || peer.username) + ' is busy on another call.', 'BUSY');
+      const me = globalThis.getAccount_(uid, S0), id = crypto.randomBytes(9).toString('hex');
+      const c = { id, from: uid, to, fromName: (me && (me.name || me.username)) || 'Someone', kind, offer: vcSdp(req.offer), answer: null,
+        state: 'ringing', t0: now, seen: { from: now, to: now }, endedBy: '', reason: '', endAt: 0 };
+      vcalls.set(id, c); vbusy.set(uid, id); vbusy.set(to, id);
+      return { ok: true, id };
+    }
+    if (a === 'callPoll') {
+      const c = vcalls.get(String(req.cid || ''));
+      if (req.cid) {                                       // I am in this call
+        if (!c || (c.from !== uid && c.to !== uid)) return { ok: true, call: { state: 'ended', reason: 'gone' } };
+        c.seen[c.from === uid ? 'from' : 'to'] = now;
+        return { ok: true, call: { state: c.state, answer: c.from === uid ? c.answer : null, reason: c.reason, byMe: c.endedBy === uid } };
+      }
+      const cur = vcalls.get(vbusy.get(uid) || '');         // idle: is somebody calling me?
+      if (cur && cur.to === uid && cur.state === 'ringing')
+        return { ok: true, incoming: { id: cur.id, from: cur.from, fromName: cur.fromName, kind: cur.kind, offer: cur.offer, age: now - cur.t0 } };
+      return { ok: true, incoming: null };
+    }
+    const c = vcalls.get(String(req.cid || ''));
+    if (!c || (c.from !== uid && c.to !== uid)) globalThis.fail_('This call has ended.', 'CALL');
+    if (a === 'callAnswer') {
+      if (c.to !== uid || c.state !== 'ringing') globalThis.fail_('This call has ended.', 'CALL');
+      c.answer = vcSdp(req.answer); c.state = 'active'; c.seen = { from: now, to: now };
+      return { ok: true };
+    }
+    if (a === 'callEnd') {
+      const why = String(req.reason || '');
+      vcFinish(c, uid, c.state === 'ringing' ? (c.to === uid ? 'declined' : 'cancelled') : (why === 'failed' ? 'failed' : 'hangup'));
+      return { ok: true };
+    }
+  }
+
   let chain = Promise.resolve();
   async function run(body) {
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
@@ -220,7 +293,12 @@ function makeApp(store, env) {
     if (rt.delay) await new Promise(r => setTimeout(r, Math.min(rt.delay, 1500)));
     return res;
   }
-  return { handle: body => (chain = chain.then(() => run(body), () => run(body))),
+  const fastCall = body => {                           // call polling never waits behind slow sheet saves
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || !CALL_ACTIONS.has(r.action)) return null;
+    return Promise.resolve().then(() => callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
+  };
+  return { handle: body => fastCall(body) || (chain = chain.then(() => run(body), () => run(body))),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
 }
 
