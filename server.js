@@ -276,7 +276,7 @@ function makeApp(store, env) {
   // The server ONLY parses. Nothing is saved here: the app shows the proposal, the user confirms,
   // and the app then runs the normal actions (setAttendance / addExpense / addWork) with all usual permission checks.
   const AI_ACTIONS = new Set(['aiParse']);
-  const aiHits = new Map();
+  const aiHits = new Map(), aiModel = { name: '' };
   const isoDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !isNaN(new Date(v + 'T00:00:00Z')) ? String(v) : '';
   async function aiRoute(req) {
     const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
@@ -298,17 +298,34 @@ function makeApp(store, env) {
       '{"type":"expense","date":"YYYY-MM-DD","amount":<number>,"category":"<category>","note":"<short note>"}\n' +
       '{"type":"work","date":"YYYY-MM-DD","name":"","product":"","number":"","sticker":"","desc":"<what was done>"}\n' +
       'Never invent actions the user did not ask for. If the request is not about attendance, expense or work, return {"ops":[],"say":"..."}.';
-    const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
-    const gen = { responseMimeType: 'application/json', temperature: 0 };
-    if (/2\.5-flash/.test(model)) gen.thinkingConfig = { thinkingBudget: 0 };
-    let j;
-    try {
-      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+    const GL = 'https://generativelanguage.googleapis.com/v1beta/';
+    const callModel = async model => {
+      const gen = { responseMimeType: 'application/json', temperature: 0 };
+      if (/2\.5-flash/.test(model)) gen.thinkingConfig = { thinkingBudget: 0 };
+      const r = await fetch(GL + 'models/' + encodeURIComponent(model) + ':generateContent', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
         body: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents: [{ role: 'user', parts: [{ text }] }], generationConfig: gen }) });
-      j = await r.json();
-      if (!r.ok) { console.warn('Gemini error', r.status, JSON.stringify(j).slice(0, 300));
-        globalThis.fail_(r.status === 429 ? 'AI free limit reached for now. Try again in a minute.' : 'AI service error (' + r.status + ').', 'AI'); }
+      return { r, j: await r.json().catch(() => ({})) };
+    };
+    const pickModel = async () => {                    // ask Google which models this key can really use
+      const r = await fetch(GL + 'models?pageSize=100', { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
+      const l = ((await r.json().catch(() => ({}))).models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+        .map(m => String(m.name).replace(/^models\//, '')).filter(n => /^gemini-/.test(n) && !/(embed|image|tts|live|audio|vision|robotics|computer|thinking|exp)/.test(n));
+      const rank = n => (/flash/.test(n) ? 0 : 5) + (/lite/.test(n) ? 1 : 0) + (/preview/.test(n) ? 2 : 0) - (/latest/.test(n) ? 0.5 : 0);
+      return l.sort((a, b) => rank(a) - rank(b))[0] || '';
+    };
+    let j;
+    try {
+      const tryList = [aiModel.name || env.GEMINI_MODEL || 'gemini-2.5-flash'];
+      let res = await callModel(tryList[0]);
+      if (res.r.status === 404 || res.r.status === 400 && /model/i.test(JSON.stringify(res.j))) {
+        const alt = await pickModel();
+        if (alt && alt !== tryList[0]) { res = await callModel(alt); if (res.r.ok) aiModel.name = alt; }
+      } else if (res.r.ok) aiModel.name = tryList[0];
+      j = res.j;
+      if (!res.r.ok) { console.warn('Gemini error', res.r.status, JSON.stringify(j).slice(0, 400));
+        const why = (j.error && j.error.message) ? ' - ' + String(j.error.message).slice(0, 120) : '';
+        globalThis.fail_(res.r.status === 429 ? 'AI free limit reached for now. Try again in a minute.' : 'AI service error (' + res.r.status + ')' + why, 'AI'); }
     } catch (e) { if (e.code === 'AI') throw e; globalThis.fail_('Could not reach the AI service.', 'AI'); }
     let out; try { out = JSON.parse(String(((((j.candidates || [])[0] || {}).content || {}).parts || [])[0].text || '{}').replace(/```json|```/g, '')); } catch (e) { out = {}; }
     const okCodes = new Set(statuses.map(x => x.code.toUpperCase()));
