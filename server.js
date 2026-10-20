@@ -272,6 +272,65 @@ function makeApp(store, env) {
     }
   }
 
+  // ---------- AI assistant (Gemini): turns a spoken/typed sentence into a list of proposed actions ----------
+  // The server ONLY parses. Nothing is saved here: the app shows the proposal, the user confirms,
+  // and the app then runs the normal actions (setAttendance / addExpense / addWork) with all usual permission checks.
+  const AI_ACTIONS = new Set(['aiParse']);
+  const aiHits = new Map();
+  const isoDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !isNaN(new Date(v + 'T00:00:00Z')) ? String(v) : '';
+  async function aiRoute(req) {
+    const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    if (!env.GEMINI_API_KEY) globalThis.fail_('AI is not set up on the server (GEMINI_API_KEY missing).', 'AI');
+    const now = Date.now(), hits = (aiHits.get(uid) || []).filter(t => now - t < 60000);
+    if (hits.length >= 20) globalThis.fail_('Too many AI requests. Please wait a minute.', 'AI');
+    hits.push(now); aiHits.set(uid, hits);
+    const text = String(req.text || '').trim().slice(0, 500); if (!text) globalThis.fail_('Say or type something first.', 'AI');
+    const today = isoDate(req.today) || new Date().toISOString().slice(0, 10);
+    const statuses = (Array.isArray(req.statuses) ? req.statuses : []).slice(0, 30).map(x => ({ code: String(x.code || '').slice(0, 10), label: String(x.label || '').slice(0, 40) }));
+    const cats = (Array.isArray(req.categories) ? req.categories : []).slice(0, 60).map(x => String(x).slice(0, 40));
+    const sys = 'You are the command parser of an attendance / expense / work-log app. The user speaks Hindi, English or Hinglish. ' +
+      'Convert the user\'s sentence into actions. Today is ' + today + ' (' + new Date(today + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }) + '). ' +
+      'Resolve words like aaj/today, kal/tomorrow, parso, beeta hua kal/yesterday into exact YYYY-MM-DD dates.\n' +
+      'Attendance status codes (use ONLY these codes): ' + JSON.stringify(statuses) + '. Map words like present/hazir -> the code whose label means Present, chhutti/leave/absent likewise.\n' +
+      'Expense categories (use ONLY one of these names, pick the closest): ' + JSON.stringify(cats) + '.\n' +
+      'Reply with JSON only, shape: {"ops":[...],"say":"short reply in the user\'s language, only when ops is empty or something is unclear"}. Each op is one of:\n' +
+      '{"type":"attendance","dates":["YYYY-MM-DD",...],"code":"<status code>"}  (expand ranges like "15 se 18 tak" into every date, max 31)\n' +
+      '{"type":"expense","date":"YYYY-MM-DD","amount":<number>,"category":"<category>","note":"<short note>"}\n' +
+      '{"type":"work","date":"YYYY-MM-DD","name":"","product":"","number":"","sticker":"","desc":"<what was done>"}\n' +
+      'Never invent actions the user did not ask for. If the request is not about attendance, expense or work, return {"ops":[],"say":"..."}.';
+    const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+    const gen = { responseMimeType: 'application/json', temperature: 0 };
+    if (/2\.5-flash/.test(model)) gen.thinkingConfig = { thinkingBudget: 0 };
+    let j;
+    try {
+      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents: [{ role: 'user', parts: [{ text }] }], generationConfig: gen }) });
+      j = await r.json();
+      if (!r.ok) { console.warn('Gemini error', r.status, JSON.stringify(j).slice(0, 300));
+        globalThis.fail_(r.status === 429 ? 'AI free limit reached for now. Try again in a minute.' : 'AI service error (' + r.status + ').', 'AI'); }
+    } catch (e) { if (e.code === 'AI') throw e; globalThis.fail_('Could not reach the AI service.', 'AI'); }
+    let out; try { out = JSON.parse(String(((((j.candidates || [])[0] || {}).content || {}).parts || [])[0].text || '{}').replace(/```json|```/g, '')); } catch (e) { out = {}; }
+    const okCodes = new Set(statuses.map(x => x.code.toUpperCase()));
+    const ops = [];
+    (Array.isArray(out.ops) ? out.ops : []).slice(0, 10).forEach(o => {
+      if (!o || typeof o !== 'object') return;
+      if (o.type === 'attendance') {
+        const code = String(o.code || '').toUpperCase(), dates = [...new Set((Array.isArray(o.dates) ? o.dates : []).map(isoDate).filter(Boolean))].slice(0, 31);
+        if (okCodes.has(code) && dates.length) ops.push({ type: 'attendance', code, dates });
+      } else if (o.type === 'expense') {
+        const amount = Number(o.amount), date = isoDate(o.date) || today; if (!(amount > 0)) return;
+        const want = String(o.category || '').trim().toLowerCase(), category = cats.find(c => c.toLowerCase() === want) || cats.find(c => want && c.toLowerCase().includes(want)) || cats[0] || '';
+        if (category) ops.push({ type: 'expense', date, amount, category, note: String(o.note || '').slice(0, 300) });
+      } else if (o.type === 'work') {
+        const w = { type: 'work', date: isoDate(o.date) || today };
+        ['name', 'product', 'number', 'sticker', 'desc'].forEach(k => w[k] = String(o[k] || '').slice(0, k === 'desc' ? 500 : 100));
+        if (w.name || w.product || w.number || w.sticker || w.desc) ops.push(w);
+      }
+    });
+    return { ok: true, ops, say: String(out.say || '').slice(0, 300) };
+  }
+
   let chain = Promise.resolve();
   async function run(body) {
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
@@ -293,10 +352,10 @@ function makeApp(store, env) {
     if (rt.delay) await new Promise(r => setTimeout(r, Math.min(rt.delay, 1500)));
     return res;
   }
-  const fastCall = body => {                           // call polling never waits behind slow sheet saves
+  const fastCall = body => {                           // call polling / AI parsing never wait behind slow sheet saves
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
-    if (!r || !CALL_ACTIONS.has(r.action)) return null;
-    return Promise.resolve().then(() => callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
+    if (!r || !(CALL_ACTIONS.has(r.action) || AI_ACTIONS.has(r.action))) return null;
+    return Promise.resolve().then(() => AI_ACTIONS.has(r.action) ? aiRoute(r) : callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
   };
   return { handle: body => fastCall(body) || (chain = chain.then(() => run(body), () => run(body))),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };

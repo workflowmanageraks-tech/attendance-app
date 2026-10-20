@@ -522,3 +522,14 @@ main:has(.chat){padding-bottom:20px}
 .vc-btn small{font-size:12px;opacity:.9}
 .vc-btn:active span{transform:scale(.93)}
 body.vc-open{overflow:hidden}
+
+/* ---------- AI assistant ---------- */
+.ai-fab{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:120;width:58px;height:58px;border-radius:50%;border:0;
+  background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;font-size:26px;cursor:pointer;box-shadow:0 8px 24px rgba(79,70,229,.45)}
+.ai-fab:active{transform:scale(.94)}
+.ai-box{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line);border-radius:12px;padding:12px;font:inherit;font-size:16px;color:var(--ink);background:var(--card)}
+.ai-mic{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin:10px 0;padding:14px;border-radius:12px;border:1px dashed var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:700;font-size:16px;cursor:pointer}
+.ai-mic.on{background:var(--bad-soft);border-color:var(--bad);color:var(--bad);animation:aipulse 1.2s infinite}
+@keyframes aipulse{50%{opacity:.6}}
+.ai-op{padding:12px;border:1px solid var(--line);border-radius:12px;margin:8px 0;background:var(--brand-soft);line-height:1.45}
+.ai-op small{color:var(--muted)}

@@ -31,3 +31,11 @@ Open a chat and tap 📞 (voice) or 🎥 (video) at the top. The other person ge
 ## Fingerprint / Face unlock
 
 Settings > **Fingerprint / Face unlock** > *Enable on this device*. Next time the login screen shows **Unlock with fingerprint / face**. Uses the phone's own biometric (WebAuthn passkey); only a public key is stored on the server. Needs https. Optional env var `ALLOWED_ORIGIN` locks it to your site address.
+
+## AI assistant (Gemini) - voice / text commands
+
+Tap the round 🎤 button (bottom-right). Say or type e.g. "aaj ki present laga do", "kal se 3 din leave", "chai pe 40 rupaye kharcha". The AI only *proposes* actions; you confirm with ✅ and then the normal attendance / expense / work actions run with all usual permission checks.
+
+1. Get a free key at https://aistudio.google.com/apikey
+2. On Render add env var `GEMINI_API_KEY` (optional: `GEMINI_MODEL`, default `gemini-2.5-flash`).
+3. Voice input uses the browser's speech recognition (Android Chrome, Hindi `hi-IN`); typing works everywhere.

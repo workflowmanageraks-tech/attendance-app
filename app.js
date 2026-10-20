@@ -2633,3 +2633,84 @@ async function vcTick(){
 function vcStart(){ clearInterval(VC.timer); VC.timer = setInterval(vcTick, 1500); }
 function vcReset(){ clearInterval(VC.timer); VC.timer = null; if (VC.cid || VC.incoming || VC.busy) { VC.ending = false; vcEnd('', true); } else vcCleanup(); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) vcTick(); });
+
+
+/* ---------- AI assistant (voice / text -> confirm -> run normal actions) ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let aiRec = null;
+function aiStopMic(){ try { aiRec && aiRec.stop(); } catch(e){} aiRec = null; }
+function aiOpen(){
+  if (HAS_GAS) return toast('AI works only with the Render server version', true);
+  const w = openModal(`<h3>🤖 AI assistant</h3>
+    <p class="sub">Bolo ya likho — jaise “aaj ki present laga do”, “kal chhutti”, “chai pe 40 rupaye kharcha”.</p>
+    ${SR ? '<button type="button" class="ai-mic" id="aiMic">🎤 Tap karke bolo</button>' : '<p class="muted" style="margin:8px 0">Is browser me voice nahi chalta, likh ke bhejo.</p>'}
+    <textarea class="ai-box" id="aiText" placeholder="Yahan likho…"></textarea>
+    <div id="aiOut"></div>
+    <div class="foot"><button class="btn ghost" data-x>Close</button><button class="btn" id="aiGo">Send</button></div>`);
+  const close = () => { aiStopMic(); w.remove(); };
+  w.querySelector('[data-x]').onclick = close;
+  w.addEventListener('mousedown', e => { if (e.target === w) aiStopMic(); });
+  const mic = w.querySelector('#aiMic'), box = w.querySelector('#aiText');
+  const listen = () => {
+    if (!SR) return;
+    if (aiRec){ aiStopMic(); mic.classList.remove('on'); mic.textContent = '🎤 Tap karke bolo'; return; }
+    const r = new SR(); aiRec = r; r.lang = 'hi-IN'; r.interimResults = true; r.continuous = false;
+    mic.classList.add('on'); mic.textContent = '🔴 Sun raha hoon… (rokne ke liye tap)';
+    r.onresult = ev => { box.value = Array.from(ev.results).map(x => x[0].transcript).join(' ').trim(); };
+    r.onerror = ev => { toast(ev.error === 'not-allowed' ? 'Mic ki permission do' : 'Voice sunai nahi diya, phir try karo', true); };
+    r.onend = () => { const had = aiRec === r; aiRec = null; mic.classList.remove('on'); mic.textContent = '🎤 Tap karke bolo'; if (had && box.value.trim()) send(); };
+    r.start();
+  };
+  if (mic) mic.onclick = listen;
+  const out = w.querySelector('#aiOut'), go = w.querySelector('#aiGo');
+  const send = async () => {
+    const text = box.value.trim(); if (!text) return;
+    aiStopMic(); go.disabled = true; out.innerHTML = '<p class="muted" style="margin:10px 0">Soch raha hoon…</p>';
+    try {
+      const r = await api('aiParse', { text, today: todayISO(), statuses: S.d.statuses.map(x => ({ code:x.code, label:x.label })), categories: (S.d.categories || []).map(x => x.name) });
+      aiConfirm(w, out, r);
+    } catch(e){ out.innerHTML = ''; handleErr(e); }
+    finally { go.disabled = false; }
+  };
+  go.onclick = send;
+  if (SR) setTimeout(listen, 250); else box.focus();
+}
+function aiLine(o){
+  const sm = smap(), nice = d => { const [y,m,dd] = d.split('-'); return `${+dd} ${MON[m-1]}`; };
+  if (o.type === 'attendance'){
+    const lab = (sm[o.code] || {}).label || o.code, ds = o.dates.length > 4 ? `${nice(o.dates[0])} … ${nice(o.dates[o.dates.length-1])} (${o.dates.length} din)` : o.dates.map(nice).join(', ');
+    return `🗓️ <b>Attendance:</b> ${esc(ds)} → <b>${esc(lab)}</b>`;
+  }
+  if (o.type === 'expense') return `💸 <b>Expense:</b> ${esc(fm(o.amount))} · ${esc(o.category)} · ${esc(nice(o.date))}${o.note ? `<br><small>${esc(o.note)}</small>` : ''}`;
+  return `🛠️ <b>Work:</b> ${esc(nice(o.date))}<br><small>${esc([o.name, o.product, o.number, o.sticker, o.desc].filter(Boolean).join(' · '))}</small>`;
+}
+function aiConfirm(w, out, r){
+  if (!r.ops.length){ out.innerHTML = `<p style="margin:10px 0">${esc(r.say || 'Samajh nahi aaya, thoda alag tarah se bolo.')}</p>`; return; }
+  out.innerHTML = `<p class="sub" style="margin-top:10px">Ye karun?</p>${r.ops.map(o => `<div class="ai-op">${aiLine(o)}</div>`).join('')}
+    <div class="foot"><button class="btn ghost" id="aiNo">❌ Nahi</button><button class="btn" id="aiYes">✅ Haan, kar do</button></div>`;
+  out.querySelector('#aiNo').onclick = () => { out.innerHTML = ''; };
+  out.querySelector('#aiYes').onclick = async ev => {
+    ev.target.disabled = true; const done = [], bad = [];
+    for (const o of r.ops){
+      try {
+        if (o.type === 'attendance'){
+          if (!can('att')) throw new Error('Attendance edit ki permission nahi hai');
+          const y = +cfg().year, entries = [];
+          o.dates.forEach(d => { const [yy, mm, dd] = d.split('-').map(Number); if (yy === y) entries.push({ month:mm, day:dd, code:o.code }); });
+          if (!entries.length) throw new Error('Ye tareekh is saal (' + y + ') ki attendance me nahi hai');
+          await setAtt(entries); done.push('Attendance');
+        } else if (o.type === 'expense'){
+          if (!can('exp')) throw new Error('Expense ki permission nahi hai');
+          const x = await api('addExpense', { date:o.date, amount:o.amount, category:o.category, note:o.note }); S.d.expenses.push(x.expense); done.push('Expense');
+        } else if (o.type === 'work'){
+          if (!can('work')) throw new Error('Work ki permission nahi hai');
+          const x = await api('addWork', { date:o.date, name:o.name, product:o.product, number:o.number, sticker:o.sticker, desc:o.desc }); S.d.work.push(x.work); done.push('Work');
+        }
+      } catch(e){ bad.push(e.message || 'Error'); }
+    }
+    render();
+    if (bad.length) toast(bad[0], true); else toast('Ho gaya ✅');
+    if (!bad.length) closeModals();
+  };
+}
+$('#aiFab').onclick = aiOpen;
