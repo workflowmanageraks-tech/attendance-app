@@ -2639,33 +2639,28 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) vcTi
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let aiRec = null;
 function aiStopMic(){ try { aiRec && aiRec.stop(); } catch(e){} aiRec = null; }
+let aiLang = (function(){ try { return localStorage.getItem('aiLang') || 'hi-IN'; } catch(e){ return 'hi-IN'; } })();
 function aiOpen(){
   if (HAS_GAS) return toast('AI works only with the Render server version', true);
   const w = openModal(`<h3>🤖 AI assistant</h3>
     <p class="sub">Bolo ya likho — jaise “aaj ki present laga do”, “kal chhutti”, “chai pe 40 rupaye kharcha”.</p>
-    ${SR ? '<button type="button" class="ai-mic" id="aiMic">🎤 Tap karke bolo</button>' : '<p class="muted" style="margin:8px 0">Is browser me voice nahi chalta, likh ke bhejo.</p>'}
-    <textarea class="ai-box" id="aiText" placeholder="Yahan likho…"></textarea>
+    ${SR ? `<div style="display:flex;gap:8px;margin:8px 0"><button type="button" class="btn ghost" data-lang="hi-IN">हिंदी</button><button type="button" class="btn ghost" data-lang="en-IN">English</button></div>
+    <button type="button" class="ai-mic" id="aiMic">🎤 Tap karke bolo</button>`
+    : '<p class="muted" style="margin:8px 0">Is browser me voice button nahi chalta. Neeche box me keyboard ka 🎤 (mic) dabake bolo, ya likh do.</p>'}
+    <textarea class="ai-box" id="aiText" placeholder="Yahan likho ya keyboard ke 🎤 se bolo…"></textarea>
     <div id="aiOut"></div>
     <div class="foot"><button class="btn ghost" data-x>Close</button><button class="btn" id="aiGo">Send</button></div>`);
-  const close = () => { aiStopMic(); w.remove(); };
-  w.querySelector('[data-x]').onclick = close;
+  w.querySelector('[data-x]').onclick = () => { aiStopMic(); w.remove(); };
   w.addEventListener('mousedown', e => { if (e.target === w) aiStopMic(); });
-  const mic = w.querySelector('#aiMic'), box = w.querySelector('#aiText');
-  const listen = () => {
-    if (!SR) return;
-    if (aiRec){ aiStopMic(); mic.classList.remove('on'); mic.textContent = '🎤 Tap karke bolo'; return; }
-    const r = new SR(); aiRec = r; r.lang = 'hi-IN'; r.interimResults = true; r.continuous = false;
-    mic.classList.add('on'); mic.textContent = '🔴 Sun raha hoon… (rokne ke liye tap)';
-    r.onresult = ev => { box.value = Array.from(ev.results).map(x => x[0].transcript).join(' ').trim(); };
-    r.onerror = ev => { toast(ev.error === 'not-allowed' ? 'Mic ki permission do' : 'Voice sunai nahi diya, phir try karo', true); };
-    r.onend = () => { const had = aiRec === r; aiRec = null; mic.classList.remove('on'); mic.textContent = '🎤 Tap karke bolo'; if (had && box.value.trim()) send(); };
-    r.start();
-  };
-  if (mic) mic.onclick = listen;
-  const out = w.querySelector('#aiOut'), go = w.querySelector('#aiGo');
+  const mic = w.querySelector('#aiMic'), box = w.querySelector('#aiText'), out = w.querySelector('#aiOut'), go = w.querySelector('#aiGo');
+  const setLang = l => { aiLang = l; try { localStorage.setItem('aiLang', l); } catch(e){}
+    w.querySelectorAll('[data-lang]').forEach(b => { b.style.borderColor = b.dataset.lang === l ? 'var(--brand)' : ''; b.style.fontWeight = b.dataset.lang === l ? '700' : ''; }); };
+  w.querySelectorAll('[data-lang]').forEach(b => b.onclick = () => { aiStopMic(); setLang(b.dataset.lang); });
+  setLang(aiLang);
+  const idle = () => { if (mic){ mic.classList.remove('on'); mic.textContent = '🎤 Tap karke bolo'; } };
   const send = async () => {
-    const text = box.value.trim(); if (!text) return;
-    aiStopMic(); go.disabled = true; out.innerHTML = '<p class="muted" style="margin:10px 0">Soch raha hoon…</p>';
+    const text = box.value.trim(); if (!text) return toast('Pehle kuch bolo ya likho', true);
+    aiStopMic(); idle(); go.disabled = true; out.innerHTML = '<p class="muted" style="margin:10px 0">Soch raha hoon…</p>';
     try {
       const r = await api('aiParse', { text, today: todayISO(), statuses: S.d.statuses.map(x => ({ code:x.code, label:x.label })), categories: (S.d.categories || []).map(x => x.name) });
       aiConfirm(w, out, r);
@@ -2673,7 +2668,26 @@ function aiOpen(){
     finally { go.disabled = false; }
   };
   go.onclick = send;
-  if (SR) setTimeout(listen, 250); else box.focus();
+  if (mic) mic.onclick = () => {
+    if (aiRec){ aiStopMic(); idle(); return; }
+    let heard = false, err = '';
+    const r = new SR(); aiRec = r; r.lang = aiLang; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+    mic.classList.add('on'); mic.textContent = '🔴 Sun raha hoon… bolo (rokne ke liye tap)';
+    r.onresult = ev => { heard = true; box.value = Array.from(ev.results).map(x => x[0].transcript).join(' ').trim(); };
+    r.onerror = ev => { err = ev.error; const m = {
+      'not-allowed': 'Mic ki permission band hai. Browser settings me Site settings → Microphone → Allow karo.',
+      'service-not-allowed': 'Is browser me voice allowed nahi hai. Keyboard ka 🎤 use karo.',
+      'no-speech': 'Awaaz nahi aayi. Mic ke paas thoda tez bolo, phir tap karo.',
+      'audio-capture': 'Mic nahi mila. Check karo mic kisi aur app me to nahi chal raha.',
+      'network': 'Voice ke liye internet chahiye. Net check karke phir try karo.',
+      'language-not-supported': 'Ye bhasha support nahi hai. English chuno ya keyboard ka 🎤 use karo.' }[ev.error];
+      if (ev.error !== 'aborted') toast(m || 'Voice me dikkat (' + ev.error + '). Keyboard ka 🎤 use karo.', true); };
+    r.onend = () => { const mine = aiRec === r; aiRec = null; idle();
+      if (!mine) return;
+      if (heard && box.value.trim()) send();
+      else if (!err) toast('Kuch sunai nahi diya. Phir se tap karke bolo, ya keyboard ka 🎤 use karo.', true); };
+    try { r.start(); } catch(e){ aiRec = null; idle(); toast('Mic start nahi hua. Page refresh karke phir try karo.', true); }
+  };
 }
 function aiLine(o){
   const sm = smap(), nice = d => { const [y,m,dd] = d.split('-'); return `${+dd} ${MON[m-1]}`; };
