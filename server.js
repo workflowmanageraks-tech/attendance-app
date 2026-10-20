@@ -280,7 +280,7 @@ function makeApp(store, env) {
   const isoDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !isNaN(new Date(v + 'T00:00:00Z')) ? String(v) : '';
   async function aiRoute(req) {
     const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
-    if (!env.GEMINI_API_KEY) globalThis.fail_('AI is not set up on the server (GEMINI_API_KEY missing).', 'AI');
+    if (!env.ANTHROPIC_API_KEY && !env.OPENROUTER_API_KEY && !env.GEMINI_API_KEY) globalThis.fail_('AI is not set up on the server (OPENROUTER_API_KEY / ANTHROPIC_API_KEY missing).', 'AI');
     const now = Date.now(), hits = (aiHits.get(uid) || []).filter(t => now - t < 60000);
     if (hits.length >= 20) globalThis.fail_('Too many AI requests. Please wait a minute.', 'AI');
     hits.push(now); aiHits.set(uid, hits);
@@ -298,6 +298,63 @@ function makeApp(store, env) {
       '{"type":"expense","date":"YYYY-MM-DD","amount":<number>,"category":"<category>","note":"<short note>"}\n' +
       '{"type":"work","date":"YYYY-MM-DD","name":"","product":"","number":"","sticker":"","desc":"<what was done>"}\n' +
       'Never invent actions the user did not ask for. If the request is not about attendance, expense or work, return {"ops":[],"say":"..."}.';
+    let rawText = '';
+    if (env.ANTHROPIC_API_KEY) {                       // ---- Claude (Anthropic) ----
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const models = [...new Set([env.ANTHROPIC_MODEL, 'claude-haiku-5-5', 'claude-sonnet-5-5'].filter(Boolean))];
+      let res = null;
+      try {
+        for (let round = 0; round < 2 && !(res && res.r.ok); round++) {
+          for (const m of models) {
+            const r = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({ model: m, max_tokens: 1000, temperature: 0, system: sys + '\nReturn ONLY the JSON object, no markdown, no extra text.', messages: [{ role: 'user', content: text }] }) });
+            res = { r, j: await r.json().catch(() => ({})) };
+            if (r.ok) { break; }
+            console.warn('Claude', m, r.status, JSON.stringify(res.j).slice(0, 200));
+            if (r.status === 401 || r.status === 403) break;
+            if (r.status !== 404) await sleep(400);
+          }
+          if (res.r.ok || res.r.status === 401 || res.r.status === 403) break;
+          if (round === 0) await sleep(1500);
+        }
+      } catch (e) { globalThis.fail_('Could not reach the AI service.', 'AI'); }
+      if (!res.r.ok) {
+        const st = res.r.status, msg = String((res.j.error && res.j.error.message) || '');
+        globalThis.fail_(st === 401 ? 'Anthropic API key galat hai. Render me ANTHROPIC_API_KEY check karo.'
+          : /credit|billing/i.test(msg) ? 'Anthropic account me credit nahi hai. console.anthropic.com me Billing se thoda credit add karo.'
+          : (st === 429 || st >= 500) ? 'AI abhi busy hai. Thodi der baad phir try karo.' : 'AI service error (' + st + ') - ' + msg.slice(0, 120), 'AI');
+      }
+      rawText = String(((res.j.content || []).find(c => c.type === 'text') || {}).text || '');
+    } else if (env.OPENROUTER_API_KEY) {                // ---- OpenRouter (free router by default) ----
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const models = [...new Set([env.OPENROUTER_MODEL, 'openrouter/free'].filter(Boolean))];
+      let res = null;
+      try {
+        for (let round = 0; round < 3 && !(res && res.r.ok); round++) {
+          for (const m of models) {
+            const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+              method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.OPENROUTER_API_KEY, 'X-Title': 'Attendance App' },
+              body: JSON.stringify({ model: m, temperature: 0, max_tokens: 1000, messages: [{ role: 'system', content: sys + '\nReturn ONLY the JSON object, no markdown, no extra text.' }, { role: 'user', content: text }] }) });
+            res = { r, j: await r.json().catch(() => ({})) };
+            const c = res.j && res.j.choices && res.j.choices[0] && res.j.choices[0].message && res.j.choices[0].message.content;
+            if (r.ok && c) { rawText = typeof c === 'string' ? c : JSON.stringify(c); break; }
+            if (r.ok) res.r = { ok: false, status: 502 };       // empty answer: treat like a busy model and retry
+            console.warn('OpenRouter', m, res.r.status, JSON.stringify(res.j).slice(0, 200));
+            if (res.r.status === 401 || res.r.status === 402) break;
+            await sleep(500);
+          }
+          if (res.r.ok || res.r.status === 401 || res.r.status === 402) break;
+          await sleep(1200);
+        }
+      } catch (e) { globalThis.fail_('Could not reach the AI service.', 'AI'); }
+      if (!res.r.ok) {
+        const st = res.r.status, msg = String((res.j.error && res.j.error.message) || '');
+        globalThis.fail_(st === 401 ? 'OpenRouter key galat hai. Render me OPENROUTER_API_KEY check karo.'
+          : st === 402 ? 'OpenRouter me credit nahi hai ya free limit khatam. openrouter.ai me credit add karo.'
+          : 'Free AI abhi busy hai ya aaj ki free limit poori ho gayi. Thodi der baad phir try karo.', 'AI');
+      }
+    } else {                                           // ---- Gemini (fallback) ----
     const GL = 'https://generativelanguage.googleapis.com/v1beta/';
     const callModel = async model => {
       const gen = { responseMimeType: 'application/json', temperature: 0 };
@@ -307,27 +364,41 @@ function makeApp(store, env) {
         body: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents: [{ role: 'user', parts: [{ text }] }], generationConfig: gen }) });
       return { r, j: await r.json().catch(() => ({})) };
     };
-    const pickModel = async () => {                    // ask Google which models this key can really use
+    const listModels = async () => {                   // models this key can really use, best first
       const r = await fetch(GL + 'models?pageSize=100', { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
       const l = ((await r.json().catch(() => ({}))).models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
         .map(m => String(m.name).replace(/^models\//, '')).filter(n => /^gemini-/.test(n) && !/(embed|image|tts|live|audio|vision|robotics|computer|thinking|exp)/.test(n));
       const rank = n => (/flash/.test(n) ? 0 : 5) + (/lite/.test(n) ? 1 : 0) + (/preview/.test(n) ? 2 : 0) - (/latest/.test(n) ? 0.5 : 0);
-      return l.sort((a, b) => rank(a) - rank(b))[0] || '';
+      return l.sort((a, b) => rank(a) - rank(b));
     };
-    let j;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const busy = st => st === 503 || st === 429 || st === 500 || st === 502 || st === 504;
+    let j, res, listed = false;
     try {
-      const tryList = [aiModel.name || env.GEMINI_MODEL || 'gemini-2.5-flash'];
-      let res = await callModel(tryList[0]);
-      if (res.r.status === 404 || res.r.status === 400 && /model/i.test(JSON.stringify(res.j))) {
-        const alt = await pickModel();
-        if (alt && alt !== tryList[0]) { res = await callModel(alt); if (res.r.ok) aiModel.name = alt; }
-      } else if (res.r.ok) aiModel.name = tryList[0];
+      const queue = [...new Set([aiModel.name, env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-latest', 'gemini-flash-lite-latest'].filter(Boolean))];
+      let sawBusy = false;
+      for (let round = 0; round < 2 && !(res && res.r.ok); round++) {
+        for (let i = 0; i < queue.length && !(res && res.r.ok); i++) {
+          res = await callModel(queue[i]);
+          if (res.r.ok) { aiModel.name = queue[i]; break; }
+          console.warn('Gemini', queue[i], res.r.status, JSON.stringify(res.j).slice(0, 200));
+          if (busy(res.r.status)) { sawBusy = true; await sleep(400); }
+          if (res.r.status === 404 && !listed) {          // names we guessed may be retired: ask Google what exists
+            listed = true; (await listModels()).slice(0, 4).forEach(n => { if (!queue.includes(n)) queue.push(n); });
+          }
+        }
+        if (!(res && res.r.ok) && round === 0 && sawBusy) await sleep(1500);
+        else if (!sawBusy) break;
+      }
       j = res.j;
-      if (!res.r.ok) { console.warn('Gemini error', res.r.status, JSON.stringify(j).slice(0, 400));
-        const why = (j.error && j.error.message) ? ' - ' + String(j.error.message).slice(0, 120) : '';
-        globalThis.fail_(res.r.status === 429 ? 'AI free limit reached for now. Try again in a minute.' : 'AI service error (' + res.r.status + ')' + why, 'AI'); }
+      if (!res.r.ok) {
+        const st = res.r.status, why = (j.error && j.error.message) ? ' - ' + String(j.error.message).slice(0, 120) : '';
+        globalThis.fail_(busy(st) ? 'Google AI abhi bahut busy hai. 1-2 minute baad phir try karo.' : 'AI service error (' + st + ')' + why, 'AI');
+      }
     } catch (e) { if (e.code === 'AI') throw e; globalThis.fail_('Could not reach the AI service.', 'AI'); }
-    let out; try { out = JSON.parse(String(((((j.candidates || [])[0] || {}).content || {}).parts || [])[0].text || '{}').replace(/```json|```/g, '')); } catch (e) { out = {}; }
+      rawText = String(((((j.candidates || [])[0] || {}).content || {}).parts || [])[0].text || '');
+    }
+    let out; try { const t = rawText.replace(/```json|```/g, '').trim(); out = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1) || '{}'); } catch (e) { out = {}; }
     const okCodes = new Set(statuses.map(x => x.code.toUpperCase()));
     const ops = [];
     (Array.isArray(out.ops) ? out.ops : []).slice(0, 10).forEach(o => {
