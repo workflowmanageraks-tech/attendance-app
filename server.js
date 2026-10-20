@@ -272,153 +272,6 @@ function makeApp(store, env) {
     }
   }
 
-  // ---------- AI assistant (Gemini): turns a spoken/typed sentence into a list of proposed actions ----------
-  // The server ONLY parses. Nothing is saved here: the app shows the proposal, the user confirms,
-  // and the app then runs the normal actions (setAttendance / addExpense / addWork) with all usual permission checks.
-  const AI_ACTIONS = new Set(['aiParse']);
-  const aiHits = new Map(), aiModel = { name: '' };
-  const isoDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !isNaN(new Date(v + 'T00:00:00Z')) ? String(v) : '';
-  async function aiRoute(req) {
-    const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
-    if (!env.ANTHROPIC_API_KEY && !env.OPENROUTER_API_KEY && !env.GEMINI_API_KEY) globalThis.fail_('AI is not set up on the server (OPENROUTER_API_KEY / ANTHROPIC_API_KEY missing).', 'AI');
-    const now = Date.now(), hits = (aiHits.get(uid) || []).filter(t => now - t < 60000);
-    if (hits.length >= 20) globalThis.fail_('Too many AI requests. Please wait a minute.', 'AI');
-    hits.push(now); aiHits.set(uid, hits);
-    const text = String(req.text || '').trim().slice(0, 500); if (!text) globalThis.fail_('Say or type something first.', 'AI');
-    const today = isoDate(req.today) || new Date().toISOString().slice(0, 10);
-    const statuses = (Array.isArray(req.statuses) ? req.statuses : []).slice(0, 30).map(x => ({ code: String(x.code || '').slice(0, 10), label: String(x.label || '').slice(0, 40) }));
-    const cats = (Array.isArray(req.categories) ? req.categories : []).slice(0, 60).map(x => String(x).slice(0, 40));
-    const sys = 'You are the command parser of an attendance / expense / work-log app. The user speaks Hindi, English or Hinglish. ' +
-      'Convert the user\'s sentence into actions. Today is ' + today + ' (' + new Date(today + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }) + '). ' +
-      'Resolve words like aaj/today, kal/tomorrow, parso, beeta hua kal/yesterday into exact YYYY-MM-DD dates.\n' +
-      'Attendance status codes (use ONLY these codes): ' + JSON.stringify(statuses) + '. Map words like present/hazir -> the code whose label means Present, chhutti/leave/absent likewise.\n' +
-      'Expense categories (use ONLY one of these names, pick the closest): ' + JSON.stringify(cats) + '.\n' +
-      'Reply with JSON only, shape: {"ops":[...],"say":"short reply in the user\'s language, only when ops is empty or something is unclear"}. Each op is one of:\n' +
-      '{"type":"attendance","dates":["YYYY-MM-DD",...],"code":"<status code>"}  (expand ranges like "15 se 18 tak" into every date, max 31)\n' +
-      '{"type":"expense","date":"YYYY-MM-DD","amount":<number>,"category":"<category>","note":"<short note>"}\n' +
-      '{"type":"work","date":"YYYY-MM-DD","name":"","product":"","number":"","sticker":"","desc":"<what was done>"}\n' +
-      'Never invent actions the user did not ask for. If the request is not about attendance, expense or work, return {"ops":[],"say":"..."}.';
-    let rawText = '';
-    if (env.ANTHROPIC_API_KEY) {                       // ---- Claude (Anthropic) ----
-      const sleep = ms => new Promise(r => setTimeout(r, ms));
-      const models = [...new Set([env.ANTHROPIC_MODEL, 'claude-haiku-5-5', 'claude-sonnet-5-5'].filter(Boolean))];
-      let res = null;
-      try {
-        for (let round = 0; round < 2 && !(res && res.r.ok); round++) {
-          for (const m of models) {
-            const r = await fetch('https://api.anthropic.com/v1/messages', {
-              method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-              body: JSON.stringify({ model: m, max_tokens: 1000, temperature: 0, system: sys + '\nReturn ONLY the JSON object, no markdown, no extra text.', messages: [{ role: 'user', content: text }] }) });
-            res = { r, j: await r.json().catch(() => ({})) };
-            if (r.ok) { break; }
-            console.warn('Claude', m, r.status, JSON.stringify(res.j).slice(0, 200));
-            if (r.status === 401 || r.status === 403) break;
-            if (r.status !== 404) await sleep(400);
-          }
-          if (res.r.ok || res.r.status === 401 || res.r.status === 403) break;
-          if (round === 0) await sleep(1500);
-        }
-      } catch (e) { globalThis.fail_('Could not reach the AI service.', 'AI'); }
-      if (!res.r.ok) {
-        const st = res.r.status, msg = String((res.j.error && res.j.error.message) || '');
-        globalThis.fail_(st === 401 ? 'Anthropic API key galat hai. Render me ANTHROPIC_API_KEY check karo.'
-          : /credit|billing/i.test(msg) ? 'Anthropic account me credit nahi hai. console.anthropic.com me Billing se thoda credit add karo.'
-          : (st === 429 || st >= 500) ? 'AI abhi busy hai. Thodi der baad phir try karo.' : 'AI service error (' + st + ') - ' + msg.slice(0, 120), 'AI');
-      }
-      rawText = String(((res.j.content || []).find(c => c.type === 'text') || {}).text || '');
-    } else if (env.OPENROUTER_API_KEY) {                // ---- OpenRouter (free router by default) ----
-      const sleep = ms => new Promise(r => setTimeout(r, ms));
-      const models = [...new Set([env.OPENROUTER_MODEL, 'openrouter/free'].filter(Boolean))];
-      let res = null;
-      try {
-        for (let round = 0; round < 3 && !(res && res.r.ok); round++) {
-          for (const m of models) {
-            const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-              method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.OPENROUTER_API_KEY, 'X-Title': 'Attendance App' },
-              body: JSON.stringify({ model: m, temperature: 0, max_tokens: 1000, messages: [{ role: 'system', content: sys + '\nReturn ONLY the JSON object, no markdown, no extra text.' }, { role: 'user', content: text }] }) });
-            res = { r, j: await r.json().catch(() => ({})) };
-            const c = res.j && res.j.choices && res.j.choices[0] && res.j.choices[0].message && res.j.choices[0].message.content;
-            if (r.ok && c) { rawText = typeof c === 'string' ? c : JSON.stringify(c); break; }
-            if (r.ok) res.r = { ok: false, status: 502 };       // empty answer: treat like a busy model and retry
-            console.warn('OpenRouter', m, res.r.status, JSON.stringify(res.j).slice(0, 200));
-            if (res.r.status === 401 || res.r.status === 402) break;
-            await sleep(500);
-          }
-          if (res.r.ok || res.r.status === 401 || res.r.status === 402) break;
-          await sleep(1200);
-        }
-      } catch (e) { globalThis.fail_('Could not reach the AI service.', 'AI'); }
-      if (!res.r.ok) {
-        const st = res.r.status, msg = String((res.j.error && res.j.error.message) || '');
-        globalThis.fail_(st === 401 ? 'OpenRouter key galat hai. Render me OPENROUTER_API_KEY check karo.'
-          : st === 402 ? 'OpenRouter me credit nahi hai ya free limit khatam. openrouter.ai me credit add karo.'
-          : 'Free AI abhi busy hai ya aaj ki free limit poori ho gayi. Thodi der baad phir try karo.', 'AI');
-      }
-    } else {                                           // ---- Gemini (fallback) ----
-    const GL = 'https://generativelanguage.googleapis.com/v1beta/';
-    const callModel = async model => {
-      const gen = { responseMimeType: 'application/json', temperature: 0 };
-      if (/2\.5-flash/.test(model)) gen.thinkingConfig = { thinkingBudget: 0 };
-      const r = await fetch(GL + 'models/' + encodeURIComponent(model) + ':generateContent', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents: [{ role: 'user', parts: [{ text }] }], generationConfig: gen }) });
-      return { r, j: await r.json().catch(() => ({})) };
-    };
-    const listModels = async () => {                   // models this key can really use, best first
-      const r = await fetch(GL + 'models?pageSize=100', { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
-      const l = ((await r.json().catch(() => ({}))).models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-        .map(m => String(m.name).replace(/^models\//, '')).filter(n => /^gemini-/.test(n) && !/(embed|image|tts|live|audio|vision|robotics|computer|thinking|exp)/.test(n));
-      const rank = n => (/flash/.test(n) ? 0 : 5) + (/lite/.test(n) ? 1 : 0) + (/preview/.test(n) ? 2 : 0) - (/latest/.test(n) ? 0.5 : 0);
-      return l.sort((a, b) => rank(a) - rank(b));
-    };
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const busy = st => st === 503 || st === 429 || st === 500 || st === 502 || st === 504;
-    let j, res, listed = false;
-    try {
-      const queue = [...new Set([aiModel.name, env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-latest', 'gemini-flash-lite-latest'].filter(Boolean))];
-      let sawBusy = false;
-      for (let round = 0; round < 2 && !(res && res.r.ok); round++) {
-        for (let i = 0; i < queue.length && !(res && res.r.ok); i++) {
-          res = await callModel(queue[i]);
-          if (res.r.ok) { aiModel.name = queue[i]; break; }
-          console.warn('Gemini', queue[i], res.r.status, JSON.stringify(res.j).slice(0, 200));
-          if (busy(res.r.status)) { sawBusy = true; await sleep(400); }
-          if (res.r.status === 404 && !listed) {          // names we guessed may be retired: ask Google what exists
-            listed = true; (await listModels()).slice(0, 4).forEach(n => { if (!queue.includes(n)) queue.push(n); });
-          }
-        }
-        if (!(res && res.r.ok) && round === 0 && sawBusy) await sleep(1500);
-        else if (!sawBusy) break;
-      }
-      j = res.j;
-      if (!res.r.ok) {
-        const st = res.r.status, why = (j.error && j.error.message) ? ' - ' + String(j.error.message).slice(0, 120) : '';
-        globalThis.fail_(busy(st) ? 'Google AI abhi bahut busy hai. 1-2 minute baad phir try karo.' : 'AI service error (' + st + ')' + why, 'AI');
-      }
-    } catch (e) { if (e.code === 'AI') throw e; globalThis.fail_('Could not reach the AI service.', 'AI'); }
-      rawText = String(((((j.candidates || [])[0] || {}).content || {}).parts || [])[0].text || '');
-    }
-    let out; try { const t = rawText.replace(/```json|```/g, '').trim(); out = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1) || '{}'); } catch (e) { out = {}; }
-    const okCodes = new Set(statuses.map(x => x.code.toUpperCase()));
-    const ops = [];
-    (Array.isArray(out.ops) ? out.ops : []).slice(0, 10).forEach(o => {
-      if (!o || typeof o !== 'object') return;
-      if (o.type === 'attendance') {
-        const code = String(o.code || '').toUpperCase(), dates = [...new Set((Array.isArray(o.dates) ? o.dates : []).map(isoDate).filter(Boolean))].slice(0, 31);
-        if (okCodes.has(code) && dates.length) ops.push({ type: 'attendance', code, dates });
-      } else if (o.type === 'expense') {
-        const amount = Number(o.amount), date = isoDate(o.date) || today; if (!(amount > 0)) return;
-        const want = String(o.category || '').trim().toLowerCase(), category = cats.find(c => c.toLowerCase() === want) || cats.find(c => want && c.toLowerCase().includes(want)) || cats[0] || '';
-        if (category) ops.push({ type: 'expense', date, amount, category, note: String(o.note || '').slice(0, 300) });
-      } else if (o.type === 'work') {
-        const w = { type: 'work', date: isoDate(o.date) || today };
-        ['name', 'product', 'number', 'sticker', 'desc'].forEach(k => w[k] = String(o[k] || '').slice(0, k === 'desc' ? 500 : 100));
-        if (w.name || w.product || w.number || w.sticker || w.desc) ops.push(w);
-      }
-    });
-    return { ok: true, ops, say: String(out.say || '').slice(0, 300) };
-  }
-
   let chain = Promise.resolve();
   async function run(body) {
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
@@ -440,10 +293,10 @@ function makeApp(store, env) {
     if (rt.delay) await new Promise(r => setTimeout(r, Math.min(rt.delay, 1500)));
     return res;
   }
-  const fastCall = body => {                           // call polling / AI parsing never wait behind slow sheet saves
+  const fastCall = body => {                           // call polling never waits behind slow sheet saves
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
-    if (!r || !(CALL_ACTIONS.has(r.action) || AI_ACTIONS.has(r.action))) return null;
-    return Promise.resolve().then(() => AI_ACTIONS.has(r.action) ? aiRoute(r) : callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
+    if (!r || !CALL_ACTIONS.has(r.action)) return null;
+    return Promise.resolve().then(() => callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
   };
   return { handle: body => fastCall(body) || (chain = chain.then(() => run(body), () => run(body))),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
