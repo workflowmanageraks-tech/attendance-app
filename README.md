@@ -31,3 +31,12 @@ Open a chat and tap 📞 (voice) or 🎥 (video) at the top. The other person ge
 ## Fingerprint / Face unlock
 
 Settings > **Fingerprint / Face unlock** > *Enable on this device*. Next time the login screen shows **Unlock with fingerprint / face**. Uses the phone's own biometric (WebAuthn passkey); only a public key is stored on the server. Needs https. Optional env var `ALLOWED_ORIGIN` locks it to your site address.
+
+## Users who can add users
+
+Admin: Settings > Users & access > edit a user > tick **Can add new users**. That user then gets a **Users & access** card in Settings with **＋ Add user**.
+
+- Every user they add automatically joins **their group** (a group is created for them the first time, and their current data becomes the group's data). Group members share the same data.
+- The adder sees **only** the users they added (and the person who added them) in Chat, calls and Ludo - not all users. The added users see only the adder.
+- They can only manage (edit / sign out / delete) the users they added, and can never give a new user more access than they have. Only the admin can set location, payment date and the "can add users" right.
+- The main admin has no group, so users added by the main admin are not auto-grouped.

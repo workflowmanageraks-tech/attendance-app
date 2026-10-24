@@ -270,7 +270,8 @@ async function loadAll(){
   try { r = await api('getAll'); }
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
   S.sig = sigOf(r.data); ingest(r.data);
-  if (isAdmin()){ await loadUsers(); await loadGroups(); } else { S.users = null; S.groups = null; }
+  if (canAddUsers()) await loadUsers(); else S.users = null;
+  if (isAdmin()) await loadGroups(); else S.groups = null;
   applyAccess(); startSync();
 }
 function ingest(d){
@@ -349,6 +350,7 @@ const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
 const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', tt:'edit', emp:true, creds:true };
 const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
+const canAddUsers = () => isAdmin() || !!perms().addUser;   // admin, or a user the admin allowed to add users
 function deny(){ toast('You have view-only access to this section', true); }
 const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link' };
 const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links' };
@@ -497,7 +499,7 @@ async function collectClient(){
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
   const p = u.perms || {}, L = { none:'no access', view:'view only', edit:'can edit' };
-  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · Time Table: ${L[p.tt || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}`;
+  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · Time Table: ${L[p.tt || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}${p.addUser ? ' · Can add users' : ''}`;
 }
 function usersCard(){
   const list = S.users || [];
@@ -507,23 +509,27 @@ function usersCard(){
     const last = u.lastLogin ? 'Last login ' + fmtLogTime(u.lastLogin) : 'Never signed in';
     const mine = S.me && u.id === S.me.id;
     const editable = !u.primary && (S.me.primary || u.role !== 'admin') && !(mine && !S.me.primary);
-    const acts = (!mine ? `<button class="btn ghost sm" onclick="setAs('${esc(u.id)}')" title="See this user’s data">👁 View</button>` : '')
+    const acts = (!mine && isAdmin() ? `<button class="btn ghost sm" onclick="setAs('${esc(u.id)}')" title="See this user’s data">👁 View</button>` : '')
       + (editable ? `<button class="btn ghost sm" onclick="userForm('${esc(u.id)}')">✎ Edit</button><button class="btn ghost sm" onclick="kickUser('${esc(u.id)}')" title="Sign out everywhere">⎋</button><button class="btn ghost sm" onclick="delUser('${esc(u.id)}')" title="Delete user">🗑</button>` : '');
     return `<div class="emp-item"><div class="avatar">${esc((u.name || u.username || '?').trim().charAt(0).toUpperCase())}</div>
       <div class="info"><b>${esc(u.name || u.username)}${tag}${off}</b><span>@${esc(u.username)} · ${esc(last)}</span><span class="perm-sum">${esc(permSummary(u))}${u.needLoc ? ' · location required' : ''}</span></div>
       <div class="acts">${acts}</div></div>`;
   }).join('');
   return `<div class="card"><h3>🛡️ Users & access <button class="btn sm" onclick="userForm()">＋ Add user</button></h3>
-    <p class="muted" style="margin-bottom:12px">Each user signs in with their own username and password and sees only their own data. You decide what each user may open or change.
-      Use <b>👁 View</b> to look at (or fix) a user’s data. Login time, location and device of everyone are in the <b>Logins</b> tab.</p>
+    ${isAdmin() ? `<p class="muted" style="margin-bottom:12px">Each user signs in with their own username and password and sees only their own data. You decide what each user may open or change.
+      Use <b>👁 View</b> to look at (or fix) a user’s data. Login time, location and device of everyone are in the <b>Logins</b> tab.
+      Tick <b>Can add new users</b> in a user’s access to let them add users too — everyone a user adds joins that user’s group and sees only that user in Chat.</p>`
+    : `<p class="muted" style="margin-bottom:12px">Users you add join <b>your group</b> automatically (you share the same data) and see only you in Chat — and you see only them. They can never get more access than you have.</p>`}
     <div class="emp-list">${rows || '<div class="empty-state">No users yet</div>'}</div></div>`;
 }
 function userForm(id){
   const x = id ? (S.users || []).find(u => u.id === id) : null;
   const p = (x && x.perms) || { att:'none', exp:'none', work:'none', pw:'none', link:'none', tt:'none', emp:false, creds:true };   // new user = Chat only
-  const sel = (n, v) => `<select class="select" name="${n}"><option value="none" ${v==='none'?'selected':''}>No access (hidden)</option><option value="view" ${v==='view'?'selected':''}>View only</option><option value="edit" ${v==='edit'?'selected':''}>Can add / edit / delete</option></select>`;
+  const RK = { none:0, view:1, edit:2 }, mine = perms();   // a user who adds users can't give more access than he has
+  const sel = (n, v) => { const mx = isAdmin() ? 2 : (RK[mine[n.slice(2)]] ?? 0), o = (k, t) => RK[k] <= mx ? `<option value="${k}" ${v===k?'selected':''}>${t}</option>` : '';
+    return `<select class="select" name="${n}">${o('none','No access (hidden)')}${o('view','View only')}${o('edit','Can add / edit / delete')}</select>`; };
   const isA = !!(x && x.role === 'admin');
-  const w = openModal(`<h3>${x ? 'Edit user' : 'Add user'}</h3><p class="sub">${x ? 'Leave password empty to keep it.' : 'Set a username and password, then share them with the user. By default the new user gets Chat only and sees only you.'}</p>
+  const w = openModal(`<h3>${x ? 'Edit user' : 'Add user'}</h3><p class="sub">${x ? 'Leave password empty to keep it.' : 'Set a username and password, then share them with the user. By default the new user gets Chat only, sees only you in Chat' + (S.me.primary ? '.' : ', and joins your group (shares your data).')}</p>
     <form id="uf" autocomplete="off">
       <div class="row2"><div class="field"><label>Name</label><input class="input" name="name" maxlength="60" value="${esc(x ? x.name : '')}" required></div>
         <div class="field"><label>Username</label><input class="input" name="username" maxlength="40" autocomplete="off" autocapitalize="off" value="${esc(x ? x.username : '')}" required></div></div>
@@ -540,13 +546,14 @@ function userForm(id){
           <div class="field"><label>🔗 Links</label>${sel('p_link', p.link || 'edit')}</div>
           <div class="field"><label>⏱️ Time Table</label>${sel('p_tt', p.tt || 'edit')}</div>
         </div>
-        <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''}> Can add / edit / delete employees</label>
+        <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''} ${(isAdmin() || can('emp')) ? '' : 'disabled'}> Can add / edit / delete employees</label>
         <label class="tog"><input type="checkbox" name="p_creds" ${p.creds ? 'checked' : ''}> Can change their own username & password</label>
+        ${isAdmin() ? `<label class="tog"><input type="checkbox" name="p_addUser" ${p.addUser ? 'checked' : ''}> Can add new users <span class="muted">(each user they add joins their group and sees only them in Chat)</span></label>` : ''}
       </fieldset>
       <label class="tog"><input type="checkbox" name="active" ${(!x || x.active) ? 'checked' : ''}> Account active (untick to block sign-in)</label>
-      <label class="tog"><input type="checkbox" name="needLoc" ${x && x.needLoc ? 'checked' : ''}> Location required to sign in <span class="muted">(blocks login if no location can be found)</span></label>
+      ${isAdmin() ? `<label class="tog"><input type="checkbox" name="needLoc" ${x && x.needLoc ? 'checked' : ''}> Location required to sign in <span class="muted">(blocks login if no location can be found)</span></label>
       <div class="field"><label>Payment due until <span class="muted">(after this date/time, login is blocked with a payment-reminder message, until you clear or extend it)</span></label>
-        <input class="input" type="datetime-local" name="payDue" value="${x && x.payDue ? x.payDue.replace(' ', 'T').slice(0,16) : ''}"></div>
+        <input class="input" type="datetime-local" name="payDue" value="${x && x.payDue ? x.payDue.replace(' ', 'T').slice(0,16) : ''}"></div>` : ''}
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save user' : 'Add user'}</button></div></form>`, 'wide');
   w.querySelector('[data-x]').onclick = () => w.remove();
   const roleEl = w.querySelector('#ufRole');
@@ -556,8 +563,9 @@ function userForm(id){
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
-      S.users = r.users; w.remove(); render(); toast(x ? 'User updated' : 'User added'); chatLoadUsers();
+        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
+      S.users = r.users; w.remove(); if (!isAdmin()) await loadAll();   // a new user may have created / joined my group
+      render(); toast(x ? 'User updated' : 'User added'); chatLoadUsers();
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
@@ -1686,7 +1694,7 @@ function vSettings(){
   if (!isAdmin()){ drop('General'); drop('Attendance status codes'); }
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
-  if (isAdmin()) grid.insertAdjacentHTML('afterbegin', usersCard() + groupsCard());
+  if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
   grid.insertAdjacentHTML('beforeend', bioCard());
   grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;

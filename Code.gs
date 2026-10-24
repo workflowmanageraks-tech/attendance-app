@@ -171,20 +171,22 @@ var NEED = {
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
-var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1 };
+var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1 };
+// Admins, and any user the admin ticked "Can add new users" for. Such a user only ever manages the users HE added.
+var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1 };
 
 // Who is making the current request (filled by buildCtx_ on every call; Apps Script runs each call fresh)
 //   uid   = the logged-in account         owner = whose DATA is being read / written
 //   (owner differs from uid only when an admin uses "View as user")
 var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '', group: null };
 
-function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', tt: 'edit', emp: true, creds: true }; }
+function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', tt: 'edit', emp: true, creds: true, addUser: true }; }
 function normPerms_(p, role) {
   if (role === 'admin') return fullPerms_();
   p = p || {};
   function lvl(v) { v = String(v || '').toLowerCase(); return (v === 'none' || v === 'view' || v === 'edit') ? v : 'edit'; }
   function bool(v, d) { return (v === undefined || v === null || v === '') ? d : (v === true || v === 'true' || v === 'yes' || v === 1 || v === '1'); }
-  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true) };
+  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false) };
 }
 function need_(sec) {
   var p = CTX.perms || {};
@@ -192,9 +194,11 @@ function need_(sec) {
   if (p[sec] !== 'edit') fail_('You have view-only access to this section.', 'PERM');
 }
 function needAdmin_() { if (CTX.role !== 'admin') fail_('Only an admin can do this.', 'PERM'); }
+function needUserMgr_() { if (CTX.role !== 'admin' && !(CTX.perms && CTX.perms.addUser)) fail_('You do not have permission to add users. Ask the admin.', 'PERM'); }
 function ownerOf_(v) { var s = String(v === undefined || v === null ? '' : v).trim(); return s || 'ADMIN'; }   // old rows with no owner belong to the main admin
 
 function buildCtx_(uid, asUser) {
+  LEADS_ = null;
   var acc = getAccount_(uid);
   if (!acc || !acc.active) fail_('Session expired. Please log in again.', 'AUTH');
   if (payExpired_(acc.payDue)) fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
@@ -235,6 +239,7 @@ function route_(req) {
     touchSeen_(CTX.uid);                       // every request counts as "online" (chat presence)
     if (NEED[a]) need_(NEED[a]);
     if (ADMIN_ONLY[a]) needAdmin_();
+    if (USER_MGR[a]) needUserMgr_();
   }
 
   var lock = null;
@@ -400,11 +405,26 @@ function readUsers_() {
 // existed before this feature, have it empty (they keep the old behaviour).
 //   * a sub-admin only sees / manages the users HE created
 //   * a user made by a sub-admin sees only that sub-admin in Chat / calls / games (nobody else)
+var LEADS_ = null;                                // ids of everybody who has added at least one user (cached per request)
+function leadSet_() {
+  if (!LEADS_) { LEADS_ = {}; readUsers_().forEach(function (u) { if (u.createdBy) LEADS_[u.createdBy] = 1; }); }
+  return LEADS_;
+}
+// A "lead" = somebody who adds users (has the permission, or has already added someone). Never the main admin.
+function isLead_(a) { return !!a && a.id !== 'ADMIN' && !!((a.perms && a.perms.addUser) || leadSet_()[a.id]); }
+// Chat / call / game visibility (always two-way):
+//   * you always see who added you, and everybody you added
+//   * a lead sees ONLY those people (not the other users)
+//   * everybody else (no lead involved, both made by the main admin) sees each other, as before
 function chatSee_(a, b) {
   if (!a || !b || a.id === b.id) return false;
-  return a.createdBy === b.id || b.createdBy === a.id || (!a.createdBy && !b.createdBy);
+  var pa = a.createdBy || 'ADMIN', pb = b.createdBy || 'ADMIN';
+  if (pa === b.id || pb === a.id) return true;
+  if (isLead_(a) || isLead_(b)) return false;
+  return !a.createdBy && !b.createdBy;
 }
 function chatCanSee_(aId, bId) {
+  LEADS_ = null;                                   // may run outside route_ (calls / games), so never trust an old cache
   var s = readSettings_().values;
   return chatSee_(getAccount_(aId, s), getAccount_(bId, s));
 }
@@ -419,7 +439,7 @@ function teamRows_(rows) {                       // keep only my own rows + my t
   var m = teamMap_(); m[CTX.uid] = 1;
   return rows.filter(function (r) { return m[r.uid]; });
 }
-function chatOnlyPerms_() { return { att: 'none', exp: 'none', work: 'none', pw: 'none', link: 'none', tt: 'none', emp: false, creds: true }; }
+function chatOnlyPerms_() { return { att: 'none', exp: 'none', work: 'none', pw: 'none', link: 'none', tt: 'none', emp: false, creds: true, addUser: false }; }
 
 function findByUsername_(uname, s) {
   uname = String(uname || '').trim().toLowerCase();
@@ -725,9 +745,12 @@ function saveUser_(req) {
   var email = String(req.email || '').trim();
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail_('Enter a valid e-mail address (or leave it empty).');
   var active = !(req.active === false || req.active === 'false');
-  var needLoc = req.needLoc === true || req.needLoc === 'true';
-  var payDue = String(req.payDue || '').trim();   // e.g. "2026-11-17T10:30" from a datetime-local input, or '' to clear
-  var permStr = JSON.stringify(normPerms_(!cur && !req.perms ? chatOnlyPerms_() : req.perms, role));   // new user = Chat only unless you tick more
+  var isAdm = CTX.role === 'admin';
+  // Only admins decide location rule, payment date and the "can add users" right. A user who adds users can never give more access than he has himself.
+  var needLoc = isAdm ? (req.needLoc === true || req.needLoc === 'true') : (cur ? cur.needLoc : false);
+  var payDue = isAdm ? String(req.payDue || '').trim() : (cur ? cur.payDue : '');   // e.g. "2026-11-17T10:30" from a datetime-local input, or '' to clear
+  var permSrc = req.perms || (cur ? cur.perms : chatOnlyPerms_());      // new user = Chat only unless more is ticked
+  var permStr = JSON.stringify(isAdm ? normPerms_(permSrc, role) : capPerms_(permSrc, CTX.perms, cur ? cur.perms.addUser : false));
   var avatar = String(req.avatar === undefined || req.avatar === null ? (cur ? cur.avatar : '') : req.avatar).trim();
   if (avatar && !/^[a-z]{2,12}$/.test(avatar)) avatar = '';
   var sh = getSheet_('USERS');
@@ -749,8 +772,37 @@ function saveUser_(req) {
     var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 14);
     r2.setNumberFormat('@');
     r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue, avatar, CTX.primary ? '' : CTX.uid]]);
+    if (!CTX.primary) joinAdderGroup_(nid);      // the new user lands in the group of the person who added him
   }
   return listUsers_();
+}
+// Caps a new/edited user's permissions to what the person adding him has (a user can't hand out more than he owns).
+function capPerms_(p, mine, keepAdd) {
+  p = normPerms_(p, 'user'); mine = mine || {};
+  var rank = { none: 0, view: 1, edit: 2 }, out = {};
+  ['att', 'exp', 'work', 'pw', 'link', 'tt'].forEach(function (k) {
+    var m = mine[k] || 'none';
+    out[k] = rank[p[k]] <= rank[m] ? p[k] : m;
+  });
+  out.emp = !!(p.emp && mine.emp); out.creds = p.creds; out.addUser = !!keepAdd;
+  return out;
+}
+// Puts a freshly added user into the adder's group. If the adder has no group yet, one is created for them
+// and the adder's current data becomes the group's data (so nothing disappears from his screen).
+function joinAdderGroup_(newId) {
+  var g = groupOf_(CTX.uid), sh = getSheet_('GROUPS');
+  if (g) {
+    var c = sh.getRange(g.row, 3); c.setNumberFormat('@'); c.setValue(g.members.concat([newId]).join(','));
+    return;
+  }
+  var taken = readGroups_().map(function (x) { return x.name.toLowerCase(); });
+  var base = ((CTX.name || CTX.username || 'My') + ' group').slice(0, 36), name = base, n = 2;
+  while (taken.indexOf(name.toLowerCase()) >= 0) name = base + ' ' + (n++);
+  var gid = 'GR' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
+  var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 4);
+  r2.setNumberFormat('@');
+  r2.setValues([[gid, name, CTX.uid + ',' + newId, nowStr_()]]);
+  adoptData_(CTX.uid, gid);
 }
 // Column 13 (M) of the Users sheet holds each user's dashboard icon (a short key such as "boy" or "girl").
 function ensureAvatarCol_(sh) {
