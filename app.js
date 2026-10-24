@@ -557,14 +557,14 @@ function userForm(id){
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
         perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds') } });
-      S.users = r.users; w.remove(); render(); toast(x ? 'User updated' : 'User added');
+      S.users = r.users; w.remove(); render(); toast(x ? 'User updated' : 'User added'); chatLoadUsers();
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
 async function delUser(id){
   const u = (S.users || []).find(x => x.id === id); if (!u) return;
   if (!await confirmBox('Delete ' + (u.name || u.username) + '?', 'They will not be able to sign in any more. Their data stays in your sheet.', 'Delete', true)) return;
-  try { const r = await api('deleteUser', { id }); S.users = r.users; if (S.as === id){ await setAs(''); } else render(); toast('User deleted'); } catch(e){ handleErr(e); }
+  try { const r = await api('deleteUser', { id }); S.users = r.users; if (S.as === id){ await setAs(''); } else render(); toast('User deleted'); chatLoadUsers(); } catch(e){ handleErr(e); }
 }
 async function kickUser(id){
   const u = (S.users || []).find(x => x.id === id); if (!u) return;
@@ -2233,7 +2233,7 @@ function bindChat(){
   document.body.classList.toggle('chat-conv', !!S.chat.with);
   $('#chSearch').oninput = e => { S.chat.q = e.target.value; chatRenderList(); };
   chatRenderList(); chatRenderPane();
-  if (!S.chat.loaded) chatLoadUsers();
+  chatLoadUsers();                                     // always refresh: a user may have been added / removed since last time
   if (S.chat.with) chatFetchConv(true);
 }
 function chatRenderList(){
