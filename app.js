@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals(); chatReset(); vcReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -325,7 +325,7 @@ function enterApp(){
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
   refreshUser();
   go(S.view);
-  chatStart(); vcStart();
+  chatStart(); vcStart(); ludoStart();
   if (isAdmin()) loadLogs();
 }
 async function boot(){
@@ -793,6 +793,16 @@ function render(){
 const cfg = () => S.d.settings;
 const smap = () => Object.fromEntries(S.d.statuses.map(s => [s.code, s]));
 function fm(n){ return (cfg().currency || '₹') + Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+/* Per-day salary. If "Round daily salary" is ON: decimal part above .5 -> next whole number (580.64 -> 581),
+   .5 or below -> dropped (580.50 -> 580, 580.30 -> 580). OFF = exact value. */
+const ROUND_KEY = 'ks_round_daily';
+const roundDaily = () => { try { return localStorage.getItem(ROUND_KEY) === '1'; } catch(e){ return false; } };
+function dayRate(salary, basis){
+  const r = salary / basis;
+  if (!roundDaily()) return r;
+  const fl = Math.floor(r + 1e-9), frac = r - fl;
+  return frac > 0.5 + 1e-9 ? fl + 1 : fl;
+}
 function monthStats(m){
   const y = +cfg().year, dim = daysIn(y, m), att = S.d.attendance[m] || {}, sm = smap();
   const counts = {}; let paid = 0, marked = 0;
@@ -801,7 +811,7 @@ function monthStats(m){
     marked++; counts[c] = (counts[c]||0) + 1; paid += sm[c] ? sm[c].factor : 0;
   }
   const e = emp(), basis = +e.basis > 0 ? +e.basis : dim;
-  const earned = paid * (+e.salary || 0) / basis;
+  const earned = paid * dayRate(+e.salary || 0, basis);
   return { dim, counts, paid, marked, earned, P:counts.P||0, A:counts.A||0, W:counts.W||0 };
 }
 function yearStats(){
@@ -1624,6 +1634,7 @@ function vSettingsBase(){
         <div class="field"><label>Year</label><input class="input" type="number" name="year" min="2000" max="2100" value="${esc(s.year)}" required inputmode="numeric"></div>
         <div class="field"><label>Currency symbol</label><input class="input" name="currency" maxlength="4" value="${esc(s.currency)}"></div>
         <div class="field"><label>Recovery e-mail <span class="muted">(OTP goes here)</span></label><input class="input" type="email" name="email" value="${esc(s.email)}" placeholder="you@gmail.com" autocomplete="email"></div>
+        <div class="field"><label>Round daily salary <span class="muted">(e.g. 580.64 → 581; .50 or less stays 580)</span></label><select class="select" id="roundSel"><option value="0" ${roundDaily() ? '' : 'selected'}>Off – exact value</option><option value="1" ${roundDaily() ? 'selected' : ''}>On – round up above .5</option></select></div>
       </div>
       <button class="btn" type="submit">Save</button>
     </form></div>
@@ -1717,6 +1728,11 @@ async function delStatus(code){
 }
 function bindSettings(){
   const $ = s => document.querySelector(s) || {};          // cards can be hidden by permissions
+  const rs = document.getElementById('roundSel');
+  if (rs) rs.onchange = () => {
+    try { localStorage.setItem(ROUND_KEY, rs.value); } catch(e){}
+    toast(rs.value === '1' ? 'Daily salary rounding ON' : 'Daily salary rounding OFF');
+  };
   $('#fGeneral').onsubmit = async ev => {
     ev.preventDefault(); const btn = ev.submitter; btn.disabled = true;
     try{
@@ -2250,7 +2266,7 @@ function chatRenderPane(){
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
       <div class="ch-av" id="chHAv" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
       <div class="ch-info"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
-      <div class="ch-calls"><button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button></div>
+      <div class="ch-calls"><button class="ch-cbtn" onclick="ludoDial()" aria-label="Play Ludo">🎲</button><button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button></div>
     </div>
     <div class="ch-msgs" id="chMsgs"></div>
     <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
@@ -2633,3 +2649,187 @@ async function vcTick(){
 function vcStart(){ clearInterval(VC.timer); VC.timer = setInterval(vcTick, 1500); }
 function vcReset(){ clearInterval(VC.timer); VC.timer = null; if (VC.cid || VC.incoming || VC.busy) { VC.ending = false; vcEnd('', true); } else vcCleanup(); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) vcTick(); });
+
+/* =====================================================================
+   LUDO  (2 players, online — the server rolls the dice and checks every move)
+   ===================================================================== */
+const LU = { gid:null, g:null, inc:null, busy:false, timer:null, polling:false, sig:'', idleAt:0, built:false };
+const LU_COL = ['#e53935', '#43a047', '#fdd835', '#1e88e5'];
+const LU_PATH = [[1,6],[2,6],[3,6],[4,6],[5,6],[6,5],[6,4],[6,3],[6,2],[6,1],[6,0],[7,0],[8,0],[8,1],[8,2],[8,3],[8,4],[8,5],[9,6],[10,6],[11,6],[12,6],[13,6],[14,6],[14,7],[14,8],[13,8],[12,8],[11,8],[10,8],[9,8],[8,9],[8,10],[8,11],[8,12],[8,13],[8,14],[7,14],[6,14],[6,13],[6,12],[6,11],[6,10],[6,9],[5,8],[4,8],[3,8],[2,8],[1,8],[0,8],[0,7],[0,6]];
+const LU_SAFE = [0, 8, 13, 21, 26, 34, 39, 47];
+const LU_YARD = [[0,0],[9,0],[9,9],[0,9]];
+function luXY(ci, pos, ti){
+  if (pos < 0){ const o = LU_YARD[ci]; return [o[0] + 2 + (ti % 2) * 2, o[1] + 2 + (ti >> 1) * 2]; }
+  if (pos <= 50){ const c = LU_PATH[(13 * ci + pos) % 52]; return [c[0] + .5, c[1] + .5]; }
+  if (pos <= 55){ const k = pos - 51; return [[1 + k + .5, 7.5], [7.5, 1 + k + .5], [13 - k + .5, 7.5], [7.5, 13 - k + .5]][ci]; }
+  const b = [[6.3, 7.5], [7.5, 6.3], [8.7, 7.5], [7.5, 8.7]][ci];
+  return ci % 2 ? [b[0] - .45 + ti * .3, b[1]] : [b[0], b[1] - .45 + ti * .3];
+}
+(function luCss(){
+  if (document.getElementById('ludoCss')) return;
+  const st = document.createElement('style'); st.id = 'ludoCss';
+  st.textContent = `
+.lu{position:fixed;inset:0;z-index:9998;background:#0f172a;color:#fff;display:flex;flex-direction:column;align-items:center;padding:calc(10px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));overflow:auto}
+.lu-top{width:100%;max-width:460px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:800;font-size:18px}
+.lu-top button{background:rgba(255,255,255,.12);color:#fff;border:0;border-radius:10px;padding:8px 12px;font-weight:700;font-size:14px}
+.lu-pl{width:100%;max-width:460px;display:flex;gap:8px;margin:10px 0}
+.lu-p{flex:1;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.08);border:2px solid transparent;min-width:0;font-weight:700;font-size:14px}
+.lu-p.on{border-color:#fff;background:rgba(255,255,255,.18)}
+.lu-p i{width:14px;height:14px;border-radius:50%;flex:none;border:2px solid #fff}
+.lu-p span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lu svg{width:100%;max-width:460px;aspect-ratio:1;background:#fff;border-radius:12px;touch-action:manipulation}
+.lt{transition:transform .35s ease}
+.lt circle.b{stroke:#fff;stroke-width:.1}
+.lt.go circle.r{fill:none;stroke:#fff;stroke-width:.12;animation:luP 0.8s infinite}
+.lt.go{cursor:pointer}
+@keyframes luP{0%,100%{opacity:1;r:.5}50%{opacity:.25;r:.62}}
+.lu-msg{margin:12px 0 6px;font-size:15px;font-weight:600;text-align:center;min-height:22px}
+.lu-dice{display:flex;align-items:center;gap:16px;justify-content:center}
+.lu-die{font-size:64px;line-height:1;width:76px;height:76px;display:grid;place-items:center;background:#fff;color:#0f172a;border-radius:16px}
+.lu-die.sh{animation:luS .45s}
+@keyframes luS{0%{transform:rotate(0)}25%{transform:rotate(-25deg)}50%{transform:rotate(22deg)}75%{transform:rotate(-12deg)}100%{transform:rotate(0)}}
+.lu-roll{background:#22c55e;color:#fff;border:0;border-radius:14px;padding:16px 26px;font-size:18px;font-weight:800}
+.lu-roll:disabled{opacity:.4}
+.lu-card{margin:auto;text-align:center;display:flex;flex-direction:column;gap:14px;align-items:center;padding:20px}
+.lu-card .big{font-size:56px}.lu-card h2{margin:0;font-size:22px}.lu-card p{margin:0;opacity:.8}
+.lu-card .row{display:flex;gap:12px}
+.lu-card button{border:0;border-radius:12px;padding:13px 22px;font-weight:800;font-size:16px;color:#fff;background:#22c55e}
+.lu-card button.x{background:#ef4444}.lu-card button.g{background:rgba(255,255,255,.18)}`;
+  document.head.appendChild(st);
+})();
+function luEl(){
+  let el = document.getElementById('ludo');
+  if (!el){ el = document.createElement('div'); el.id = 'ludo'; el.className = 'lu'; document.body.appendChild(el); }
+  return el;
+}
+function luClose(){ const el = document.getElementById('ludo'); if (el) el.remove(); LU.gid = null; LU.g = null; LU.inc = null; LU.built = false; LU.sig = ''; LU.busy = false; }
+function luCard(icon, title, sub, btns){
+  const el = luEl(); LU.built = false;
+  el.innerHTML = `<div class="lu-card"><div class="big">${icon}</div><h2>${esc(title)}</h2>${sub ? `<p>${esc(sub)}</p>` : ''}<div class="row">${btns}</div></div>`;
+}
+async function ludoDial(){
+  const u = chatPeer(S.chat.with); if (!u) return;
+  if (LU.busy || LU.gid || LU.inc) return toast('You are already in a Ludo game', true);
+  LU.busy = true;
+  try{
+    const r = await chatApi('ludoInvite', { to:u.id });
+    LU.gid = r.id; LU.sig = '';
+    luCard('🎲', 'Inviting ' + (u.name || u.username) + '…', 'Waiting for them to accept (they need the app open)', '<button class="x" onclick="ludoLeave()">Cancel</button>');
+  }catch(e){ LU.busy = false; chatErr(e); toast(e.message, true); }
+}
+async function ludoAccept(){
+  const inc = LU.inc; if (!inc) return;
+  try{ await chatApi('ludoAccept', { gid:inc.id }); LU.gid = inc.id; LU.inc = null; LU.busy = true; LU.sig = ''; ludoTick(true); }
+  catch(e){ luClose(); chatErr(e); toast(e.message, true); }
+}
+async function ludoLeave(){
+  const g = LU.g, gid = LU.gid || (LU.inc && LU.inc.id);
+  if (g && g.state === 'playing' && !confirm('Leave the game? You will lose.')) return;
+  if (gid){ try{ await chatApi('ludoLeave', { gid }); }catch(e){} }
+  luClose();
+}
+async function ludoRoll(){
+  const b = document.getElementById('luRoll'); if (b) b.disabled = true;
+  const d = document.getElementById('luDie'); if (d) d.classList.add('sh');
+  try{ await chatApi('ludoRoll', { gid:LU.gid }); }catch(e){ chatErr(e); toast(e.message, true); }
+  ludoTick(true);
+}
+async function ludoMove(t){
+  const g = LU.g; if (!g || g.state !== 'playing' || g.turn !== g.me || !g.movable.includes(t)) return;
+  g.movable = [];                                    // block double taps
+  try{ await chatApi('ludoMove', { gid:LU.gid, token_i:t }); }catch(e){ chatErr(e); toast(e.message, true); }
+  ludoTick(true);
+}
+function luBuild(){
+  const el = luEl(), g = LU.g;
+  let b = '';
+  [0,1,2,3].forEach(ci => { const o = LU_YARD[ci];
+    b += `<rect x="${o[0]}" y="${o[1]}" width="6" height="6" fill="${LU_COL[ci]}"/><rect x="${o[0] + 1}" y="${o[1] + 1}" width="4" height="4" rx=".5" fill="#fff"/>`;
+    for (let t = 0; t < 4; t++){ const p = luXY(ci, -1, t); b += `<circle cx="${p[0]}" cy="${p[1]}" r=".42" fill="${LU_COL[ci]}" opacity=".25"/>`; } });
+  LU_PATH.forEach((c, i) => {
+    const si = [0, 13, 26, 39].indexOf(i);
+    b += `<rect x="${c[0]}" y="${c[1]}" width="1" height="1" fill="${si >= 0 ? LU_COL[si] : '#fff'}" stroke="#94a3b8" stroke-width=".05"/>`;
+    if (LU_SAFE.includes(i) && si < 0) b += `<text x="${c[0] + .5}" y="${c[1] + .72}" font-size=".7" text-anchor="middle" fill="#64748b">★</text>`;
+  });
+  [0,1,2,3].forEach(ci => { for (let k = 0; k < 5; k++){ const p = luXY(ci, 51 + k, 0);
+    b += `<rect x="${p[0] - .5}" y="${p[1] - .5}" width="1" height="1" fill="${LU_COL[ci]}" stroke="#94a3b8" stroke-width=".05"/>`; } });
+  b += `<polygon points="6,6 6,9 7.5,7.5" fill="${LU_COL[0]}"/><polygon points="6,6 9,6 7.5,7.5" fill="${LU_COL[1]}"/><polygon points="9,6 9,9 7.5,7.5" fill="${LU_COL[2]}"/><polygon points="6,9 9,9 7.5,7.5" fill="${LU_COL[3]}"/>`;
+  let tk = '';
+  for (let pi = 0; pi < 2; pi++) for (let t = 0; t < 4; t++){
+    const col = LU_COL[g.colors[pi]];
+    tk += `<g class="lt" id="lt${pi}_${t}" onclick="ludoMove(${t})" style="transform:translate(0px,0px)"><circle class="r" r=".5" fill="none"/><circle class="b" r=".36" fill="${col}"/><circle r=".14" fill="#fff" opacity=".7"/></g>`;
+  }
+  el.innerHTML = `<div class="lu-top"><span>🎲 Ludo</span><button onclick="ludoLeave()">Leave</button></div>
+    <div class="lu-pl" id="luPl"></div>
+    <svg viewBox="0 0 15 15">${b}${tk}</svg>
+    <div class="lu-msg" id="luMsg"></div>
+    <div class="lu-dice"><div class="lu-die" id="luDie">🎲</div><button class="lu-roll" id="luRoll" onclick="ludoRoll()">Roll</button></div>`;
+  LU.built = true;
+}
+function luRender(){
+  const g = LU.g; if (!g) return;
+  if (!LU.built) luBuild();
+  const mine = g.me, myTurn = g.state === 'playing' && g.turn === mine;
+  // tokens (small offset when several share a square)
+  const seen = {};
+  for (let pi = 0; pi < 2; pi++) for (let t = 0; t < 4; t++){
+    const pos = g.tokens[pi][t], ci = g.colors[pi], xy = luXY(ci, pos, t), k = xy[0].toFixed(2) + ',' + xy[1].toFixed(2);
+    const n = pos >= 0 && pos < 56 ? (seen[k] = (seen[k] || 0) + 1) - 1 : 0;
+    const el = document.getElementById('lt' + pi + '_' + t); if (!el) continue;
+    el.style.transform = `translate(${xy[0] + n * .16}px,${xy[1] - n * .16}px)`;
+    el.classList.toggle('go', pi === mine && myTurn && g.movable.includes(t));
+  }
+  $('#luPl').innerHTML = g.players.map((p, i) => `<div class="lu-p ${g.state === 'playing' && g.turn === i ? 'on' : ''}"><i style="background:${LU_COL[g.colors[i]]}"></i><span>${esc(i === mine ? 'You' : p.name)}</span></div>`).join('');
+  const die = $('#luDie'), v = g.last && g.last.v;
+  die.textContent = v ? '⚀⚁⚂⚃⚄⚅'[v - 1] : '🎲'; die.classList.remove('sh');
+  const rb = $('#luRoll'); rb.style.display = myTurn && !g.roll ? '' : 'none'; rb.disabled = false;
+  let msg = g.msg || '';
+  if (myTurn) msg = g.roll ? 'You rolled ' + g.roll + ' — tap a glowing token' : (msg ? msg + ' · ' : '') + 'Your turn — roll the dice';
+  else if (g.state === 'playing') msg = (msg ? msg + ' · ' : '') + esc0(g.players[g.turn].name) + ' is playing…';
+  $('#luMsg').textContent = msg;
+}
+const esc0 = v => String(v ?? '');
+function luOver(g){
+  const won = g.winner === g.me, name = (g.players[g.winner] || {}).name || 'Opponent';
+  const why = { won:'', resigned: won ? 'Your friend left the game.' : '', left: won ? 'Your friend went offline.' : '' }[g.reason] || '';
+  luRender();
+  const el = luEl(), card = document.createElement('div'); card.className = 'lu-card'; card.style.cssText = 'position:absolute;inset:0;background:rgba(15,23,42,.92);justify-content:center';
+  card.innerHTML = `<div class="big">${won ? '🏆' : '😔'}</div><h2>${won ? 'You won!' : esc(name) + ' won'}</h2>${why ? `<p>${esc(why)}</p>` : ''}<div class="row"><button onclick="luClose()">Close</button></div>`;
+  el.appendChild(card);
+}
+async function ludoTick(force){
+  if (!S.token || !S.d || LU.polling) return;
+  const inGame = !!LU.gid;
+  if (!inGame && !force){
+    if (LU.busy || document.hidden || Date.now() - LU.idleAt < 2000) return;
+    LU.idleAt = Date.now();
+  }
+  LU.polling = true;
+  try{
+    if (inGame){
+      const { game } = await chatApi('ludoPoll', { gid:LU.gid }); if (!LU.gid) return;
+      LU.g = game;
+      if (game.state === 'over' && !game.players.length){ luClose(); return toast('Game ended'); }
+      if (game.state === 'invite') return;
+      if (game.state === 'over'){
+        const sig = 'over' + game.ev + game.reason; if (sig === LU.sig) return; LU.sig = sig;
+        if (game.reason === 'declined' || game.reason === 'noanswer' || game.reason === 'cancelled'){
+          const t = game.reason === 'declined' ? 'Invite declined' : game.reason === 'noanswer' ? 'No answer' : 'Invite cancelled';
+          luCard('🎲', t, '', '<button onclick="luClose()">OK</button>'); LU.gid = null; return;
+        }
+        return luOver(game);
+      }
+      const sig = game.state + game.ev + '|' + game.turn + '|' + game.roll + '|' + JSON.stringify(game.tokens) + game.me;
+      if (sig !== LU.sig){ LU.sig = sig; luRender(); }
+    } else {
+      const r = await chatApi('ludoPoll', {});
+      if (r.incoming && !LU.inc){
+        LU.inc = r.incoming;
+        luCard('🎲', r.incoming.fromName + ' invited you to Ludo', 'Play online together', '<button class="x" onclick="ludoLeave()">Decline</button><button onclick="ludoAccept()">Accept</button>');
+      } else if (!r.incoming && LU.inc){ luClose(); toast('Ludo invite expired'); }
+    }
+  }catch(e){ chatErr(e); }
+  finally{ LU.polling = false; }
+}
+function ludoStart(){ clearInterval(LU.timer); LU.timer = setInterval(() => ludoTick(false), 1000); }
+function ludoReset(){ clearInterval(LU.timer); LU.timer = null; const gid = LU.gid || (LU.inc && LU.inc.id); if (gid) chatApi('ludoLeave', { gid }).catch(() => {}); luClose(); }

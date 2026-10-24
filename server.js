@@ -272,6 +272,113 @@ function makeApp(store, env) {
     }
   }
 
+
+  // ---------- Ludo (2 players, kept in memory, the server is the referee: dice + rules run here) ----------
+  const LUDO_ACTIONS = new Set(['ludoInvite', 'ludoPoll', 'ludoAccept', 'ludoRoll', 'ludoMove', 'ludoLeave']);
+  const lgames = new Map(), lbusy = new Map();          // gameId -> game ; userId -> gameId
+  const LU_SAFE = new Set([0, 8, 13, 21, 26, 34, 39, 47]);   // star + start squares (no capture)
+  const LU_COLORS = [0, 2];                                  // red vs yellow (opposite corners)
+  const luAbs = (ci, pos) => (13 * ci + pos) % 52;
+  function luMovable(g, pi) {
+    const ci = LU_COLORS[pi], out = [];
+    if (!g.roll) return out;
+    g.tokens[pi].forEach((pos, t) => {
+      if (pos === 56) return;
+      if (pos === -1 ? g.roll === 6 : pos + g.roll <= 56) out.push(t);
+    });
+    return out;
+  }
+  function luFinish(g, reason, winner) {
+    if (g.state === 'over') return;
+    g.state = 'over'; g.reason = reason; g.endAt = Date.now(); if (winner !== undefined) g.winner = winner;
+    for (const p of g.players) if (lbusy.get(p.id) === g.id) lbusy.delete(p.id);
+  }
+  function luSweep() {
+    const now = Date.now();
+    for (const g of lgames.values()) {
+      if (g.state === 'invite' && now - g.t0 > 60000) luFinish(g, 'noanswer');
+      else if (g.state === 'playing') {
+        const idle = g.seen.map(t => now - t);
+        if (Math.max(...idle) > 120000) { const gone = idle[0] > idle[1] ? 0 : 1; luFinish(g, 'left', 1 - gone); }
+      } else if (g.state === 'over' && now - g.endAt > 60000) lgames.delete(g.id);
+    }
+  }
+  function luView(g, uid) {
+    const me = g.players.findIndex(p => p.id === uid);
+    return { id: g.id, state: g.state, players: g.players.map(p => ({ id: p.id, name: p.name })), me, colors: LU_COLORS,
+      tokens: g.tokens, turn: g.turn, roll: g.roll, movable: g.state === 'playing' && g.turn === me ? luMovable(g, me) : [],
+      winner: g.winner, reason: g.reason, ev: g.ev, msg: g.msg, last: g.last };
+  }
+  function luNote(g, text) { g.ev++; g.msg = text; }
+  function luPass(g) { g.turn = 1 - g.turn; g.roll = 0; g.sixes = 0; }
+  async function ludoRoute(req) {
+    const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    luSweep(); const a = req.action, now = Date.now();
+    if (a === 'ludoInvite') {
+      const to = String(req.to || ''), S0 = globalThis.readSettings_().values, peer = to && to !== uid ? globalThis.getAccount_(to, S0) : null;
+      if (!peer || !peer.active || !peer.username) globalThis.fail_('That user was not found.', 'LUDO');
+      if (lbusy.has(uid)) globalThis.fail_('You are already in a Ludo game.', 'LUDO');
+      if (lbusy.has(to)) globalThis.fail_((peer.name || peer.username) + ' is busy in another Ludo game.', 'LUDO');
+      const me = globalThis.getAccount_(uid, S0), id = crypto.randomBytes(8).toString('hex');
+      const g = { id, state: 'invite', players: [{ id: uid, name: (me && (me.name || me.username)) || 'Someone' }, { id: to, name: peer.name || peer.username }],
+        tokens: [[-1, -1, -1, -1], [-1, -1, -1, -1]], turn: 0, roll: 0, sixes: 0, winner: -1, reason: '', ev: 0, msg: '', last: null,
+        t0: now, seen: [now, now], endAt: 0 };
+      lgames.set(id, g); lbusy.set(uid, id); lbusy.set(to, id);
+      return { ok: true, id };
+    }
+    if (a === 'ludoPoll') {
+      if (req.gid) {
+        const g = lgames.get(String(req.gid));
+        if (!g) return { ok: true, game: { state: 'over', reason: 'gone', me: -1, players: [], tokens: [], movable: [] } };
+        const pi = g.players.findIndex(p => p.id === uid); if (pi < 0) return { ok: true, game: { state: 'over', reason: 'gone', me: -1, players: [], tokens: [], movable: [] } };
+        g.seen[pi] = now; return { ok: true, game: luView(g, uid) };
+      }
+      const cur = lgames.get(lbusy.get(uid) || '');
+      if (cur && cur.state === 'invite' && cur.players[1].id === uid) return { ok: true, incoming: { id: cur.id, fromName: cur.players[0].name } };
+      return { ok: true, incoming: null };
+    }
+    const g = lgames.get(String(req.gid || ''));
+    const pi = g ? g.players.findIndex(p => p.id === uid) : -1;
+    if (!g || pi < 0) globalThis.fail_('This game has ended.', 'LUDO');
+    if (a === 'ludoLeave') {
+      if (g.state === 'invite') luFinish(g, pi === 0 ? 'cancelled' : 'declined');
+      else if (g.state === 'playing') luFinish(g, 'resigned', 1 - pi);
+      return { ok: true };
+    }
+    if (a === 'ludoAccept') {
+      if (g.state !== 'invite' || pi !== 1) globalThis.fail_('This invite is no longer open.', 'LUDO');
+      g.state = 'playing'; g.seen = [now, now]; g.turn = 0; luNote(g, g.players[0].name + ' starts');
+      return { ok: true };
+    }
+    if (g.state !== 'playing' || g.turn !== pi) globalThis.fail_('It is not your turn.', 'LUDO');
+    if (a === 'ludoRoll') {
+      if (g.roll) globalThis.fail_('Move a token first.', 'LUDO');
+      const r = 1 + crypto.randomInt(6); g.last = { by: pi, v: r };
+      if (r === 6 && g.sixes === 2) { luPass(g); luNote(g, 'Three sixes in a row - turn lost'); return { ok: true }; }
+      g.roll = r; g.sixes = r === 6 ? g.sixes + 1 : 0;
+      if (!luMovable(g, pi).length) { luPass(g); luNote(g, 'Rolled ' + r + ' - no move'); }
+      else luNote(g, 'Rolled ' + r);
+      return { ok: true };
+    }
+    if (a === 'ludoMove') {
+      const t = Number(req.token_i), mv = luMovable(g, pi);
+      if (!mv.includes(t)) globalThis.fail_('That token cannot move.', 'LUDO');
+      const ci = LU_COLORS[pi], roll = g.roll, from = g.tokens[pi][t];
+      const to = from === -1 ? 0 : from + roll; g.tokens[pi][t] = to;
+      let extra = roll === 6, text = 'Moved';
+      if (to <= 50) {
+        const ab = luAbs(ci, to), opp = 1 - pi, oc = LU_COLORS[opp];
+        if (!LU_SAFE.has(ab)) {
+          g.tokens[opp].forEach((op, k) => { if (op >= 0 && op <= 50 && luAbs(oc, op) === ab) { g.tokens[opp][k] = -1; extra = true; text = 'Captured a token!'; } });
+        }
+      } else if (to === 56) { extra = true; text = 'Token reached home!'; }
+      g.roll = 0;
+      if (g.tokens[pi].every(x => x === 56)) { luFinish(g, 'won', pi); luNote(g, g.players[pi].name + ' wins!'); return { ok: true }; }
+      if (!extra) { g.turn = 1 - pi; g.sixes = 0; }
+      luNote(g, text); return { ok: true };
+    }
+  }
+
   let chain = Promise.resolve();
   async function run(body) {
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
@@ -295,8 +402,8 @@ function makeApp(store, env) {
   }
   const fastCall = body => {                           // call polling never waits behind slow sheet saves
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
-    if (!r || !CALL_ACTIONS.has(r.action)) return null;
-    return Promise.resolve().then(() => callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
+    if (!r || !(CALL_ACTIONS.has(r.action) || LUDO_ACTIONS.has(r.action))) return null;
+    return Promise.resolve().then(() => LUDO_ACTIONS.has(r.action) ? ludoRoute(r) : callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
   };
   return { handle: body => fastCall(body) || (chain = chain.then(() => run(body), () => run(body))),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
