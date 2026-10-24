@@ -207,6 +207,7 @@ function buildCtx_(uid, asUser) {
     if (acc.role !== 'admin') fail_('Not allowed.', 'PERM');
     var t = getAccount_(asUser);
     if (!t) fail_('That user was not found.');
+    if (acc.id !== 'ADMIN' && t.createdBy !== acc.id) fail_('Not allowed.', 'PERM');      // a sub-admin can only open the users he created
     var tg = groupOf_(t.id);
     CTX.owner = tg ? tg.id : t.id; CTX.group = tg; CTX.perms = fullPerms_(); CTX.viewing = true;
     CTX.viewName = (t.name || t.username || 'User') + (tg ? ' (group “' + tg.name + '”)' : '');
@@ -292,8 +293,8 @@ function route_(req) {
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
       case 'chatSend':          return chatSend_(req);
-      case 'loginLog':          return { ok: true, logs: readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || '')) };
-      case 'activityLog':       return { ok: true, logs: readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid) };
+      case 'loginLog':          return { ok: true, logs: teamRows_(readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || ''))) };
+      case 'activityLog':       return { ok: true, logs: teamRows_(readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid)) };
       default: fail_('Unknown action: ' + a);
     }
     if (out && out.ok !== false) logActivity_(a, CTX, req);     // only log actions that actually succeeded
@@ -372,7 +373,7 @@ function getAccount_(id, s) {
   if (id === 'ADMIN') {
     var v = s || {};
     return { id: 'ADMIN', username: String(v.username || ''), password: v.password, name: String(v.name || v.username || ''),
-             email: String(v.email || ''), role: 'admin', active: true, perms: fullPerms_(), needLoc: false, payDue: '', row: 0, created: '', lastLogin: '',
+             email: String(v.email || ''), role: 'admin', active: true, perms: fullPerms_(), needLoc: false, payDue: '', row: 0, created: '', lastLogin: '', createdBy: '',
              avatar: String(PropertiesService.getScriptProperties().getProperty('AVATAR_ADMIN') || '') };
   }
   return readUsers_().filter(function (x) { return x.id === id; })[0] || null;
@@ -380,8 +381,8 @@ function getAccount_(id, s) {
 function readUsers_() {
   var sh = getSheet_('USERS'), last = sh.getLastRow(), out = [];
   if (last < 2) return out;
-  if (sh.getMaxColumns() < 13) sh.insertColumnsAfter(sh.getMaxColumns(), 13 - sh.getMaxColumns());
-  sh.getRange(2, 1, last - 1, 13).getValues().forEach(function (r, i) {
+  if (sh.getMaxColumns() < 14) sh.insertColumnsAfter(sh.getMaxColumns(), 14 - sh.getMaxColumns());
+  sh.getRange(2, 1, last - 1, 14).getValues().forEach(function (r, i) {
     var id = String(r[0]).trim(), un = String(r[1]).trim();
     if (!id || !un) return;
     var role = /^admin/i.test(String(r[3])) ? 'admin' : 'user';
@@ -390,10 +391,36 @@ function readUsers_() {
     out.push({ id: id, username: un, password: r[2], role: role, name: String(r[4] || ''), email: String(r[5] || '').trim(),
       active: !/^(no|false|0)$/i.test(String(r[6]).trim()), perms: normPerms_(pj, role),
       needLoc: /^(yes|true|1)$/i.test(String(r[8]).trim()), created: tsStr_(r[9]), lastLogin: tsStr_(r[10]),
-      payDue: tsStr_(r[11]), avatar: String(r[12] || '').trim(), row: i + 2 });
+      payDue: tsStr_(r[11]), avatar: String(r[12] || '').trim(), createdBy: String(r[13] || '').trim(), row: i + 2 });
   });
   return out;
 }
+// ---------- TEAMS (who created whom) ----------
+// Users made by a sub-admin carry that sub-admin's id in "Created By". Users made by the main admin, and every user that
+// existed before this feature, have it empty (they keep the old behaviour).
+//   * a sub-admin only sees / manages the users HE created
+//   * a user made by a sub-admin sees only that sub-admin in Chat / calls / games (nobody else)
+function chatSee_(a, b) {
+  if (!a || !b || a.id === b.id) return false;
+  return a.createdBy === b.id || b.createdBy === a.id || (!a.createdBy && !b.createdBy);
+}
+function chatCanSee_(aId, bId) {
+  var s = readSettings_().values;
+  return chatSee_(getAccount_(aId, s), getAccount_(bId, s));
+}
+function teamMap_() {
+  var m = {};
+  readUsers_().forEach(function (u) { if (u.createdBy === CTX.uid) m[u.id] = 1; });
+  return m;
+}
+function needTeam_(u) { if (!CTX.primary && (!u || u.createdBy !== CTX.uid)) fail_('You can only manage the users you created.', 'PERM'); }
+function teamRows_(rows) {                       // keep only my own rows + my team's (main admin keeps all)
+  if (CTX.primary) return rows;
+  var m = teamMap_(); m[CTX.uid] = 1;
+  return rows.filter(function (r) { return m[r.uid]; });
+}
+function chatOnlyPerms_() { return { att: 'none', exp: 'none', work: 'none', pw: 'none', link: 'none', tt: 'none', emp: false, creds: true }; }
+
 function findByUsername_(uname, s) {
   uname = String(uname || '').trim().toLowerCase();
   if (!uname) return null;
@@ -669,7 +696,9 @@ function pubUser_(u, last) {
 function listUsers_() {
   var s = readSettings_().values, last = {};
   readLog_(1500, '').forEach(function (l) { if (l.result === 'Success' && !last[l.uid]) last[l.uid] = l.time; });   // newest first
-  var list = [pubUser_(getAccount_('ADMIN', s), last)].concat(readUsers_().map(function (u) { return pubUser_(u, last); }));
+  var list;
+  if (CTX.primary) list = [pubUser_(getAccount_('ADMIN', s), last)].concat(readUsers_().map(function (u) { return pubUser_(u, last); }));
+  else list = readUsers_().filter(function (u) { return u.createdBy === CTX.uid; }).map(function (u) { return pubUser_(u, last); });
   return { ok: true, users: list };
 }
 function saveUser_(req) {
@@ -681,6 +710,7 @@ function saveUser_(req) {
     cur = users.filter(function (u) { return u.id === id; })[0];
     if (!cur) fail_('User not found. Please refresh.');
     if (cur.role === 'admin' && !CTX.primary) fail_('Only the main admin can change another admin.', 'PERM');
+    needTeam_(cur);
   }
   var username = String(req.username || '').trim();
   if (!/^\S{3,40}$/.test(username)) fail_('Username must be 3 to 40 characters, without spaces.');
@@ -697,7 +727,7 @@ function saveUser_(req) {
   var active = !(req.active === false || req.active === 'false');
   var needLoc = req.needLoc === true || req.needLoc === 'true';
   var payDue = String(req.payDue || '').trim();   // e.g. "2026-11-17T10:30" from a datetime-local input, or '' to clear
-  var permStr = JSON.stringify(normPerms_(req.perms, role));
+  var permStr = JSON.stringify(normPerms_(!cur && !req.perms ? chatOnlyPerms_() : req.perms, role));   // new user = Chat only unless you tick more
   var avatar = String(req.avatar === undefined || req.avatar === null ? (cur ? cur.avatar : '') : req.avatar).trim();
   if (avatar && !/^[a-z]{2,12}$/.test(avatar)) avatar = '';
   var sh = getSheet_('USERS');
@@ -716,16 +746,17 @@ function saveUser_(req) {
   } else {
     if (users.length >= 100) fail_('User limit (100) reached.');
     var nid = 'U' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
-    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 13);
+    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 14);
     r2.setNumberFormat('@');
-    r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue, avatar]]);
+    r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue, avatar, CTX.primary ? '' : CTX.uid]]);
   }
   return listUsers_();
 }
 // Column 13 (M) of the Users sheet holds each user's dashboard icon (a short key such as "boy" or "girl").
 function ensureAvatarCol_(sh) {
-  if (sh.getMaxColumns() < 13) sh.insertColumnsAfter(sh.getMaxColumns(), 13 - sh.getMaxColumns());
+  if (sh.getMaxColumns() < 14) sh.insertColumnsAfter(sh.getMaxColumns(), 14 - sh.getMaxColumns());
   if (!String(sh.getRange(1, 13).getValue() || '').trim()) sh.getRange(1, 13).setValue('Avatar (icon)');
+  if (!String(sh.getRange(1, 14).getValue() || '').trim()) sh.getRange(1, 14).setValue('Created By (user ID)');
 }
 function setAvatar_(req) {
   var id = String(req.id || '').trim(), av = String(req.avatar || '').trim();
@@ -738,6 +769,7 @@ function setAvatar_(req) {
   var u = readUsers_().filter(function (x) { return x.id === id; })[0];
   if (!u) fail_('User not found. Please refresh.');
   if (u.role === 'admin' && !CTX.primary && u.id !== CTX.uid) fail_('Only the main admin can change another admin.', 'PERM');
+  if (u.id !== CTX.uid) needTeam_(u);
   var sh = getSheet_('USERS');
   ensureAvatarCol_(sh);
   var c = sh.getRange(u.row, 13); c.setNumberFormat('@'); c.setValue(av);
@@ -750,6 +782,7 @@ function deleteUser_(req) {
   var u = readUsers_().filter(function (x) { return x.id === id; })[0];
   if (!u) fail_('User not found. Please refresh.');
   if (u.role === 'admin' && !CTX.primary) fail_('Only the main admin can delete another admin.', 'PERM');
+  needTeam_(u);
   getSheet_('USERS').deleteRow(u.row);          // their data rows stay in the sheets (tagged with the old id)
   readGroups_().forEach(function (g) {          // take the deleted user out of any group
     if (g.members.indexOf(id) >= 0) getSheet_('GROUPS').getRange(g.row, 3).setValue(g.members.filter(function (m) { return m !== id; }).join(','));
@@ -762,6 +795,7 @@ function kickUser_(req) {
   var u = readUsers_().filter(function (x) { return x.id === id; })[0];
   if (!u) fail_('User not found. Please refresh.');
   if (u.role === 'admin' && !CTX.primary) fail_('Only the main admin can sign out another admin.', 'PERM');
+  needTeam_(u);
   bumpVersion_(id);
   return { ok: true };
 }
@@ -791,9 +825,13 @@ function memberNames_(g, users) {
   }).filter(Boolean);
 }
 function groupInfo_(g) { return { id: g.id, name: g.name, members: memberNames_(g, readUsers_()) }; }
+function groupInTeam_(g) {
+  if (CTX.primary) return true;
+  var m = teamMap_(); return g.members.every(function (x) { return m[x]; });
+}
 function listGroups_() {
   var users = readUsers_();
-  return { ok: true, groups: readGroups_().map(function (g) {
+  return { ok: true, groups: readGroups_().filter(groupInTeam_).map(function (g) {
     return { id: g.id, name: g.name, members: g.members, memberNames: memberNames_(g, users), created: g.created };
   }) };
 }
@@ -816,6 +854,7 @@ function saveGroup_(req) {
   if (id) {
     cur = groups.filter(function (g) { return g.id === id; })[0];
     if (!cur) fail_('Group not found. Please refresh.');
+    if (!groupInTeam_(cur)) fail_('You can only manage groups of the users you created.', 'PERM');
   }
   var name = String(req.name || '').trim().slice(0, 40);
   if (!name) fail_('Group name is required.');
@@ -823,6 +862,7 @@ function saveGroup_(req) {
   var ids = [];
   (Array.isArray(req.members) ? req.members : []).forEach(function (m) { m = String(m).trim(); if (m && ids.indexOf(m) < 0) ids.push(m); });
   if (ids.length < 2) fail_('Select at least 2 users for a group.');
+  if (!CTX.primary) { var tm = teamMap_(); ids.forEach(function (m) { if (!tm[m]) fail_('You can only group the users you created.', 'PERM'); }); }
   ids.forEach(function (m) {
     var u = users.filter(function (x) { return x.id === m; })[0];
     if (!u) fail_('One of the selected users was not found. Please refresh.');
@@ -850,6 +890,7 @@ function deleteGroup_(req) {
   var id = String(req.id || '').trim();
   var g = readGroups_().filter(function (x) { return x.id === id; })[0];
   if (!g) fail_('Group not found. Please refresh.');
+  if (!groupInTeam_(g)) fail_('You can only manage groups of the users you created.', 'PERM');
   getSheet_('GROUPS').deleteRow(g.row);          // the group's data rows stay in the sheets (tagged with the group id)
   return listGroups_();
 }
@@ -923,9 +964,9 @@ function createSheet_(k) {
     sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:F').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
     sh.setFrozenRows(1);
   } else if (k === 'USERS') {
-    sh.getRange(1, 1, 1, 13).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
-      'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until', 'Avatar (icon)']]);
-    sh.getRange('A:M').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 14).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
+      'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until', 'Avatar (icon)', 'Created By (user ID)']]);
+    sh.getRange('A:N').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'GROUPS') {
     sh.getRange(1, 1, 1, 4).setValues([['ID', 'Group name', 'Member user IDs (comma separated)', 'Created']]);
@@ -1776,8 +1817,8 @@ function chatRows_() {
 }
 function chatPeers_() {
   var s = readSettings_().values;
-  var list = [getAccount_('ADMIN', s)].concat(readUsers_());
-  return list.filter(function (a) { return a.id !== CTX.uid && a.active && has_(a.username); });
+  var list = [getAccount_('ADMIN', s)].concat(readUsers_()), me = getAccount_(CTX.uid, s);
+  return list.filter(function (a) { return a.id !== CTX.uid && a.active && has_(a.username) && chatSee_(me, a); });
 }
 function chatUsers_() {
   var now = Date.now(), peers = chatPeers_(), ids = peers.map(function (a) { return a.id; });
@@ -1809,6 +1850,7 @@ function chatPeerOk_(id) {
   if (!id || id === CTX.uid) fail_('Choose a user to chat with.');
   var acc = getAccount_(id, readSettings_().values);
   if (!acc || !acc.active || !has_(acc.username)) fail_('That user was not found.');
+  if (!chatSee_(getAccount_(CTX.uid, readSettings_().values), acc)) fail_('That user was not found.');
   return acc;
 }
 function chatMsgOut_(r) { return { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text }; }
@@ -1938,6 +1980,7 @@ function calSyncAll_() {
 // Admin overview: who has connected a calendar (no event content is ever read)
 function ttCalStatus_() {
   var list = [getAccount_('ADMIN', readSettings_().values)].concat(readUsers_());
+  if (!CTX.primary) { var tm = teamMap_(); tm[CTX.uid] = 1; list = list.filter(function (a) { return tm[a.id]; }); }
   return { ok: true, users: list.filter(function (a) { return a.active; }).map(function (a) {
     var m = calMeta_(a.id);
     return { id: a.id, name: a.name || a.username, connected: !!m, email: m ? m.email : '', at: m ? m.at : 0 };

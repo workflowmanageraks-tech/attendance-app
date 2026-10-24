@@ -356,8 +356,11 @@ const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', t
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
+  const chatOnly = ['att','exp','work','pw','link','tt'].every(k => p[k] === 'none') && !isAdmin();
+  hide('dashboard', chatOnly);
   hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('logins', !isAdmin());
-  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin())) S.view = 'dashboard';
+  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin())) S.view = chatOnly ? 'chat' : 'dashboard';
+  if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
 function applyRO(v){
@@ -517,10 +520,10 @@ function usersCard(){
 }
 function userForm(id){
   const x = id ? (S.users || []).find(u => u.id === id) : null;
-  const p = (x && x.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', emp:false, creds:true };
+  const p = (x && x.perms) || { att:'none', exp:'none', work:'none', pw:'none', link:'none', tt:'none', emp:false, creds:true };   // new user = Chat only
   const sel = (n, v) => `<select class="select" name="${n}"><option value="none" ${v==='none'?'selected':''}>No access (hidden)</option><option value="view" ${v==='view'?'selected':''}>View only</option><option value="edit" ${v==='edit'?'selected':''}>Can add / edit / delete</option></select>`;
   const isA = !!(x && x.role === 'admin');
-  const w = openModal(`<h3>${x ? 'Edit user' : 'Add user'}</h3><p class="sub">${x ? 'Leave password empty to keep it.' : 'Set a username and password, then share them with the user.'}</p>
+  const w = openModal(`<h3>${x ? 'Edit user' : 'Add user'}</h3><p class="sub">${x ? 'Leave password empty to keep it.' : 'Set a username and password, then share them with the user. By default the new user gets Chat only and sees only you.'}</p>
     <form id="uf" autocomplete="off">
       <div class="row2"><div class="field"><label>Name</label><input class="input" name="name" maxlength="60" value="${esc(x ? x.name : '')}" required></div>
         <div class="field"><label>Username</label><input class="input" name="username" maxlength="40" autocomplete="off" autocapitalize="off" value="${esc(x ? x.username : '')}" required></div></div>

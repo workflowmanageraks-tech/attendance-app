@@ -237,7 +237,7 @@ function makeApp(store, env) {
     if (a === 'callStart') {
       const to = String(req.to || ''), kind = req.kind === 'video' ? 'video' : 'audio';
       const S0 = globalThis.readSettings_().values, peer = to && to !== uid ? globalThis.getAccount_(to, S0) : null;
-      if (!peer || !peer.active || !peer.username) globalThis.fail_('That user was not found.', 'CALL');
+      if (!peer || !peer.active || !peer.username || !globalThis.chatCanSee_(uid, to)) globalThis.fail_('That user was not found.', 'CALL');
       if (vbusy.has(uid)) globalThis.fail_('You are already in a call.', 'BUSY');
       if (vbusy.has(to)) globalThis.fail_((peer.name || peer.username) + ' is busy on another call.', 'BUSY');
       const me = globalThis.getAccount_(uid, S0), id = crypto.randomBytes(9).toString('hex');
@@ -316,7 +316,7 @@ function makeApp(store, env) {
     luSweep(); const a = req.action, now = Date.now();
     if (a === 'ludoInvite') {
       const to = String(req.to || ''), S0 = globalThis.readSettings_().values, peer = to && to !== uid ? globalThis.getAccount_(to, S0) : null;
-      if (!peer || !peer.active || !peer.username) globalThis.fail_('That user was not found.', 'LUDO');
+      if (!peer || !peer.active || !peer.username || !globalThis.chatCanSee_(uid, to)) globalThis.fail_('That user was not found.', 'LUDO');
       if (lbusy.has(uid)) globalThis.fail_('You are already in a Ludo game.', 'LUDO');
       if (lbusy.has(to)) globalThis.fail_((peer.name || peer.username) + ' is busy in another Ludo game.', 'LUDO');
       const me = globalThis.getAccount_(uid, S0), id = crypto.randomBytes(8).toString('hex');
