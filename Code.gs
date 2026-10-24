@@ -157,7 +157,7 @@ var WRITE_ACTIONS = {
   addLink: 1, updateLink: 1, deleteLink: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -295,6 +295,7 @@ function route_(req) {
       case 'listGroups':        return listGroups_();
       case 'saveGroup':         out = saveGroup_(req); break;
       case 'deleteGroup':       out = deleteGroup_(req); break;
+      case 'setActivityAccess': out = setActivityAccess_(req); break;
       case 'chatUsers':         return chatUsers_();
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
@@ -303,7 +304,7 @@ function route_(req) {
       case 'chatGroupLeave':    return chatGroupLeave_(req);
       case 'chatGroupDelete':   return chatGroupDelete_(req);
       case 'loginLog':          return { ok: true, logs: teamRows_(readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || ''))) };
-      case 'activityLog':       return { ok: true, logs: teamRows_(readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid)) };
+      case 'activityLog':       if (!isAdminCtx_() && !actUsersOn_()) fail_('The activity log is only for admins.', 'PERM'); return { ok: true, logs: teamRows_(readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid)) };
       default: fail_('Unknown action: ' + a);
     }
     if (out && out.ok !== false) logActivity_(a, CTX, req);     // only log actions that actually succeeded
@@ -465,6 +466,7 @@ function meOf_(values) {
     username: main ? String(values.username || '') : CTX.username,
     name: main ? String(values.name || values.username || '') : (CTX.name || CTX.username),
     perms: CTX.viewing ? fullPerms_() : CTX.perms,
+    actLog: CTX.role === 'admin' || actUsersOn_(), actUsers: actUsersOn_(),
     viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName, group: CTX.group ? groupInfo_(CTX.group) : null,
     payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), serverNow: Date.now() };
 }
@@ -559,7 +561,7 @@ var ACTIVITY_LABEL_ = {
   addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link',
   setTimetable: 'Edited Time Table', addTtCat: 'Added a Time Table category', updateTtCat: 'Renamed a Time Table category', deleteTtCat: 'Deleted a Time Table category',
   saveUser: 'Added/edited a user', deleteUser: 'Deleted a user', kickUser: 'Signed a user out everywhere',
-  saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group',
+  saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group', setActivityAccess: 'Changed who can see the Activity log',
   calConnect: 'Connected Google Calendar', calDisconnect: 'Disconnected Google Calendar'
 };
 function activityDetail_(a, req) {
@@ -585,6 +587,14 @@ function logActivity_(a, ctx, req) {
     sh.appendRow([nowStr_(), ctx.uid, ctx.username || '', ctx.name || '', label, activityDetail_(a, req || {})]);
     if (sh.getLastRow() > 8000) sh.deleteRows(2, 2000);          // keep the log from growing forever
   } catch (e) {}
+}
+// The Activity log is for admins only. The MAIN admin can optionally let regular users see THEIR OWN entries (default: off).
+function actUsersOn_() { return String(PropertiesService.getScriptProperties().getProperty('ACT_USERS') || '') === '1'; }
+function setActivityAccess_(req) {
+  if (!CTX.primary) fail_('Only the main admin can change this.', 'PERM');
+  var on = req.on === true || req.on === 'true';
+  PropertiesService.getScriptProperties().setProperty('ACT_USERS', on ? '1' : '0');
+  return { ok: true, on: on };
 }
 function readActivity_(limit, uid) {
   var sh = getSheet_('ACT'), last = sh.getLastRow(), out = [];

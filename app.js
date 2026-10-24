@@ -413,6 +413,7 @@ async function loadLogs(){
   if (S.view === 'logins' || (S.view === 'dashboard' && !S.as)) render();
 }
 async function loadActivity(){
+  if (!(S.me && S.me.actLog)) return;                 // the log is admin-only (the main admin can open it for users)
   // Admins see everyone's activity; regular users only ever see their own (the server already scopes it by token,
   // uid here just lets an admin re-filter the same list client-side without asking the server again).
   try { S.acts = (await api('activityLog', { limit:300 })).logs; } catch(e){ S.acts = S.acts || []; }
@@ -675,15 +676,31 @@ function drawActivityList(){
   const list = filteredActivity(), el = $('#actList'); if (!el) return;
   el.innerHTML = list.map(a => activityItem(a)).join('') || '<div class="empty-state">No activity yet</div>';
 }
+async function activityPdf(){
+  const list = filteredActivity(); if (!list.length) return toast('No activity to export', true);
+  toast('Preparing your PDF file…');
+  try {
+    await needPdf();
+    const u = S.af.u !== 'all' ? ((S.users || []).find(x => x.id === S.af.u) || {}).name || '' : '';
+    const P = { doc:new window.jspdf.jsPDF({ orientation:'l', unit:'mm', format:'a4' }) };
+    const y = pdfStart(P, 'Activity Log', `${u ? 'User: ' + u + '   |   ' : ''}${list.length} entr${list.length === 1 ? 'y' : 'ies'}   |   Generated ${STAMP()}`, 'l', true);
+    pdfTable(P, { startY:y, head:[['Date & time', 'User', 'Username', 'Action', 'Details']],
+      body:list.map(a => [fmtLogTime(a.time), a.name || '', a.username || '', a.action || '', a.detail || ''].map(PT)),
+      columnStyles:{ 0:{ cellWidth:38 }, 1:{ cellWidth:40 }, 2:{ cellWidth:34 }, 3:{ cellWidth:62 } },
+      didParseCell:h => { if (h.section === 'head') h.cell.styles.halign = 'left'; } });
+    pdfFooter(P.doc); saveBlob('Activity-Log-' + new Date().toISOString().slice(0, 10) + '.pdf', P.doc.output('blob'));
+  } catch(e){ toast(e.message || 'Could not create the PDF', true); }
+}
 function activityCard(){
   const users = S.users || [];
   const known = new Set(users.map(u => u.id)), extra = [...new Map((S.acts || []).filter(a => a.uid && !known.has(a.uid)).map(a => [a.uid, a.name || a.username])).entries()];
   const uopts = '<option value="all">All users</option>' + users.map(u => `<option value="${esc(u.id)}" ${S.af.u === u.id ? 'selected' : ''}>${esc(u.name || u.username)}</option>`).join('')
     + extra.map(([id, n]) => `<option value="${esc(id)}" ${S.af.u === id ? 'selected' : ''}>${esc(n)} (deleted)</option>`).join('');
-  return `<div class="card"><h3>📋 Activity log <button class="btn ghost sm" onclick="loadActivity()">↻ Refresh</button></h3>
+  return `<div class="card"><h3>📋 Activity log <span><button class="btn soft sm" onclick="activityPdf()">⬇ PDF</button> <button class="btn ghost sm" onclick="loadActivity()">↻ Refresh</button></span></h3>
     <p class="muted" style="margin-bottom:12px">${isAdmin() ? 'Every save, add or delete each user made — attendance, expenses, work, time table and more.' : 'Every save, add or delete you made.'}</p>
     ${isAdmin() ? `<div class="form-grid"><div class="field"><label>User</label><select class="select" id="afU">${uopts}</select></div>
       <div class="field"><label>Search</label><input class="input" id="afQ" placeholder="action, detail…" value="${esc(S.af.q)}"></div></div>` : ''}
+    ${S.me.primary ? `<label class="tog"><input type="checkbox" id="actUsersChk" ${S.me.actUsers ? 'checked' : ''}> Let regular users see <b>their own</b> activity log <span class="muted">(off = only admins can open the log)</span></label>` : ''}
     <div id="actList">${S.acts ? '' : '<div class="empty-state">Loading activity…</div>'}</div></div>`;
 }
 
@@ -1710,7 +1727,7 @@ function vSettings(){
   if (!can('exp')) drop('Expense categories');
   if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
   grid.insertAdjacentHTML('beforeend', bioCard());
-  grid.insertAdjacentHTML('beforeend', activityCard());
+  if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
 }
 function applySettings(r){
@@ -1787,7 +1804,13 @@ function bindSettings(){
   const afU = document.getElementById('afU'), afQ = document.getElementById('afQ');
   if (afU) afU.onchange = e => { S.af.u = e.target.value; drawActivityList(); };
   if (afQ) afQ.oninput = e => { S.af.q = e.target.value; drawActivityList(); };
-  if (S.acts) drawActivityList(); else loadActivity();
+  const aU = document.getElementById('actUsersChk');
+  if (aU) aU.onchange = async e => {
+    const on = e.target.checked; e.target.disabled = true;
+    try { await api('setActivityAccess', { on }); S.me.actUsers = on; toast(on ? 'Users can now see their own activity' : 'Activity log is now admin-only'); }
+    catch(err){ e.target.checked = !on; handleErr(err); } finally { e.target.disabled = false; }
+  };
+  if (S.me && S.me.actLog){ if (S.acts) drawActivityList(); else loadActivity(); }
 }
 function download(name, rows){
   const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
