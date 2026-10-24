@@ -46,9 +46,10 @@ const SHEET_KEYS = {
   GROUPS: ['groups'],
   TT: ['timetable', 'time table'],
   CHAT: ['chat'],
+  CGRP: ['group conversations'],
   ACT: ['activity log', 'activity']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', ACT: 'Activity Log' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -85,7 +86,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'CGRP', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -156,7 +157,7 @@ var WRITE_ACTIONS = {
   addLink: 1, updateLink: 1, deleteLink: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -298,6 +299,9 @@ function route_(req) {
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
       case 'chatSend':          return chatSend_(req);
+      case 'chatGroupSave':     return chatGroupSave_(req);
+      case 'chatGroupLeave':    return chatGroupLeave_(req);
+      case 'chatGroupDelete':   return chatGroupDelete_(req);
       case 'loginLog':          return { ok: true, logs: teamRows_(readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || ''))) };
       case 'activityLog':       return { ok: true, logs: teamRows_(readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid)) };
       default: fail_('Unknown action: ' + a);
@@ -378,7 +382,7 @@ function getAccount_(id, s) {
   if (id === 'ADMIN') {
     var v = s || {};
     return { id: 'ADMIN', username: String(v.username || ''), password: v.password, name: String(v.name || v.username || ''),
-             email: String(v.email || ''), role: 'admin', active: true, perms: fullPerms_(), needLoc: false, payDue: '', row: 0, created: '', lastLogin: '', createdBy: '',
+             email: String(v.email || ''), role: 'admin', active: true, perms: fullPerms_(), needLoc: false, payDue: '', row: 0, created: '', lastLogin: '', createdBy: '', see: [],
              avatar: String(PropertiesService.getScriptProperties().getProperty('AVATAR_ADMIN') || '') };
   }
   return readUsers_().filter(function (x) { return x.id === id; })[0] || null;
@@ -386,8 +390,8 @@ function getAccount_(id, s) {
 function readUsers_() {
   var sh = getSheet_('USERS'), last = sh.getLastRow(), out = [];
   if (last < 2) return out;
-  if (sh.getMaxColumns() < 14) sh.insertColumnsAfter(sh.getMaxColumns(), 14 - sh.getMaxColumns());
-  sh.getRange(2, 1, last - 1, 14).getValues().forEach(function (r, i) {
+  if (sh.getMaxColumns() < 15) sh.insertColumnsAfter(sh.getMaxColumns(), 15 - sh.getMaxColumns());
+  sh.getRange(2, 1, last - 1, 15).getValues().forEach(function (r, i) {
     var id = String(r[0]).trim(), un = String(r[1]).trim();
     if (!id || !un) return;
     var role = /^admin/i.test(String(r[3])) ? 'admin' : 'user';
@@ -396,7 +400,8 @@ function readUsers_() {
     out.push({ id: id, username: un, password: r[2], role: role, name: String(r[4] || ''), email: String(r[5] || '').trim(),
       active: !/^(no|false|0)$/i.test(String(r[6]).trim()), perms: normPerms_(pj, role),
       needLoc: /^(yes|true|1)$/i.test(String(r[8]).trim()), created: tsStr_(r[9]), lastLogin: tsStr_(r[10]),
-      payDue: tsStr_(r[11]), avatar: String(r[12] || '').trim(), createdBy: String(r[13] || '').trim(), row: i + 2 });
+      payDue: tsStr_(r[11]), avatar: String(r[12] || '').trim(), createdBy: String(r[13] || '').trim(),
+      see: String(r[14] || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean), row: i + 2 });
   });
   return out;
 }
@@ -412,16 +417,15 @@ function leadSet_() {
 }
 // A "lead" = somebody who adds users (has the permission, or has already added someone). Never the main admin.
 function isLead_(a) { return !!a && a.id !== 'ADMIN' && !!((a.perms && a.perms.addUser) || leadSet_()[a.id]); }
-// Chat / call / game visibility (always two-way):
-//   * you always see who added you, and everybody you added
-//   * a lead sees ONLY those people (not the other users)
-//   * everybody else (no lead involved, both made by the main admin) sees each other, as before
+// Chat / call / game visibility (always two-way). NOBODY sees anybody unless one of these is true:
+//   * one of them added the other (you always see who added you, and everybody you added)
+//   * the MAIN ADMIN allowed it: Settings > Users & access > edit user > "Who can this user see in Chat?"
+//     (a permission in either user's list works for both, so chat / calls / Ludo always work both ways)
 function chatSee_(a, b) {
   if (!a || !b || a.id === b.id) return false;
   var pa = a.createdBy || 'ADMIN', pb = b.createdBy || 'ADMIN';
   if (pa === b.id || pb === a.id) return true;
-  if (isLead_(a) || isLead_(b)) return false;
-  return !a.createdBy && !b.createdBy;
+  return (a.see || []).indexOf(b.id) >= 0 || (b.see || []).indexOf(a.id) >= 0;
 }
 function chatCanSee_(aId, bId) {
   LEADS_ = null;                                   // may run outside route_ (calls / games), so never trust an old cache
@@ -711,7 +715,7 @@ function changeCredentials_(req) {
 // ---------- USER MANAGEMENT (admins) ----------
 function pubUser_(u, last) {
   return { id: u.id, username: u.username, name: u.name, email: u.email, role: u.role, active: u.active, perms: u.perms,
-    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '' };
+    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '', createdBy: u.createdBy || '', see: u.see || [] };
 }
 function listUsers_() {
   var s = readSettings_().values, last = {};
@@ -751,6 +755,12 @@ function saveUser_(req) {
   var payDue = isAdm ? String(req.payDue || '').trim() : (cur ? cur.payDue : '');   // e.g. "2026-11-17T10:30" from a datetime-local input, or '' to clear
   var permSrc = req.perms || (cur ? cur.perms : chatOnlyPerms_());      // new user = Chat only unless more is ticked
   var permStr = JSON.stringify(isAdm ? normPerms_(permSrc, role) : capPerms_(permSrc, CTX.perms, cur ? cur.perms.addUser : false));
+  // Who this user may see in Chat / calls / Ludo: only the MAIN admin decides (an array of user ids)
+  var seeNew = null;
+  if (CTX.primary && Object.prototype.toString.call(req.see) === '[object Array]') {
+    var okIds = {}; okIds.ADMIN = 1; users.forEach(function (u) { okIds[u.id] = 1; });
+    seeNew = []; req.see.forEach(function (x) { x = String(x || '').trim(); if (okIds[x] && (!cur || x !== cur.id) && seeNew.indexOf(x) < 0) seeNew.push(x); });
+  }
   var avatar = String(req.avatar === undefined || req.avatar === null ? (cur ? cur.avatar : '') : req.avatar).trim();
   if (avatar && !/^[a-z]{2,12}$/.test(avatar)) avatar = '';
   var sh = getSheet_('USERS');
@@ -766,15 +776,28 @@ function saveUser_(req) {
     pc.setValue(payDue);
     var ac = sh.getRange(cur.row, 13); ac.setNumberFormat('@'); ac.setValue(avatar);
     if (pw || !active) bumpVersion_(cur.id);          // new password / disabled -> signs that user out everywhere
+    if (seeNew) setSee_(cur, seeNew, users);
   } else {
     if (users.length >= 100) fail_('User limit (100) reached.');
     var nid = 'U' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
-    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 14);
+    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 15);
     r2.setNumberFormat('@');
-    r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue, avatar, CTX.primary ? '' : CTX.uid]]);
+    r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue, avatar, CTX.primary ? '' : CTX.uid, seeNew ? seeNew.join(',') : '']]);
     if (!CTX.primary) joinAdderGroup_(nid);      // the new user lands in the group of the person who added him
   }
   return listUsers_();
+}
+// Saves "who can this user see" for one user. The permission is two-way, so when an id is taken OFF this user's list
+// it is also taken off that other user's own list (otherwise the old permission would keep working from the other side).
+function setSee_(cur, ids, users) {
+  var sh = getSheet_('USERS');
+  var c = sh.getRange(cur.row, 15); c.setNumberFormat('@'); c.setValue(ids.join(','));
+  users.forEach(function (o) {
+    if (o.id !== cur.id && o.see.indexOf(cur.id) >= 0 && ids.indexOf(o.id) < 0) {
+      var oc = sh.getRange(o.row, 15); oc.setNumberFormat('@');
+      oc.setValue(o.see.filter(function (x) { return x !== cur.id; }).join(','));
+    }
+  });
 }
 // Caps a new/edited user's permissions to what the person adding him has (a user can't hand out more than he owns).
 function capPerms_(p, mine, keepAdd) {
@@ -806,9 +829,10 @@ function joinAdderGroup_(newId) {
 }
 // Column 13 (M) of the Users sheet holds each user's dashboard icon (a short key such as "boy" or "girl").
 function ensureAvatarCol_(sh) {
-  if (sh.getMaxColumns() < 14) sh.insertColumnsAfter(sh.getMaxColumns(), 14 - sh.getMaxColumns());
+  if (sh.getMaxColumns() < 15) sh.insertColumnsAfter(sh.getMaxColumns(), 15 - sh.getMaxColumns());
   if (!String(sh.getRange(1, 13).getValue() || '').trim()) sh.getRange(1, 13).setValue('Avatar (icon)');
   if (!String(sh.getRange(1, 14).getValue() || '').trim()) sh.getRange(1, 14).setValue('Created By (user ID)');
+  if (!String(sh.getRange(1, 15).getValue() || '').trim()) sh.getRange(1, 15).setValue('Can see in Chat (user IDs)');
 }
 function setAvatar_(req) {
   var id = String(req.id || '').trim(), av = String(req.avatar || '').trim();
@@ -835,7 +859,13 @@ function deleteUser_(req) {
   if (!u) fail_('User not found. Please refresh.');
   if (u.role === 'admin' && !CTX.primary) fail_('Only the main admin can delete another admin.', 'PERM');
   needTeam_(u);
+  var othersSee = readUsers_().filter(function (o) { return o.id !== id && o.see.indexOf(id) >= 0; });
   getSheet_('USERS').deleteRow(u.row);          // their data rows stay in the sheets (tagged with the old id)
+  othersSee.forEach(function (o) {              // rows below the deleted one moved up by one
+    var row = o.row > u.row ? o.row - 1 : o.row, c = getSheet_('USERS').getRange(row, 15);
+    c.setNumberFormat('@'); c.setValue(o.see.filter(function (x) { return x !== id; }).join(','));
+  });
+  chatGroupDropUser_(id);
   readGroups_().forEach(function (g) {          // take the deleted user out of any group
     if (g.members.indexOf(id) >= 0) getSheet_('GROUPS').getRange(g.row, 3).setValue(g.members.filter(function (m) { return m !== id; }).join(','));
   });
@@ -1015,10 +1045,14 @@ function createSheet_(k) {
     sh.getRange(1, 1, 1, 6).setValues([['ID', 'Time (ms)', 'From (user ID)', 'To (user ID)', 'Message', 'Sent at']]);
     sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:F').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
     sh.setFrozenRows(1);
+  } else if (k === 'CGRP') {
+    sh.getRange(1, 1, 1, 5).setValues([['ID', 'Group name', 'Member user IDs (comma separated)', 'Created by (user ID)', 'Created']]);
+    sh.getRange('A:E').setNumberFormat('@');
+    sh.setFrozenRows(1);
   } else if (k === 'USERS') {
-    sh.getRange(1, 1, 1, 14).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
-      'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until', 'Avatar (icon)', 'Created By (user ID)']]);
-    sh.getRange('A:N').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 15).setValues([['ID', 'Username', 'Password', 'Role (admin / user)', 'Display Name', 'Recovery E-mail', 'Active (Yes / No)',
+      'Permissions (JSON)', 'Location required (Yes / No)', 'Created', 'Last Login', 'Payment due until', 'Avatar (icon)', 'Created By (user ID)', 'Can see in Chat (user IDs)']]);
+    sh.getRange('A:O').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'GROUPS') {
     sh.getRange(1, 1, 1, 4).setValues([['ID', 'Group name', 'Member user IDs (comma separated)', 'Created']]);
@@ -1875,7 +1909,14 @@ function chatPeers_() {
 function chatUsers_() {
   var now = Date.now(), peers = chatPeers_(), ids = peers.map(function (a) { return a.id; });
   var seen = seenMap_(ids), ptr = readPtr_(CTX.uid), info = {}, total = 0;
+  var myG = myChatGroups_(), gset = {}, ginfo = {};
+  myG.forEach(function (g) { gset[g.id] = g; });
   chatRows_().forEach(function (r) {                    // oldest -> newest
+    if (gset[r.to]) {                                   // a group message
+      var go = ginfo[r.to] || (ginfo[r.to] = { unread: 0, last: null });
+      if (r.from !== CTX.uid && r.t > (ptr[r.to] || 0)) go.unread++;
+      go.last = r; return;
+    }
     var peer = r.from === CTX.uid ? r.to : (r.to === CTX.uid ? r.from : '');
     if (!peer) return;
     var o = info[peer] || (info[peer] = { unread: 0, last: null });
@@ -1890,11 +1931,23 @@ function chatUsers_() {
     return { id: a.id, name: a.name || a.username, username: a.username, role: a.role, online: p.online, ago: p.ago,
       unread: o.unread, lastText: o.last ? o.last.text.slice(0, 80) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false };
   });
-  return { ok: true, users: users, unread: total, now: now, me: CTX.uid };
+  var nm = chatNameMap_();
+  var groups = myG.map(function (g) {
+    var o = ginfo[g.id] || { unread: 0, last: null };
+    total += o.unread;
+    return { id: g.id, isGroup: true, name: g.name, owner: g.owner, mineOwner: g.owner === CTX.uid, members: chatGroupMemberList_(g, nm),
+      unread: o.unread, lastText: o.last ? o.last.text.slice(0, 80) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false,
+      lastFrom: o.last && o.last.from !== CTX.uid ? (nm[o.last.from] || 'Someone') : '' };
+  });
+  return { ok: true, users: users, groups: groups, unread: total, now: now, me: CTX.uid };
 }
 function chatPing_() {
   var ptr = readPtr_(CTX.uid), total = 0;
-  chatRows_().forEach(function (r) { if (r.to === CTX.uid && r.t > (ptr[r.from] || 0)) total++; });
+  var gset = {}; myChatGroups_().forEach(function (g) { gset[g.id] = 1; });
+  chatRows_().forEach(function (r) {
+    if (r.to === CTX.uid && r.t > (ptr[r.from] || 0)) total++;
+    else if (gset[r.to] && r.from !== CTX.uid && r.t > (ptr[r.to] || 0)) total++;
+  });
   return { ok: true, unread: total, now: Date.now() };
 }
 function chatPeerOk_(id) {
@@ -1908,6 +1961,7 @@ function chatPeerOk_(id) {
 function chatMsgOut_(r) { return { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text }; }
 // req: { with: userId, after: lastTimeSeen }  -> new messages of this conversation + whether the other person has read mine
 function chatFetch_(req) {
+  if (isChatGroupId_(req.with)) return chatGroupFetch_(String(req.with).trim(), req);
   var w = chatPeerOk_(req.with).id, after = Number(req.after) || 0, now = Date.now();
   var rows = chatRows_().filter(function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); });
   var out = rows.filter(function (r) { return r.t > after; });
@@ -1922,7 +1976,7 @@ function chatFetch_(req) {
   return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, peerSeen: ms, now: now, presence: pr };
 }
 function chatSend_(req) {
-  var peer = chatPeerOk_(req.to);
+  var peer = isChatGroupId_(req.to) ? chatGroupOk_(String(req.to).trim()) : chatPeerOk_(req.to);
   var text = String(req.text === undefined || req.text === null ? '' : req.text).replace(/\r\n?/g, '\n').trim();
   if (!text) fail_('Type a message first.');
   if (text.length > CHAT_MAX_LEN) text = text.slice(0, CHAT_MAX_LEN);
@@ -1940,6 +1994,119 @@ function chatSend_(req) {
   rng.setValues([[id, t, CTX.uid, peer.id, text, nowStr_()]]);
   if (sh.getLastRow() > 20000) sh.deleteRows(2, 2000);              // keep the sheet from growing forever
   return { ok: true, message: { id: id, t: t, mine: true, text: text } };
+}
+
+// ---------- CHAT GROUPS (group chat + Ludo for everybody in it) ----------
+// Sheet "Group Conversations": ID | Group name | Member user IDs | Created by | Created.   Group messages live in the Chat sheet with To = the group id (CG...).
+// The creator can only add users HE can see (so the main admin's "who can see whom" rule is respected). Only the creator edits / deletes the group.
+var CGRP_MAX_MEMBERS = 30;
+function isChatGroupId_(id) { return /^CG[0-9a-f]{6,}$/i.test(String(id || '').trim()); }
+function readChatGroups_() {
+  var sh = getSheet_('CGRP'), last = sh.getLastRow(), out = [];
+  if (last < 2) return out;
+  sh.getRange(2, 1, last - 1, 5).getValues().forEach(function (r, i) {
+    var id = String(r[0]).trim();
+    if (!id) return;
+    out.push({ id: id, name: String(r[1] || ''), owner: String(r[3] || '').trim(), created: tsStr_(r[4]), row: i + 2,
+      members: String(r[2] || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean) });
+  });
+  return out;
+}
+function myChatGroups_() { return readChatGroups_().filter(function (g) { return g.members.indexOf(CTX.uid) >= 0; }); }
+function chatNameMap_() {
+  var s = readSettings_().values, m = {}, a = getAccount_('ADMIN', s);
+  m.ADMIN = a.name || a.username || 'Admin';
+  readUsers_().forEach(function (u) { m[u.id] = u.name || u.username; });
+  return m;
+}
+function chatGroupMemberList_(g, nm) {
+  return g.members.filter(function (id) { return nm[id]; }).map(function (id) { return { id: id, name: nm[id] }; });
+}
+function chatGroupOk_(gid) {
+  var g = readChatGroups_().filter(function (x) { return x.id === gid; })[0];
+  if (!g || g.members.indexOf(CTX.uid) < 0) fail_('Group not found.');
+  return g;
+}
+// Used by the Ludo referee on the server: members (active accounts) of a group, only if `uid` belongs to it.
+function chatGroupMembers_(gid, uid) {
+  var g = readChatGroups_().filter(function (x) { return x.id === gid; })[0];
+  if (!g || g.members.indexOf(uid) < 0) return null;
+  var s = readSettings_().values, out = [];
+  g.members.forEach(function (id) {
+    var a = getAccount_(id, s);
+    if (a && a.active && has_(a.username)) out.push({ id: a.id, name: a.name || a.username });
+  });
+  return { id: g.id, name: g.name, members: out };
+}
+function chatGroupSave_(req) {
+  var groups = readChatGroups_(), id = String(req.id || '').trim(), cur = null;
+  if (id) {
+    cur = groups.filter(function (g) { return g.id === id; })[0];
+    if (!cur || cur.owner !== CTX.uid) fail_('Only the person who created the group can change it.', 'PERM');
+  }
+  var name = String(req.name || '').trim().slice(0, 40);
+  if (!name) fail_('Give the group a name.');
+  var s = readSettings_().values, me = getAccount_(CTX.uid, s), ids = [];
+  (Object.prototype.toString.call(req.members) === '[object Array]' ? req.members : []).forEach(function (x) {
+    x = String(x || '').trim();
+    if (x && x !== CTX.uid && ids.indexOf(x) < 0) ids.push(x);
+  });
+  ids.forEach(function (m) {
+    var a = getAccount_(m, s);
+    var keep = cur && cur.members.indexOf(m) >= 0;      // somebody already in the group stays, even if the admin changed visibility since
+    if (!a || !a.active || !has_(a.username) || (!keep && !chatSee_(me, a))) fail_('One of the selected users was not found.');
+  });
+  if (ids.length < 2) fail_('Select at least 2 users for a group chat.');
+  if (ids.length + 1 > CGRP_MAX_MEMBERS) fail_('A group can have at most ' + CGRP_MAX_MEMBERS + ' members.');
+  var members = [CTX.uid].concat(ids).join(','), sh = getSheet_('CGRP');
+  if (cur) {
+    var r1 = sh.getRange(cur.row, 2, 1, 2); r1.setNumberFormat('@'); r1.setValues([[name, members]]);
+  } else {
+    var gid = 'CG' + Utilities.getUuid().replace(/-/g, '').slice(0, 8).toLowerCase();
+    var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 5); r2.setNumberFormat('@');
+    r2.setValues([[gid, name, members, CTX.uid, nowStr_()]]);
+  }
+  return chatUsers_();
+}
+function chatGroupDelete_(req) {
+  var g = chatGroupOk_(String(req.id || '').trim());
+  if (g.owner !== CTX.uid) fail_('Only the person who created the group can delete it.', 'PERM');
+  getSheet_('CGRP').deleteRow(g.row);
+  return chatUsers_();
+}
+function chatGroupLeave_(req) {
+  var g = chatGroupOk_(String(req.id || '').trim());
+  var rest = g.members.filter(function (m) { return m !== CTX.uid; });
+  if (rest.length < 2) getSheet_('CGRP').deleteRow(g.row);
+  else {
+    var sh = getSheet_('CGRP'), c = sh.getRange(g.row, 3); c.setNumberFormat('@'); c.setValue(rest.join(','));
+    if (g.owner === CTX.uid) { var o = sh.getRange(g.row, 4); o.setNumberFormat('@'); o.setValue(rest[0]); }   // the next member becomes the owner
+  }
+  return chatUsers_();
+}
+// a deleted user leaves every group (a group left with fewer than 2 people is removed)
+function chatGroupDropUser_(uid) {
+  var sh = getSheet_('CGRP'), dead = [];
+  readChatGroups_().forEach(function (g) {
+    if (g.members.indexOf(uid) < 0) return;
+    var rest = g.members.filter(function (m) { return m !== uid; });
+    if (rest.length < 2) { dead.push(g.row); return; }
+    var c = sh.getRange(g.row, 3); c.setNumberFormat('@'); c.setValue(rest.join(','));
+    if (g.owner === uid) { var o = sh.getRange(g.row, 4); o.setNumberFormat('@'); o.setValue(rest[0]); }
+  });
+  dead.sort(function (a, b) { return b - a; }).forEach(function (r) { sh.deleteRow(r); });
+}
+function chatGroupFetch_(gid, req) {
+  var g = chatGroupOk_(gid), after = Number(req.after) || 0, now = Date.now(), nm = chatNameMap_();
+  var rows = chatRows_().filter(function (r) { return r.to === gid; });
+  var out = rows.filter(function (r) { return r.t > after; });
+  if (!after && out.length > 300) out = out.slice(-300);
+  var latestIn = 0;
+  rows.forEach(function (r) { if (r.from !== CTX.uid && r.t > latestIn) latestIn = r.t; });
+  var ptr = readPtr_(CTX.uid);
+  if (latestIn > (ptr[gid] || 0)) { ptr[gid] = latestIn; PropertiesService.getScriptProperties().setProperty('CR_' + CTX.uid, JSON.stringify(ptr)); }
+  return { ok: true, peerRead: 0, peerSeen: 0, now: now, presence: null, group: { id: g.id, name: g.name, members: chatGroupMemberList_(g, nm) },
+    messages: out.map(function (r) { return { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text, from: r.from === CTX.uid ? '' : (nm[r.from] || 'Someone') }; }) };
 }
 
 // ---------- BUNDLE ----------

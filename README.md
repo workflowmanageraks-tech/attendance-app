@@ -37,6 +37,16 @@ Settings > **Fingerprint / Face unlock** > *Enable on this device*. Next time th
 Admin: Settings > Users & access > edit a user > tick **Can add new users**. That user then gets a **Users & access** card in Settings with **＋ Add user**.
 
 - Every user they add automatically joins **their group** (a group is created for them the first time, and their current data becomes the group's data). Group members share the same data.
-- The adder sees **only** the users they added (and the person who added them) in Chat, calls and Ludo - not all users. The added users see only the adder.
+- The adder sees **only** the users they added (and the person who added them) in Chat, calls and Ludo - not all users. The added users see only the adder (unless the main admin allows more, see below).
 - They can only manage (edit / sign out / delete) the users they added, and can never give a new user more access than they have. Only the admin can set location, payment date and the "can add users" right.
 - The main admin has no group, so users added by the main admin are not auto-grouped.
+
+## Who can see whom (main admin only)
+
+Nobody sees anybody in Chat, calls, Ludo or group chats unless the **main admin** allows it. Settings > Users & access > edit a user > **Who can this user see in Chat?** - tick the people. It works both ways (if you tick Bob for Niki, Bob also sees Niki). The only automatic links are *the person who added you* and *the people you added*. Stored in column O of the **Users** sheet. Users made by the main admin no longer see each other by default - tick them once.
+
+## Group chat + Ludo for a whole group
+
+Chat > **＋ New group** > name + at least 2 people (you can only pick users you are allowed to see). Only the creator edits / deletes the group (ℹ️ in the group header); members can leave. Groups are stored in the **Group Conversations** sheet (created automatically), messages in the **Chat** sheet.
+
+Tap 🎲 inside a group: the invite goes to **every member**. Whoever accepts joins the lobby (max 4 players, Ludo has 4 colours). The host can press **Start now** once 2 people are in; the game also starts by itself when everybody answered, the lobby is full, or after 90 seconds. 2 players sit in opposite corners; 3-4 players take red / green / yellow / blue. Someone who leaves (or goes offline for 2 minutes) drops out; the last player left wins. One-to-one Ludo works as before.

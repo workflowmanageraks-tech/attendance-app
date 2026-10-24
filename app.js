@@ -518,7 +518,8 @@ function usersCard(){
   return `<div class="card"><h3>🛡️ Users & access <button class="btn sm" onclick="userForm()">＋ Add user</button></h3>
     ${isAdmin() ? `<p class="muted" style="margin-bottom:12px">Each user signs in with their own username and password and sees only their own data. You decide what each user may open or change.
       Use <b>👁 View</b> to look at (or fix) a user’s data. Login time, location and device of everyone are in the <b>Logins</b> tab.
-      Tick <b>Can add new users</b> in a user’s access to let them add users too — everyone a user adds joins that user’s group and sees only that user in Chat.</p>`
+      Tick <b>Can add new users</b> in a user’s access to let them add users too — everyone a user adds joins that user’s group and sees only that user in Chat.
+      In <b>✎ Edit</b> you choose <b>who each user can see in Chat</b>; without your permission nobody sees anybody.</p>`
     : `<p class="muted" style="margin-bottom:12px">Users you add join <b>your group</b> automatically (you share the same data) and see only you in Chat — and you see only them. They can never get more access than you have.</p>`}
     <div class="emp-list">${rows || '<div class="empty-state">No users yet</div>'}</div></div>`;
 }
@@ -550,6 +551,7 @@ function userForm(id){
         <label class="tog"><input type="checkbox" name="p_creds" ${p.creds ? 'checked' : ''}> Can change their own username & password</label>
         ${isAdmin() ? `<label class="tog"><input type="checkbox" name="p_addUser" ${p.addUser ? 'checked' : ''}> Can add new users <span class="muted">(each user they add joins their group and sees only them in Chat)</span></label>` : ''}
       </fieldset>
+      ${S.me.primary ? seeBox(x) : ''}
       <label class="tog"><input type="checkbox" name="active" ${(!x || x.active) ? 'checked' : ''}> Account active (untick to block sign-in)</label>
       ${isAdmin() ? `<label class="tog"><input type="checkbox" name="needLoc" ${x && x.needLoc ? 'checked' : ''}> Location required to sign in <span class="muted">(blocks login if no location can be found)</span></label>
       <div class="field"><label>Payment due until <span class="muted">(after this date/time, login is blocked with a payment-reminder message, until you clear or extend it)</span></label>
@@ -563,11 +565,23 @@ function userForm(id){
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
+        ...(S.me.primary ? { see:f.getAll('see') } : {}),
         perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
       S.users = r.users; w.remove(); if (!isAdmin()) await loadAll();   // a new user may have created / joined my group
       render(); toast(x ? 'User updated' : 'User added'); chatLoadUsers();
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
+}
+/* who may this user see / chat / call / play Ludo with?  Only the main admin decides. Nobody sees anybody without this. */
+function seeBox(x){
+  const others = (S.users || []).filter(u => !x || u.id !== x.id);
+  const auto = o => x && ((x.createdBy || 'ADMIN') === o.id || (o.createdBy || 'ADMIN') === x.id);   // adder <-> added always see each other
+  const on = o => auto(o) || (x && ((x.see || []).includes(o.id) || (o.see || []).includes(x.id)));
+  const boxes = others.map(o => `<label class="tog"><input type="checkbox" name="see" value="${esc(o.id)}" ${on(o) ? 'checked' : ''} ${auto(o) ? 'disabled' : ''}> ${esc(o.name || o.username)}${o.primary ? ' <span class="muted">(main admin)</span>' : ''} <span class="muted">@${esc(o.username)}${auto(o) ? ' · always (added by / added this user)' : ''}</span></label>`).join('');
+  return `<fieldset style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
+    <legend class="sec-title" style="padding:0 6px;margin:0">💬 Who can this user see in Chat?</legend>
+    <p class="muted" style="margin:0 0 6px;font-size:12.5px">Chat, calls, Ludo and group chats show <b>only</b> the people ticked here (plus whoever added this user / was added by them). Nobody sees anybody without your permission. It works both ways.</p>
+    ${boxes || '<div class="muted">No other users yet.</div>'}</fieldset>`;
 }
 async function delUser(id){
   const u = (S.users || []).find(x => x.id === id); if (!u) return;
@@ -2173,7 +2187,7 @@ boot();
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
    ===================================================================== */
-const chatFresh = () => ({ users:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
+const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
 S.chat = chatFresh();
 let chatTimer = null;
 function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); document.body.classList.remove('chat-conv'); chatBadge(); }
@@ -2189,13 +2203,13 @@ async function chatApi(action, payload = {}){
   return j;
 }
 function chatErr(e){ if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
-const chatPeer = id => S.chat.users.find(u => u.id === id);
+const chatPeer = id => S.chat.users.find(u => u.id === id) || S.chat.groups.find(g => g.id === id);
 function chatBadge(){
   const b = $('#chatBadge'); if (!b) return;
   const n = S.chat.unread || 0;
   b.textContent = n > 99 ? '99+' : n; b.classList.toggle('hidden', n < 1);
 }
-function chatSumUnread(){ S.chat.unread = S.chat.users.reduce((a, u) => a + (u.unread || 0), 0); chatBadge(); }
+function chatSumUnread(){ S.chat.unread = S.chat.users.concat(S.chat.groups).reduce((a, u) => a + (u.unread || 0), 0); chatBadge(); }
 
 /* "5 min ago" style text (the server sends how long ago, so a wrong phone clock does not matter) */
 function chatAgo(u){
@@ -2209,13 +2223,14 @@ function chatAgo(u){
   return d + (d === 1 ? ' day ago' : ' days ago');
 }
 function chatStatus(u){
+  if (u.isGroup) return { cls:'grp', txt:(u.members || []).map(m => m.name).join(', ') || 'Group' };
   if (u.online) return { cls:'on', txt:'Online' };
   const a = chatAgo(u);
   return { cls:'off', txt: a ? 'Offline · last seen ' + a : 'Offline' };
 }
 const CH_COL = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ec4899','#8b5cf6','#14b8a6','#ef4444','#64748b','#84cc16'];
 const chColor = id => CH_COL[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % CH_COL.length];
-const chInit = u => esc((u.name || u.username || '?').trim().charAt(0).toUpperCase());
+const chInit = u => u.isGroup ? '👥' : esc((u.name || u.username || '?').trim().charAt(0).toUpperCase());
 function chClock(t){ return new Date(t).toLocaleTimeString('en-IN', { hour:'numeric', minute:'2-digit' }); }
 function chDayLabel(t){
   const d = new Date(t), n = new Date(), y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
@@ -2231,7 +2246,7 @@ function chListTime(t){
 function vChat(){
   return `<div class="chat ${S.chat.with ? 'in-conv' : ''}" id="chatRoot">
     <div class="card ch-side">
-      <div class="ch-top"><h3>💬 Chats</h3><input class="input" id="chSearch" placeholder="Search user…" autocomplete="off" value="${esc(S.chat.q)}"></div>
+      <div class="ch-top"><h3>💬 Chats <button class="btn sm" style="float:right" onclick="groupChatForm()">＋ New group</button></h3><input class="input" id="chSearch" placeholder="Search user…" autocomplete="off" value="${esc(S.chat.q)}"></div>
       <div class="ch-list" id="chList"></div>
     </div>
     <div class="card ch-pane" id="chPane"></div>
@@ -2247,20 +2262,20 @@ function bindChat(){
 function chatRenderList(){
   const el = $('#chList'); if (!el) return;
   const q = S.chat.q.trim().toLowerCase();
-  const list = S.chat.users.filter(u => !q || (u.name + ' ' + u.username).toLowerCase().includes(q))
+  const list = S.chat.groups.concat(S.chat.users).filter(u => !q || ((u.name || '') + ' ' + (u.username || '')).toLowerCase().includes(q))
     .sort((a, b) => (b.lastTime - a.lastTime) || (b.online - a.online) || String(a.name).localeCompare(String(b.name)));
   if (S.chat.err && !S.chat.loaded){
     el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">Could not load users</b><div style="margin:6px 0 12px;word-break:break-word">${esc(S.chat.err)}</div><button class="btn sm" onclick="S.chat.err='';chatRenderList();chatLoadUsers()">↻ Try again</button></div>`; return;
   }
   if (!S.chat.loaded){ el.innerHTML = '<div class="empty-state">Loading users…</div>'; return; }
-  if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No other users yet'}</div>`; return; }
+  if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No users to chat with yet. The main admin decides who you can see.'}</div>`; return; }
   el.innerHTML = list.map(u => {
     const st = chatStatus(u);
-    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : ''}${esc(u.lastText)}</div>` : '';
+    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : (u.lastFrom ? esc(u.lastFrom) + ': ' : '')}${esc(u.lastText)}</div>` : '';
     return `<div class="ch-row ${S.chat.with === u.id ? 'sel' : ''}" onclick="chatOpen('${esc(u.id)}')">
-      <div class="ch-av" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot ${st.cls}"></span></div>
+      <div class="ch-av" style="background:${chColor(u.id)}">${chInit(u)}${u.isGroup ? '' : `<span class="dot ${st.cls}"></span>`}</div>
       <div class="ch-info">
-        <div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot ${st.cls}"></span><span class="tm">${esc(chListTime(u.lastTime))}</span></div>
+        <div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span>${u.isGroup ? '' : `<span class="dot ${st.cls}"></span>`}<span class="tm">${esc(chListTime(u.lastTime))}</span></div>
         <div class="ch-stat ${st.cls}">${esc(st.txt)}</div>${prev}
       </div>${u.unread ? `<span class="ch-unread">${u.unread > 99 ? '99+' : u.unread}</span>` : ''}</div>`;
   }).join('');
@@ -2277,7 +2292,7 @@ function chatRenderPane(){
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
       <div class="ch-av" id="chHAv" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
       <div class="ch-info"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
-      <div class="ch-calls"><button class="ch-cbtn" onclick="ludoDial()" aria-label="Play Ludo">🎲</button><button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button></div>
+      <div class="ch-calls"><button class="ch-cbtn" onclick="ludoDial()" aria-label="Play Ludo">🎲</button>${u.isGroup ? `<button class="ch-cbtn" onclick="groupChatForm('${esc(u.id)}')" aria-label="Group info">ℹ️</button>` : `<button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button>`}</div>
     </div>
     <div class="ch-msgs" id="chMsgs"></div>
     <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
@@ -2293,6 +2308,7 @@ function chatHeader(){
   const u = chatPeer(S.chat.with); if (!u) return;
   const st = chatStatus(u), t = $('#chHStat'); if (!t) return;
   t.className = 'ch-stat ' + st.cls; t.textContent = st.txt;
+  if (u.isGroup){ $('#chHDot').style.display = 'none'; $('#chHAv .dot').style.display = 'none'; return; }
   $('#chHDot').className = 'dot ' + st.cls; $('#chHAv .dot').className = 'dot ' + st.cls;
 }
 function chatRenderMsgs(toBottom){
@@ -2316,7 +2332,7 @@ function chatRenderMsgs(toBottom){
       else if (m.state === 'failed') meta = 'Not sent · tap to retry';
       else meta += ` <span class="tick ${m.t <= pr ? 'read' : ''}">${m.t <= pr ? '✓✓' : '✓'}</span>`;
     }
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}><div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}<div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
   });
   box.innerHTML = html;
   if (toBottom || near) box.scrollTop = box.scrollHeight;
@@ -2325,7 +2341,7 @@ function chatMerge(id, list){
   const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
   list.forEach(m => {
     const i = a.findIndex(x => x.id === m.id);
-    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text){ a[i] = m; changed = true; } }
+    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text || a[i].from !== m.from){ a[i] = m; changed = true; } }
     else { a.push(m); changed = true; }
   });
   if (changed) a.sort((x, y) => x.t - y.t);
@@ -2340,7 +2356,9 @@ async function chatLoadUsers(){
     const r = await chatApi('chatUsers'), at = Date.now();
     const incoming = r.unread > S.chat.unread && S.view !== 'chat' && S.chat.loaded;
     S.chat.users = r.users.map(u => ({ ...u, at }));
-    S.chat.users.forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
+    S.chat.groups = (r.groups || []).map(g => ({ ...g, at }));
+    S.chat.users.concat(S.chat.groups).forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
+    if (S.chat.with && !chatPeer(S.chat.with)){ S.chat.with = null; document.body.classList.remove('chat-conv'); if (S.view === 'chat') chatRenderPane(); }   // group deleted / permission removed
     S.chat.loaded = true; chatSumUnread();
     if (incoming) toast('💬 New message');
     S.chat.err = '';
@@ -2366,6 +2384,7 @@ async function chatFetchConv(first){
     if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
     if (r.peerRead !== c.peerRead[id]){ c.peerRead[id] = r.peerRead; ch = true; }
     const u = chatPeer(id);
+    if (u && u.isGroup && r.group){ u.name = r.group.name; u.members = r.group.members; }
     if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
     if (u && r.messages.some(m => !m.mine)){
       u.unread = 0; chatSumUnread();
@@ -2383,6 +2402,43 @@ function chatOpen(id){
   document.body.classList.add('chat-conv');
   chatRenderList(); chatRenderPane(); chatFetchConv(true);
   if (!window.matchMedia('(max-width:860px)').matches){ const t = $('#chInput'); if (t) t.focus(); }
+}
+/* ---------- group chat: create / edit / leave / delete ---------- */
+function groupChatForm(id){
+  const g = id ? S.chat.groups.find(x => x.id === id) : null;
+  if (id && !g) return;
+  const mineOwner = !g || g.mineOwner;
+  const have = g ? g.members.map(m => m.id) : [];
+  const pool = S.chat.users.slice();                                   // only users I am allowed to see
+  const extra = g ? g.members.filter(m => m.id !== S.me.id && !pool.some(p => p.id === m.id)) : [];   // members I can no longer see stay in the group
+  const boxes = pool.map(u => `<label class="tog"><input type="checkbox" name="gm" value="${esc(u.id)}" ${have.includes(u.id) ? 'checked' : ''} ${mineOwner ? '' : 'disabled'}> ${esc(u.name || u.username)} <span class="muted">@${esc(u.username)}</span></label>`).join('')
+    + extra.map(m => `<label class="tog"><input type="checkbox" name="gm" value="${esc(m.id)}" checked ${mineOwner ? '' : 'disabled'}> ${esc(m.name)}</label>`).join('');
+  const w = openModal(`<h3>${g ? (mineOwner ? 'Edit group' : esc(g.name)) : 'New group chat'}</h3>
+    <p class="sub">${mineOwner ? 'Pick at least 2 people. Everybody in the group can chat, and you can start a Ludo game for all of them (🎲).' : 'Members of this group:'}</p>
+    <form id="gcf" autocomplete="off">
+      <div class="field"><label>Group name</label><input class="input" name="name" maxlength="40" value="${esc(g ? g.name : '')}" ${mineOwner ? 'required' : 'disabled'}></div>
+      <div class="field"><label>Members</label>${boxes || '<div class="muted">You can’t see any other users yet — the main admin decides who you can chat with.</div>'}</div>
+      <div class="foot">
+        ${g ? `<button type="button" class="btn ghost" data-leave>${mineOwner ? '🗑 Delete group' : 'Leave group'}</button>` : ''}
+        <button type="button" class="btn ghost" data-x>Close</button>${mineOwner ? `<button class="btn" type="submit">${g ? 'Save' : 'Create group'}</button>` : ''}</div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  const lv = w.querySelector('[data-leave]');
+  if (lv) lv.onclick = async () => {
+    if (!await confirmBox(mineOwner ? 'Delete this group?' : 'Leave this group?', mineOwner ? 'The group is removed for everybody.' : 'You will not get its messages any more.', mineOwner ? 'Delete' : 'Leave', true)) return;
+    try { await chatApi(mineOwner ? 'chatGroupDelete' : 'chatGroupLeave', { id:g.id }); w.remove(); if (S.chat.with === g.id){ S.chat.with = null; } await chatLoadUsers(); chatRenderList(); chatRenderPane(); document.body.classList.remove('chat-conv'); }
+    catch(e){ chatErr(e); toast(e.message, true); }
+  };
+  w.querySelector('#gcf').onsubmit = async ev => {
+    ev.preventDefault(); const f = new FormData(ev.target), btn = ev.submitter; btn.disabled = true;
+    try {
+      const r = await chatApi('chatGroupSave', { id:g ? g.id : '', name:f.get('name'), members:f.getAll('gm') });
+      const at = Date.now(); S.chat.users = r.users.map(u => ({ ...u, at })); S.chat.groups = (r.groups || []).map(x => ({ ...x, at }));
+      w.remove(); chatRenderList();
+      if (!g){ const ng = S.chat.groups.find(x => x.name === String(f.get('name')).trim() && x.mineOwner); if (ng) chatOpen(ng.id); }
+      else if (S.chat.with === g.id) chatRenderPane();
+      toast(g ? 'Group updated' : 'Group created');
+    } catch(e){ btn.disabled = false; chatErr(e); toast(e.message, true); }
+  };
 }
 function chatBack(){
   S.chat.with = null; document.body.classList.remove('chat-conv');
@@ -2662,7 +2718,7 @@ function vcReset(){ clearInterval(VC.timer); VC.timer = null; if (VC.cid || VC.i
 document.addEventListener('visibilitychange', () => { if (!document.hidden) vcTick(); });
 
 /* =====================================================================
-   LUDO  (2 players, online — the server rolls the dice and checks every move)
+   LUDO  (2 to 4 players, online — the server rolls the dice and checks every move)
    ===================================================================== */
 const LU = { gid:null, g:null, inc:null, busy:false, timer:null, polling:false, sig:'', idleAt:0, built:false };
 const LU_COL = ['#e53935', '#43a047', '#fdd835', '#1e88e5'];
@@ -2723,10 +2779,22 @@ async function ludoDial(){
   if (LU.busy || LU.gid || LU.inc) return toast('You are already in a Ludo game', true);
   LU.busy = true;
   try{
-    const r = await chatApi('ludoInvite', { to:u.id });
+    const r = await chatApi('ludoInvite', u.isGroup ? { group:u.id } : { to:u.id });
     LU.gid = r.id; LU.sig = '';
-    luCard('🎲', 'Inviting ' + (u.name || u.username) + '…', 'Waiting for them to accept (they need the app open)', '<button class="x" onclick="ludoLeave()">Cancel</button>');
+    luCard('🎲', u.isGroup ? 'Invite sent to the group' : 'Inviting ' + (u.name || u.username) + '…', u.isGroup ? 'Waiting for ' + r.invited + ' member' + (r.invited === 1 ? '' : 's') + ' to join (they need the app open)' : 'Waiting for them to accept (they need the app open)', '<button class="x" onclick="ludoLeave()">Cancel</button>');
   }catch(e){ LU.busy = false; chatErr(e); toast(e.message, true); }
+}
+/* lobby: shown to everybody who accepted while the game waits for the others */
+function luLobby(g){
+  const names = g.players.map((p, i) => (i === g.me ? 'You' : p.name) + (i === 0 ? ' (host)' : '')).join(' · ');
+  const wait = g.pend.length ? 'Waiting for: ' + g.pend.join(', ') : '';
+  const btns = g.host ? `<button class="x" onclick="ludoLeave()">Cancel</button>${g.players.length >= 2 ? '<button onclick="ludoStartNow()">▶ Start now</button>' : ''}` : '<button class="x" onclick="ludoLeave()">Leave</button>';
+  luCard('🎲', (g.group ? g.group + ' · ' : '') + 'Ludo lobby (' + g.players.length + '/4)', names + (wait ? '\n' + wait : '') + (g.host ? '' : '\nThe host will start the game'), btns);
+  const p = document.querySelector('#ludo .lu-card p'); if (p) p.style.whiteSpace = 'pre-line';
+}
+async function ludoStartNow(){
+  try{ await chatApi('ludoStart', { gid:LU.gid }); }catch(e){ chatErr(e); toast(e.message, true); }
+  ludoTick(true);
 }
 async function ludoAccept(){
   const inc = LU.inc; if (!inc) return;
@@ -2766,7 +2834,7 @@ function luBuild(){
     b += `<rect x="${p[0] - .5}" y="${p[1] - .5}" width="1" height="1" fill="${LU_COL[ci]}" stroke="#94a3b8" stroke-width=".05"/>`; } });
   b += `<polygon points="6,6 6,9 7.5,7.5" fill="${LU_COL[0]}"/><polygon points="6,6 9,6 7.5,7.5" fill="${LU_COL[1]}"/><polygon points="9,6 9,9 7.5,7.5" fill="${LU_COL[2]}"/><polygon points="6,9 9,9 7.5,7.5" fill="${LU_COL[3]}"/>`;
   let tk = '';
-  for (let pi = 0; pi < 2; pi++) for (let t = 0; t < 4; t++){
+  for (let pi = 0; pi < g.players.length; pi++) for (let t = 0; t < 4; t++){
     const col = LU_COL[g.colors[pi]];
     tk += `<g class="lt" id="lt${pi}_${t}" onclick="ludoMove(${t})" style="transform:translate(0px,0px)"><circle class="r" r=".5" fill="none"/><circle class="b" r=".36" fill="${col}"/><circle r=".14" fill="#fff" opacity=".7"/></g>`;
   }
@@ -2783,14 +2851,15 @@ function luRender(){
   const mine = g.me, myTurn = g.state === 'playing' && g.turn === mine;
   // tokens (small offset when several share a square)
   const seen = {};
-  for (let pi = 0; pi < 2; pi++) for (let t = 0; t < 4; t++){
+  for (let pi = 0; pi < g.players.length; pi++) for (let t = 0; t < 4; t++){
     const pos = g.tokens[pi][t], ci = g.colors[pi], xy = luXY(ci, pos, t), k = xy[0].toFixed(2) + ',' + xy[1].toFixed(2);
     const n = pos >= 0 && pos < 56 ? (seen[k] = (seen[k] || 0) + 1) - 1 : 0;
     const el = document.getElementById('lt' + pi + '_' + t); if (!el) continue;
+    el.style.display = g.out && g.out[pi] ? 'none' : '';
     el.style.transform = `translate(${xy[0] + n * .16}px,${xy[1] - n * .16}px)`;
     el.classList.toggle('go', pi === mine && myTurn && g.movable.includes(t));
   }
-  $('#luPl').innerHTML = g.players.map((p, i) => `<div class="lu-p ${g.state === 'playing' && g.turn === i ? 'on' : ''}"><i style="background:${LU_COL[g.colors[i]]}"></i><span>${esc(i === mine ? 'You' : p.name)}</span></div>`).join('');
+  $('#luPl').innerHTML = g.players.map((p, i) => `<div class="lu-p ${g.state === 'playing' && g.turn === i ? 'on' : ''}" style="${g.out && g.out[i] ? 'opacity:.35' : ''}"><i style="background:${LU_COL[g.colors[i]]}"></i><span>${esc(i === mine ? 'You' : p.name)}</span></div>`).join('');
   const die = $('#luDie'), v = g.last && g.last.v;
   die.textContent = v ? '⚀⚁⚂⚃⚄⚅'[v - 1] : '🎲'; die.classList.remove('sh');
   const rb = $('#luRoll'); rb.style.display = myTurn && !g.roll ? '' : 'none'; rb.disabled = false;
@@ -2802,7 +2871,7 @@ function luRender(){
 const esc0 = v => String(v ?? '');
 function luOver(g){
   const won = g.winner === g.me, name = (g.players[g.winner] || {}).name || 'Opponent';
-  const why = { won:'', resigned: won ? 'Your friend left the game.' : '', left: won ? 'Your friend went offline.' : '' }[g.reason] || '';
+  const why = { won:'', resigned: won ? 'Everybody else left the game.' : '', left: won ? 'The others went offline.' : '' }[g.reason] || '';
   luRender();
   const el = luEl(), card = document.createElement('div'); card.className = 'lu-card'; card.style.cssText = 'position:absolute;inset:0;background:rgba(15,23,42,.92);justify-content:center';
   card.innerHTML = `<div class="big">${won ? '🏆' : '😔'}</div><h2>${won ? 'You won!' : esc(name) + ' won'}</h2>${why ? `<p>${esc(why)}</p>` : ''}<div class="row"><button onclick="luClose()">Close</button></div>`;
@@ -2821,7 +2890,12 @@ async function ludoTick(force){
       const { game } = await chatApi('ludoPoll', { gid:LU.gid }); if (!LU.gid) return;
       LU.g = game;
       if (game.state === 'over' && !game.players.length){ luClose(); return toast('Game ended'); }
-      if (game.state === 'invite') return;
+      if (game.state === 'invite'){
+        const sig = 'lobby' + game.ev + '|' + game.players.length + '|' + game.pend.join(',');
+        if (sig !== LU.sig){ LU.sig = sig; luLobby(game); }
+        return;
+      }
+      if (game.out && game.me >= 0 && game.out[game.me] && game.state === 'playing'){ luClose(); return; }
       if (game.state === 'over'){
         const sig = 'over' + game.ev + game.reason; if (sig === LU.sig) return; LU.sig = sig;
         if (game.reason === 'declined' || game.reason === 'noanswer' || game.reason === 'cancelled'){
@@ -2830,13 +2904,13 @@ async function ludoTick(force){
         }
         return luOver(game);
       }
-      const sig = game.state + game.ev + '|' + game.turn + '|' + game.roll + '|' + JSON.stringify(game.tokens) + game.me;
+      const sig = game.state + game.ev + '|' + game.turn + '|' + game.roll + '|' + JSON.stringify(game.tokens) + game.me + '|' + (game.out || []).join();
       if (sig !== LU.sig){ LU.sig = sig; luRender(); }
     } else {
       const r = await chatApi('ludoPoll', {});
       if (r.incoming && !LU.inc){
         LU.inc = r.incoming;
-        luCard('🎲', r.incoming.fromName + ' invited you to Ludo', 'Play online together', '<button class="x" onclick="ludoLeave()">Decline</button><button onclick="ludoAccept()">Accept</button>');
+        luCard('🎲', r.incoming.fromName + ' invited you to Ludo', r.incoming.group ? 'Group “' + r.incoming.group + '” · up to 4 players' : 'Play online together', '<button class="x" onclick="ludoLeave()">Decline</button><button onclick="ludoAccept()">Accept</button>');
       } else if (!r.incoming && LU.inc){ luClose(); toast('Ludo invite expired'); }
     }
   }catch(e){ chatErr(e); }

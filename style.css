@@ -522,3 +522,7 @@ main:has(.chat){padding-bottom:20px}
 .vc-btn small{font-size:12px;opacity:.9}
 .vc-btn:active span{transform:scale(.93)}
 body.vc-open{overflow:hidden}
+
+/* group chat */
+.ch-b .mf{font-size:12px;font-weight:700;margin-bottom:2px}
+.ch-stat.grp{color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
