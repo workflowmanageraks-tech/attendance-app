@@ -986,7 +986,7 @@ function listGroups_() {
 }
 // moves every row owned by `fromId` to the group, so the group starts with that person's existing data
 function adoptData_(fromId, toOwner) {
-  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 7], ['CAT', 3], ['TT', 4]].forEach(function (p) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 8], ['CAT', 3], ['TT', 4]].forEach(function (p) {
     var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
     if (last < 2) return;
     var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
@@ -1141,8 +1141,8 @@ function createSheet_(k) {
     sh.getRange('A:C').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LIC') {
-    sh.getRange(1, 1, 1, 7).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'ID', 'Owner']]);
-    sh.getRange('A:G').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 8).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'Premium Frequency', 'ID', 'Owner']]);
+    sh.getRange('A:H').setNumberFormat('@');
     sh.setFrozenRows(1);
   }
   sh.getRange(1, 1, 1, sh.getLastColumn()).setFontWeight('bold');
@@ -1815,34 +1815,40 @@ function deleteLink_(req) {
 }
 
 // ---------- LIC policies ----------
-// Customer Name | Policy Number | Amount | Start Date | End Date | ID | Owner
-// Dates are kept as plain "yyyy-MM-dd" strings. The countdown / "time left" shown to the person is
-// never stored - it ticks live in the browser (see licTick() in app.js) worked out fresh from End Date.
+// Customer Name | Policy Number | Amount | Start Date | End Date | Premium Frequency | ID | Owner
+// Dates are kept as plain "yyyy-MM-dd" strings. The maturity countdown AND the next-renewal-due countdown
+// are never stored - both tick live in the browser (see licTick() in app.js), worked out fresh every time
+// from End Date / Start Date + Frequency, so they can never go stale.
 var LIC_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+var LIC_FREQS = { monthly: 1, quarterly: 1, halfyearly: 1, yearly: 1 };   // '' = one-time / single premium (no renewal)
 function readLic_() {
-  var sh = ownedSheet_('LIC', 7);
+  var sh = ownedSheet_('LIC', 8);
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 7).getValues();
+  var vals = sh.getRange(2, 1, last - 1, 8).getValues();
   var out = [], dirty = false;
   vals.forEach(function (r) {
     if (r[0] === '' && r[1] === '' && r[2] === '') return;
-    var id = String(r[5] || '').trim();
-    if (!id) { id = Utilities.getUuid().slice(0, 8); r[5] = id; dirty = true; }
-    if (ownerOf_(r[6]) !== CTX.owner) return;
+    var id = String(r[6] || '').trim();
+    if (!id) { id = Utilities.getUuid().slice(0, 8); r[6] = id; dirty = true; }
+    if (ownerOf_(r[7]) !== CTX.owner) return;
+    var freq = String(r[5] || '').trim().toLowerCase();
     out.push({ id: id, name: String(r[0]), policyNo: String(r[1]), amount: Number(r[2]) || 0,
-      startDate: LIC_DATE_RE.test(r[3]) ? String(r[3]) : '', endDate: LIC_DATE_RE.test(r[4]) ? String(r[4]) : '' });
+      startDate: LIC_DATE_RE.test(r[3]) ? String(r[3]) : '', endDate: LIC_DATE_RE.test(r[4]) ? String(r[4]) : '',
+      freq: LIC_FREQS[freq] ? freq : '' });
   });
-  if (dirty) sh.getRange(2, 6, vals.length, 1).setValues(vals.map(function (r) { return [r[5]]; }));
+  if (dirty) sh.getRange(2, 7, vals.length, 1).setValues(vals.map(function (r) { return [r[6]]; }));
   return out;
 }
 function validLic_(req) {
   function dt(v) { v = String(v || '').trim(); return LIC_DATE_RE.test(v) ? v : ''; }
+  var freq = String(req.freq || '').trim().toLowerCase();
   var p = {
     name: String(req.name || '').trim().slice(0, 200),
     policyNo: String(req.policyNo || '').trim().slice(0, 80),
     amount: Math.max(0, Number(req.amount) || 0),
-    startDate: dt(req.startDate), endDate: dt(req.endDate)
+    startDate: dt(req.startDate), endDate: dt(req.endDate),
+    freq: LIC_FREQS[freq] ? freq : ''
   };
   if (!(p.name || p.policyNo)) fail_('Fill in at least the customer name or policy number.');
   if (p.startDate && p.endDate && p.endDate < p.startDate) fail_('Ending date cannot be before the starting date.');
@@ -1851,34 +1857,34 @@ function validLic_(req) {
 function findLicRow_(sh, id) {
   var last = sh.getLastRow();
   if (last < 2) return -1;
-  var v = sh.getRange(2, 6, last - 1, 2).getValues();            // ID, Owner
+  var v = sh.getRange(2, 7, last - 1, 2).getValues();            // ID, Owner
   for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id) && ownerOf_(v[i][1]) === CTX.owner) return i + 2;
   return -1;
 }
 function addLic_(req) {
   var p = validLic_(req);
-  var sh = ownedSheet_('LIC', 7);
+  var sh = ownedSheet_('LIC', 8);
   var row = sh.getLastRow() + 1;
   var id = Utilities.getUuid().slice(0, 8);
-  var rng = sh.getRange(row, 1, 1, 7);
+  var rng = sh.getRange(row, 1, 1, 8);
   rng.setNumberFormat('@');
-  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, id, CTX.owner]]);
+  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq, id, CTX.owner]]);
   p.id = id;
   return { ok: true, lic: p };
 }
 function updateLic_(req) {
   var p = validLic_(req);
-  var sh = ownedSheet_('LIC', 7);
+  var sh = ownedSheet_('LIC', 8);
   var row = findLicRow_(sh, req.id);
   if (row < 0) fail_('Entry not found. Please refresh.');
-  var rng = sh.getRange(row, 1, 1, 5);
+  var rng = sh.getRange(row, 1, 1, 6);
   rng.setNumberFormat('@');
-  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate]]);
+  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq]]);
   p.id = String(req.id);
   return { ok: true, lic: p };
 }
 function deleteLic_(req) {
-  var sh = ownedSheet_('LIC', 7);
+  var sh = ownedSheet_('LIC', 8);
   var row = findLicRow_(sh, req.id);
   if (row < 0) fail_('Entry not found. Please refresh.');
   sh.deleteRow(row);
