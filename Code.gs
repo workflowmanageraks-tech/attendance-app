@@ -47,9 +47,10 @@ const SHEET_KEYS = {
   TT: ['timetable', 'time table'],
   CHAT: ['chat'],
   CGRP: ['group conversations'],
-  ACT: ['activity log', 'activity']
+  ACT: ['activity log', 'activity'],
+  LPH: ['login security photos', 'security photos', 'login photos']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -172,7 +173,7 @@ var NEED = {
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
-var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1 };
+var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1 };
 // Admins, and any user the admin ticked "Can add new users" for. Such a user only ever manages the users HE added.
 var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1 };
 
@@ -231,6 +232,10 @@ function route_(req) {
   if (a === 'login') return login_(req);
   if (a === 'requestReset') return requestReset_(req);
   if (a === 'resetPassword') return resetPassword_(req);
+  // Called by the login screen right after a WRONG username/password, once the person has seen the
+  // on-screen "taking a verification photo" notice and the browser's own camera permission prompt.
+  // Public (no token) because, by definition, this happens before anyone is signed in.
+  if (a === 'reportLoginPhoto') return savePhotoReport_(req);
 
   // ---- everything else needs a valid token (except the very first setup) ----
   if (a !== 'setup') {
@@ -304,6 +309,7 @@ function route_(req) {
       case 'chatGroupLeave':    return chatGroupLeave_(req);
       case 'chatGroupDelete':   return chatGroupDelete_(req);
       case 'loginLog':          return { ok: true, logs: teamRows_(readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || ''))) };
+      case 'loginPhotos':       return { ok: true, photos: readLoginPhotos_(Math.min(Number(req.limit) || 60, 200), String(req.username || '').trim().toLowerCase()) };
       case 'activityLog':       if (!isAdminCtx_() && !actUsersOn_()) fail_('The activity log is only for admins.', 'PERM'); return { ok: true, logs: teamRows_(readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid)) };
       default: fail_('Unknown action: ' + a);
     }
@@ -539,6 +545,42 @@ function logLogin_(acc, uname, result, reason, i) {
       i.lat, i.lng, i.acc, i.src, link, i.device, i.browser, i.os, i.screen, i.tz, i.ip, i.city, i.deviceId]);
     if (sh.getLastRow() > 5000) sh.deleteRows(2, 1000);       // keep the log from growing forever
   } catch (e) {}
+}
+// ---------- Login security photos ----------
+// Front + back camera snapshots taken ONLY after a wrong username/password on the login screen, with a
+// visible on-screen notice shown first (the browser's own camera-permission prompt shows regardless).
+// Never linked to the account's normal data; only an admin (ADMIN_ONLY) can read them back, via loginPhotos.
+function savePhotoReport_(req) {
+  var cache = CacheService.getScriptCache();
+  var uname = String(req.username || '').trim().toLowerCase().slice(0, 100);
+  if (!uname) fail_('Missing username.', 'BADREQ');
+  var rkey = 'lph_' + Utilities.base64EncodeWebSafe(uname).slice(0, 60);
+  var n = Number(cache.get(rkey) || 0);
+  if (n >= 12) fail_('Too many requests. Please try again later.', 'RATE');     // simple abuse guard
+  cache.put(rkey, String(n + 1), 600);
+
+  var isImg = function (v) { return /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(String(v || '')); };
+  var MAXLEN = 70000;      // stays well inside a Sheets cell (50k chars) once header overhead is counted
+  var front = String(req.front || ''); if (!isImg(front) || front.length > MAXLEN) front = '';
+  var back = String(req.back || ''); if (!isImg(back) || back.length > MAXLEN) back = '';
+  if (!front && !back) fail_('No usable photo received.', 'BADREQ');
+
+  var sh = getSheet_('LPH');
+  sh.appendRow([nowStr_(), uname, String(req.reason || 'Wrong username/password').slice(0, 80), front, back]);
+  if (sh.getLastRow() > 1000) sh.deleteRows(2, 200);     // keep the sheet from growing forever
+  return { ok: true };
+}
+function readLoginPhotos_(limit, uname) {
+  var sh = getSheet_('LPH'), last = sh.getLastRow(), out = [];
+  if (last < 2) return out;
+  var n = Math.min(last - 1, 400);
+  var vals = sh.getRange(last - n + 1, 1, n, 5).getValues();
+  for (var i = vals.length - 1; i >= 0 && out.length < limit; i--) {
+    var r = vals[i];
+    if (uname && String(r[1]).toLowerCase() !== uname) continue;
+    out.push({ time: tsStr_(r[0]), username: String(r[1]), reason: String(r[2] || ''), front: String(r[3] || ''), back: String(r[4] || '') });
+  }
+  return out;
 }
 function readLog_(limit, uid) {
   var sh = getSheet_('LOG'), last = sh.getLastRow(), out = [];
@@ -1086,6 +1128,12 @@ function createSheet_(k) {
   } else if (k === 'ACT') {
     sh.getRange(1, 1, 1, 6).setValues([['Time', 'User ID', 'Username', 'Name', 'Action', 'Details']]);
     sh.getRange('A:F').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'LPH') {
+    // Taken only after a WRONG username/password is typed on the login screen (both front + back camera),
+    // with the person's on-screen consent notice shown first. Never taken on a successful sign-in.
+    sh.getRange(1, 1, 1, 5).setValues([['Time', 'Username tried', 'Reason', 'Front camera (base64 image)', 'Back camera (base64 image)']]);
+    sh.getRange('A:C').setNumberFormat('@');
     sh.setFrozenRows(1);
   }
   sh.getRange(1, 1, 1, sh.getLastColumn()).setFontWeight('bold');

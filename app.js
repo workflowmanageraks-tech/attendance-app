@@ -13,7 +13,7 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, photosOpen:false, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; DEP.st = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; S.photosOpen = false; DEP.st = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -137,9 +137,63 @@ $('#loginForm').addEventListener('submit', async ev => {
     saveToken(r.token, $('#remember').checked);
     await loadAll();
     enterApp();
-  }catch(e){ showLoginErr(e.message); }
+  }catch(e){
+    showLoginErr(e.message);
+    if (e.code === 'BADLOGIN') reportLoginPhoto(u, 'Wrong username/password');   // wrong user ID or password
+  }
   finally{ btn.disabled = false; btn.textContent = S.setup ? 'Create login & continue' : 'Sign in'; }
 });
+
+/* ---------- security photo on a wrong username/password ----------
+   Shown to the person on screen BEFORE anything is captured (never silent/hidden). The browser's own
+   camera-permission prompt appears the first time regardless, so there is no way to take this without the
+   person seeing it happen. If the camera is unavailable, denied, or anything fails, this just does nothing
+   and the normal "incorrect username or password" message stays on screen. */
+async function reportLoginPhoto(username, reason){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  const banner = loginPhotoBanner();
+  try{
+    banner.show('🔒 Verifying… taking a security photo (front camera)');
+    const front = await snapCamera('user');
+    banner.show('🔒 Verifying… taking a security photo (back camera)');
+    const back = await snapCamera('environment');
+    banner.hide();
+    if (!front && !back) return;
+    await api('reportLoginPhoto', { username, front, back, reason }).catch(()=>{});
+  } catch(e){ banner.hide(); }
+}
+function loginPhotoBanner(){
+  let el = document.getElementById('loginPhotoBanner');
+  if (!el){
+    el = document.createElement('div'); el.id = 'loginPhotoBanner';
+    el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:9999;background:#111;color:#fff;padding:10px 18px;border-radius:999px;font-size:14px;box-shadow:0 4px 18px rgba(0,0,0,.3);display:none;max-width:92vw;text-align:center';
+    document.body.appendChild(el);
+  }
+  return {
+    show(msg){ el.textContent = msg; el.style.display = 'block'; },
+    hide(){ el.style.display = 'none'; }
+  };
+}
+async function snapCamera(facingMode){
+  let stream;
+  try{ stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:facingMode } }, audio:false }); }
+  catch(e){ return ''; }     // no such camera / permission denied / not supported — just skip it
+  try{
+    const video = document.createElement('video');
+    video.srcObject = stream; video.muted = true; video.playsInline = true;
+    await video.play().catch(()=>{});
+    await new Promise(res => { if (video.readyState >= 2) return res(); video.onloadeddata = res; setTimeout(res, 1500); });
+    await new Promise(res => setTimeout(res, 350));    // let auto-exposure/focus settle a moment
+    const w = video.videoWidth || 320, h = video.videoHeight || 240;
+    const scale = Math.min(1, 320 / w);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.5);
+  } catch(e){ return ''; }
+  finally{ stream.getTracks().forEach(t => t.stop()); }
+}
 /* ---------- fingerprint / face unlock (WebAuthn passkey on this device) ---------- */
 const BK = 'att_tracker_bio';
 const BIO = { ok:false };
@@ -410,6 +464,7 @@ async function loadUsers(){ try { S.users = (await api('listUsers')).users; } ca
 async function loadLogs(){
   if (!isAdmin()) return;
   try { S.logs = (await api('loginLog', { limit:300 })).logs; } catch(e){ S.logs = S.logs || []; }
+  S.photos = null;   // security photos are loaded on demand only (they carry images, so don't fetch until opened)
   if (S.view === 'logins' || (S.view === 'dashboard' && !S.as)) render();
 }
 async function loadActivity(){
@@ -762,7 +817,8 @@ function vLogins(){
       <div class="field"><label>Result</label><select class="select" id="lfR"><option value="all">All</option><option value="ok" ${f.r==='ok'?'selected':''}>Success only</option><option value="bad" ${f.r==='bad'?'selected':''}>Failed / blocked only</option></select></div>
       <div class="field"><label>Search</label><input class="input" id="lfQ" placeholder="device, city, IP…" value="${esc(f.q)}"></div></div>
     <div class="chips" id="logSum"></div></div>
-    <div class="loglist" id="logList">${S.logs ? '' : '<div class="card"><div class="empty-state">Loading login activity…</div></div>'}</div>`;
+    <div class="loglist" id="logList">${S.logs ? '' : '<div class="card"><div class="empty-state">Loading login activity…</div></div>'}</div>
+    ${photosCard()}`;
 }
 function bindLogins(){
   if (!$('#lfU')) return;
@@ -770,6 +826,36 @@ function bindLogins(){
   $('#lfR').onchange = e => { S.lf.r = e.target.value; drawLogList(); };
   $('#lfQ').oninput = e => { S.lf.q = e.target.value; drawLogList(); };
   if (S.logs) drawLogList();
+  const pb = $('#photosToggle'); if (pb) pb.onclick = togglePhotos;
+}
+
+/* ---------- Security photos (front + back camera, taken only on a wrong username/password) ---------- */
+async function togglePhotos(){
+  S.photosOpen = !S.photosOpen;
+  render();
+  if (S.photosOpen && !S.photos) await loadLoginPhotos();
+}
+async function loadLoginPhotos(){
+  try { S.photos = (await api('loginPhotos', { limit:60 })).photos; } catch(e){ S.photos = S.photos || []; toast(e.message || 'Could not load security photos', true); }
+  render();
+}
+function photoItem(p){
+  const img = (src, label) => src
+    ? `<a href="${src}" target="_blank" rel="noopener"><img src="${src}" alt="${label}" style="width:100px;height:75px;object-fit:cover;border-radius:8px;border:1px solid var(--border,#ddd)"></a>`
+    : `<span class="muted" style="font-size:12px">no ${label.toLowerCase()}</span>`;
+  return `<div class="log-item bad">
+    <div class="l1"><b>@${esc(p.username)}</b><span class="muted">${esc(fmtLogTime(p.time))}</span></div>
+    <div class="l2">${esc(p.reason || 'Wrong username/password')}</div>
+    <div class="l2" style="display:flex;gap:10px;margin-top:6px">${img(p.front, 'Front')}${img(p.back, 'Back')}</div>
+  </div>`;
+}
+function photosCard(){
+  if (!isAdmin()) return '';
+  return `<div class="card" style="margin-top:16px">
+    <h3>📷 Security photos <button id="photosToggle" class="btn ghost sm">${S.photosOpen ? 'Hide' : 'Show'}</button></h3>
+    <p class="muted" style="margin-bottom:12px">Front + back camera, taken only when someone types the wrong username or password on the login screen — always with an on-screen notice and the browser's own camera permission prompt, never silently.</p>
+    ${S.photosOpen ? `<div class="loglist">${S.photos ? (S.photos.map(photoItem).join('') || '<div class="empty-state">No security photos yet</div>') : '<div class="empty-state">Loading…</div>'}</div>` : ''}
+  </div>`;
 }
 
 /* =====================================================================
