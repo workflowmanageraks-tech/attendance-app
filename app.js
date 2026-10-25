@@ -849,7 +849,7 @@ function vDeploy(){
       <p class="muted" style="margin-bottom:12px">Repository <b>${esc(DEP.st.repo)}</b> · branch <b>${esc(DEP.st.branch)}</b>. Choose the updated files; they go to GitHub as <b>one commit</b> and Render redeploys by itself (about 1–2 minutes).</p>
       ${DEP.err ? `<div class="log-item bad"><div class="l1"><b>${esc(DEP.err)}</b></div></div>` : ''}
       <div class="field"><label>Updated files <span class="muted">(app.js, style.css, index.html, server.js … you can pick several)</span></label>
-        <input class="input" type="file" id="depFiles" multiple accept=".js,.css,.html,.md,.json,.gs,.txt,.svg"></div>
+        <input class="input" type="file" id="depFiles" multiple></div>
       <div class="actions"><button class="btn" onclick="depReview()">Review &amp; publish →</button></div>
       <p class="muted" style="margin-top:10px;font-size:12.5px">Safety: a JS/JSON file with a mistake is refused before it reaches GitHub. Changing <code>server.js</code>, <code>package.json</code> or other server files asks for an extra confirmation. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
     <div class="card" style="margin-bottom:16px"><h3>🕘 File history &amp; restore</h3>
@@ -872,6 +872,8 @@ function bindDeploy(){
 async function depReview(){
   const fl = [...(document.getElementById('depFiles').files || [])];
   if (!fl.length) return toast('Choose the files to publish first', true);
+  const bad = fl.find(f => !/\.(js|css|html|md|json|gs|txt|svg)$/i.test(f.name));
+  if (bad) return toast(bad.name + ' — only js, css, html, md, json, gs, txt, svg files can be published', true);
   const rows = []; let total = 0;
   for (const f of fl){
     if (f.size > 900 * 1024) return toast(f.name + ' is too big (max 900 KB)', true);
