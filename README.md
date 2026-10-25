@@ -50,3 +50,9 @@ Nobody sees anybody in Chat, calls, Ludo or group chats unless the **main admin*
 Chat > **＋ New group** > name + at least 2 people (you can only pick users you are allowed to see). Only the creator edits / deletes the group (ℹ️ in the group header); members can leave. Groups are stored in the **Group Conversations** sheet (created automatically), messages in the **Chat** sheet.
 
 Tap 🎲 inside a group: the invite goes to **every member**. Whoever accepts joins the lobby (max 4 players, Ludo has 4 colours). The host can press **Start now** once 2 people are in; the game also starts by itself when everybody answered, the lobby is full, or after 90 seconds. 2 players sit in opposite corners; 3-4 players take red / green / yellow / blue. Someone who leaves (or goes offline for 2 minutes) drops out; the last player left wins. One-to-one Ludo works as before.
+
+## Deploy tab (main admin only)
+
+Publish updated files from the app itself: **Deploy** > choose the files (app.js, style.css, index.html, server.js …) > *Review & publish*. They go to GitHub as **one commit** and Render redeploys by itself. The tab also shows the repository's recent commits and per-file history with **Restore this version**.
+One-time setup on Render > Environment: `GITHUB_TOKEN` (a fine-grained token with *Contents: Read and write* on only this repository), `GITHUB_REPO` (`owner/name`) and optional `GITHUB_BRANCH` (default `main`). The token never reaches the browser.
+Safety: only .js / .css / .html / .md / .json / .gs / .txt / .svg files; no dotfiles or `node_modules`; JS and JSON with a syntax error are refused; server files (`server.js`, `package.json`, `google-store.js`, `gas-shim.js`, `Code.gs`) need an extra confirmation; every publish / restore is written to the Activity log. `Code.gs` runs in Apps Script, so it is still pasted there by hand.

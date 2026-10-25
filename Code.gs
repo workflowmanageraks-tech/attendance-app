@@ -495,9 +495,17 @@ function login_(req) {
     logLogin_(acc, uname, 'Blocked', 'Account disabled', info);
     fail_('This account is disabled. Please contact the admin.', 'DISABLED');
   }
-  if (acc.needLoc && info.lat === '') {
-    logLogin_(acc, uname, 'Blocked', 'Location not shared', info);
-    fail_('Your admin requires location to sign in. Allow location access for this site and try again.', 'LOCREQ');
+  if (acc.needLoc) {
+    // Only the DEVICE's own location counts (GPS / network). A guess from the IP address is never accepted - it can be hundreds of km off.
+    var devLoc = info.lat !== '' && (info.src === 'GPS' || info.src === 'Network');
+    if (!devLoc) {
+      logLogin_(acc, uname, 'Blocked', 'Location not shared', info);
+      fail_('Your admin requires your exact location to sign in. Turn on Location / GPS, allow location access for this site (choose "Precise") and try again.', 'LOCREQ');
+    }
+    if (info.acc !== '' && info.acc > 500) {
+      logLogin_(acc, uname, 'Blocked', 'Location not accurate (' + info.acc + ' m)', info);
+      fail_('Your location is not accurate enough (about ' + info.acc + ' m). Turn on GPS / precise location, go near a window or outside, and try again.', 'LOCREQ');
+    }
   }
   if (payExpired_(acc.payDue)) {
     logLogin_(acc, uname, 'Blocked', 'Payment pending', info);
@@ -519,7 +527,7 @@ function cleanInfo_(c) {
     if (isNaN(n) || n < lo || n > hi) return '';
     var m = Math.pow(10, dp); return Math.round(n * m) / m;
   }
-  return { lat: num(c.lat, -90, 90, 6), lng: num(c.lng, -180, 180, 6), acc: num(c.acc, 0, 10000000, 0), src: str(c.src, 24),
+  return { lat: num(c.lat, -90, 90, 6), lng: num(c.lng, -180, 180, 6), acc: num(c.acc, 0, 10000000, 0), src: (['GPS', 'Network', 'IP (approx.)'].indexOf(String(c.src)) >= 0 ? String(c.src) : ''),
     device: str(c.device, 90), browser: str(c.browser, 60), os: str(c.os, 60), screen: str(c.screen, 30), tz: str(c.tz, 50),
     ip: str(c.ip, 45), city: str(c.city, 90), deviceId: str(c.deviceId, 40) };
 }
@@ -562,6 +570,7 @@ var ACTIVITY_LABEL_ = {
   setTimetable: 'Edited Time Table', addTtCat: 'Added a Time Table category', updateTtCat: 'Renamed a Time Table category', deleteTtCat: 'Deleted a Time Table category',
   saveUser: 'Added/edited a user', deleteUser: 'Deleted a user', kickUser: 'Signed a user out everywhere',
   saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group', setActivityAccess: 'Changed who can see the Activity log',
+  deployUpload: 'Published files to GitHub', deployRestore: 'Restored a file on GitHub',
   calConnect: 'Connected Google Calendar', calDisconnect: 'Disconnected Google Calendar'
 };
 function activityDetail_(a, req) {
@@ -576,6 +585,7 @@ function activityDetail_(a, req) {
     if (a === 'addPw' || a === 'updatePw') return req.site || req.url || '';
     if (a === 'addLink' || a === 'updateLink') return req.name || '';
     if (a === 'saveGroup') return req.name || '';
+    if (a === 'deployUpload' || a === 'deployRestore') return req.path || '';
   } catch (e) {}
   return '';
 }

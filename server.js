@@ -437,12 +437,114 @@ function makeApp(store, env) {
     }
   }
 
+  // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
+  // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore']);
+  const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
+  const DEP_EXT = /\.(js|css|html|md|json|gs|txt|svg)$/i;
+  const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself
+  const DEP_MAX = 900 * 1024, DEP_TOTAL = 1500 * 1024;
+  const depBase = p => String(p).split('/').pop();
+  function depPathOk(p) {
+    p = String(p || '');
+    return p.length > 0 && p.length < 200 && /^[\w.\- \/]+$/.test(p) && !p.startsWith('/') && !p.includes('..') && !p.includes('//')
+      && p.split('/').every(s => s && !s.startsWith('.') && s !== 'node_modules') && DEP_EXT.test(p);
+  }
+  async function gh(method, url, body) {
+    const r = await fetch('https://api.github.com/repos/' + GH.repo + url, { method,
+      headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy', 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const why = r.status === 401 ? 'GitHub rejected the token (expired or wrong). Make a new token and update GITHUB_TOKEN on Render.'
+        : r.status === 404 ? 'GitHub could not find the repository, branch or file. Check GITHUB_REPO / GITHUB_BRANCH and that the token has access to that repository.'
+        : r.status === 403 ? 'GitHub refused (the token needs "Contents: Read and write" permission, or the rate limit was hit).'
+        : r.status === 422 ? 'GitHub could not save this change (' + (j.message || 'conflict') + '). Refresh the list and try again.'
+        : 'GitHub error ' + r.status + ': ' + (j.message || '');
+      globalThis.fail_(why, 'GITHUB');
+    }
+    return j;
+  }
+  const ghPath = p => p.split('/').map(encodeURIComponent).join('/');
+  const gitBlobSha = text => crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob ' + Buffer.byteLength(text) + '\0'), Buffer.from(text, 'utf8')])).digest('hex');
+  function depCheckSyntax(path, text) {
+    try {
+      if (/\.(js|gs)$/i.test(path)) new vm.Script(text.replace(/^#!.*/, ''), { filename: path });
+      else if (/\.json$/i.test(path)) JSON.parse(text);
+    } catch (e) { globalThis.fail_('"' + path + '" has an error and was NOT published: ' + e.message, 'SYNTAX'); }
+  }
+  const depCommits = list => (Array.isArray(list) ? list : []).map(c => ({ sha: c.sha, short: String(c.sha).slice(0, 7), msg: String((c.commit && c.commit.message) || '').split('\n')[0],
+    by: c.commit && c.commit.author ? c.commit.author.name : '', at: c.commit && c.commit.author ? c.commit.author.date : '' }));
+  // ONE commit for all the files (so Render redeploys once, with a consistent set of files)
+  async function depCommit(files, message) {
+    const br = encodeURIComponent(GH.branch);
+    const ref = await gh('GET', '/git/ref/heads/' + br), head = ref.object.sha;
+    const hc = await gh('GET', '/git/commits/' + head);
+    const tree = await gh('GET', '/git/trees/' + hc.tree.sha + '?recursive=1');
+    const cur = new Map((tree.tree || []).filter(x => x.type === 'blob').map(x => [x.path, x.sha]));
+    const changed = files.filter(f => cur.get(f.path) !== gitBlobSha(f.content));
+    const skipped = files.filter(f => !changed.includes(f)).map(f => f.path);
+    if (!changed.length) return { unchanged: true, skipped };
+    const nt = await gh('POST', '/git/trees', { base_tree: hc.tree.sha, tree: changed.map(f => ({ path: f.path, mode: '100644', type: 'blob', content: f.content })) });
+    const nc = await gh('POST', '/git/commits', { message, tree: nt.sha, parents: [head] });
+    await gh('PATCH', '/git/refs/heads/' + br, { sha: nc.sha });
+    return { sha: String(nc.sha).slice(0, 7), url: nc.html_url, changed: changed.map(f => ({ path: f.path, isNew: !cur.has(f.path) })), skipped };
+  }
+  async function deployRoute(req) {
+    const uid = globalThis.checkToken_(req.token);
+    if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    if (uid !== 'ADMIN') globalThis.fail_('Only the main admin can use Deploy.', 'PERM');
+    const a = req.action, ready = !!(GH.repo && GH.token);
+    if (a === 'deployStatus') return { ok: true, configured: ready, repo: GH.repo, branch: GH.branch };
+    if (!ready) globalThis.fail_('GitHub is not connected yet. Add GITHUB_TOKEN and GITHUB_REPO on Render first.', 'NOGH');
+    const S0 = globalThis.readSettings_().values, acc = globalThis.getAccount_('ADMIN', S0) || {};
+    const ctx = { uid: 'ADMIN', username: acc.username || 'admin', name: acc.name || '' };
+    if (a === 'deployFiles') {
+      const t = await gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
+      const files = (t.tree || []).filter(x => x.type === 'blob' && depPathOk(x.path)).map(x => ({ path: x.path, size: x.size || 0 }));
+      const cm = await gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&per_page=15');
+      return { ok: true, files, commits: depCommits(cm) };
+    }
+    if (a === 'deployHistory') {
+      const path = String(req.path || ''); if (!depPathOk(path)) globalThis.fail_('Invalid file.', 'DEPLOY');
+      return { ok: true, commits: depCommits(await gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&path=' + encodeURIComponent(path) + '&per_page=15')) };
+    }
+    if (a === 'deployUpload') {
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (!files.length || files.length > 20) globalThis.fail_('Choose between 1 and 20 files.', 'DEPLOY');
+      let total = 0; const seen = new Set();
+      for (const f of files) {
+        if (!f || !depPathOk(f.path) || typeof f.content !== 'string' || !f.content.length) globalThis.fail_('"' + (f && f.path) + '" is not an allowed file (allowed: js, css, html, md, json, gs, txt, svg).', 'DEPLOY');
+        if (seen.has(f.path)) globalThis.fail_('"' + f.path + '" was chosen twice.', 'DEPLOY'); seen.add(f.path);
+        const n = Buffer.byteLength(f.content); total += n;
+        if (n > DEP_MAX || total > DEP_TOTAL) globalThis.fail_('The files are too big for one upload.', 'DEPLOY');
+        depCheckSyntax(f.path, f.content);
+      }
+      if (files.some(f => DEP_BACKEND.test(depBase(f.path))) && req.confirmBackend !== true) globalThis.fail_('Confirm that you are changing the server itself.', 'CONFIRM');
+      const msg = String(req.message || '').trim().slice(0, 120) || ('Update ' + files.map(f => depBase(f.path)).join(', ') + ' (from the app)');
+      const r = await depCommit(files.map(f => ({ path: f.path, content: f.content })), msg);
+      if (!r.unchanged) globalThis.logActivity_('deployUpload', ctx, { path: r.changed.map(x => x.path).join(', ') });
+      return Object.assign({ ok: true }, r);
+    }
+    if (a === 'deployRestore') {
+      const path = String(req.path || ''), sha = String(req.sha || '');
+      if (!depPathOk(path) || !/^[0-9a-f]{7,40}$/.test(sha)) globalThis.fail_('Invalid request.', 'DEPLOY');
+      if (DEP_BACKEND.test(depBase(path)) && req.confirmBackend !== true) globalThis.fail_('Confirm that you are changing the server itself.', 'CONFIRM');
+      const old = await gh('GET', '/contents/' + ghPath(path) + '?ref=' + sha);
+      if (!old || !old.content) globalThis.fail_('Could not read that version.', 'DEPLOY');
+      const text = Buffer.from(old.content, 'base64').toString('utf8');
+      const r = await depCommit([{ path, content: text }], 'Restore ' + depBase(path) + ' to ' + sha.slice(0, 7) + ' (from the app)');
+      if (!r.unchanged) globalThis.logActivity_('deployRestore', ctx, { path });
+      return Object.assign({ ok: true }, r);
+    }
+  }
+
   let chain = Promise.resolve();
   async function run(body) {
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
     rt.delay = 0; rt.mails = []; rt.cal = [];
     let req, res;
-    try { req = JSON.parse(body); res = BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req); }
+    try { req = JSON.parse(body); res = DEPLOY_ACTIONS.has(req.action) ? await deployRoute(req) : BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req); }
     catch (err) { res = { ok: false, error: err.message || String(err), code: err.code || 'ERR' }; }
     if (req && req.action === 'logout') revoked.add(req.token);
     try { await wb.flush(); } catch (e) { res = { ok: false, error: 'Could not save to the sheet: ' + e.message, code: 'ERR' }; }

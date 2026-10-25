@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; DEP.st = null; DEP.files = null; DEP.hist = null; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -360,8 +360,8 @@ function applyAccess(){
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
   const chatOnly = ['att','exp','work','pw','link','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('logins', !isAdmin());
-  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin())) S.view = chatOnly ? 'chat' : 'dashboard';
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary));
+  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
@@ -461,17 +461,38 @@ function uaInfo(hi){
   else if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) model = 'iPad';
   return { device: kind + (model ? ' · ' + model : ''), browser: br, os };
 }
+/* Location: the BEST real GPS fix wins. We keep listening for up to ~14 s and stop early once it is accurate (<= 25 m).
+   Never a cached fix (maximumAge 0). The place name comes from the GPS point itself (reverse geocode), never from the IP address. */
+let _gpsP = null;
+function gpsStart(){ if (!_gpsP) _gpsP = getGps(); return _gpsP; }
 function getGps(){
   return new Promise(res => {
-    if (!navigator.geolocation) return res(null);
-    let done = false; const fin = v => { if (!done){ done = true; res(v); } };
-    setTimeout(() => fin(null), 10000);
+    if (!navigator.geolocation) return res({ err:'unsupported' });
+    let best = null, wid = null, done = false, err = '';
+    const fin = () => { if (done) return; done = true; try { if (wid !== null) navigator.geolocation.clearWatch(wid); } catch {} clearInterval(iv); clearTimeout(tt);
+      res(best ? { lat:best.latitude, lng:best.longitude, acc:Math.round(best.accuracy) } : { err:err || 'timeout' }); };
+    const t0 = Date.now();
+    const iv = setInterval(() => { const sec = (Date.now() - t0) / 1000;             // good enough? stop early
+      if (best && ((best.accuracy <= 25) || (sec >= 6 && best.accuracy <= 60) || (sec >= 10 && best.accuracy <= 150))) fin(); }, 400);
+    const tt = setTimeout(fin, 14000);
     try {
-      navigator.geolocation.getCurrentPosition(
-        p => fin({ lat:p.coords.latitude, lng:p.coords.longitude, acc:Math.round(p.coords.accuracy), src:'GPS' }),
-        () => fin(null), { enableHighAccuracy:true, timeout:8000, maximumAge:60000 });
-    } catch { fin(null); }
+      wid = navigator.geolocation.watchPosition(
+        p => { if (!best || p.coords.accuracy < best.accuracy) best = p.coords; },
+        e => { err = e.code === 1 ? 'denied' : e.code === 2 ? 'unavailable' : 'timeout'; if (e.code === 1) fin(); },
+        { enableHighAccuracy:true, timeout:14000, maximumAge:0 });
+    } catch { err = 'unsupported'; fin(); }
   });
+}
+async function placeOf(lat, lng){            // address of the GPS point (free OpenStreetMap, then BigDataCloud as backup)
+  const get = async (url, map) => { try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 4500);
+    const r = await fetch(url, { signal:ac.signal }); clearTimeout(t); return map(await r.json()); } catch { return ''; } };
+  const uniq = arr => arr.filter((x, i) => x && arr.indexOf(x) === i).join(', ');
+  return await get(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=en&lat=${lat}&lon=${lng}`, j => {
+      const a = (j && j.address) || {}; if (!j || j.error) return '';
+      return uniq([a.road || a.pedestrian || a.neighbourhood, a.suburb || a.neighbourhood, a.city || a.town || a.village || a.county, a.state_district, a.state, a.postcode]);
+    })
+    || await get(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`,
+      j => j ? uniq([j.locality, j.city, j.principalSubdivision, j.postcode]) : '');
 }
 async function getIp(){
   const tryUrl = async (url, map) => {
@@ -486,16 +507,25 @@ async function getIp(){
 async function collectClient(){
   let c = { deviceId: deviceId() };
   try {
-    const [gps, ip, hi] = await Promise.all([getGps(), getIp(), highEntropy()]);
+    const [gps, ip, hi] = await Promise.all([gpsStart(), getIp(), highEntropy()]);
+    _gpsP = null;                                              // every sign-in takes a fresh fix
     const u = uaInfo(hi);
     c = { ...c, ...u, screen:`${screen.width}x${screen.height}@${window.devicePixelRatio || 1}`,
-      tz:(Intl.DateTimeFormat().resolvedOptions().timeZone || ''), ip:ip.ip || '', city:ip.city || '' };
-    if (gps) Object.assign(c, gps);
-    else if (typeof ip.lat === 'number') Object.assign(c, { lat:ip.lat, lng:ip.lng, acc:'', src:'IP (approx.)' });
+      tz:(Intl.DateTimeFormat().resolvedOptions().timeZone || ''), ip:ip.ip || '', city:ip.city ? ip.city + ' (by IP)' : '' };
+    if (gps && gps.lat !== undefined){
+      // device location: GPS when the fix is within 100 m, otherwise Wi-Fi/network based (less exact)
+      Object.assign(c, { lat:gps.lat, lng:gps.lng, acc:gps.acc, src:gps.acc <= 100 ? 'GPS' : 'Network' });
+      const place = await placeOf(gps.lat, gps.lng);
+      if (place) c.city = place;                               // the real address of the GPS point
+    } else {
+      c.locErr = (gps && gps.err) || '';
+      if (typeof ip.lat === 'number') Object.assign(c, { lat:ip.lat, lng:ip.lng, acc:'', src:'IP (approx.)' });   // only a rough guess - never counts as the user's real location
+    }
   } catch {}
   return c;
 }
 
+{ const lu = document.getElementById('lu'); if (lu) lu.addEventListener('focus', () => { gpsStart(); }, { once:true }); }   // start finding the GPS fix while the user types the password
 /* ---------- users & access (admin) ---------- */
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
@@ -554,7 +584,7 @@ function userForm(id){
       </fieldset>
       ${S.me.primary ? seeBox(x) : ''}
       <label class="tog"><input type="checkbox" name="active" ${(!x || x.active) ? 'checked' : ''}> Account active (untick to block sign-in)</label>
-      ${isAdmin() ? `<label class="tog"><input type="checkbox" name="needLoc" ${x && x.needLoc ? 'checked' : ''}> Location required to sign in <span class="muted">(blocks login if no location can be found)</span></label>
+      ${isAdmin() ? `<label class="tog"><input type="checkbox" name="needLoc" ${x && x.needLoc ? 'checked' : ''}> Location required to sign in <span class="muted">(blocks login unless the phone gives a real GPS location, accurate to 500 m)</span></label>
       <div class="field"><label>Payment due until <span class="muted">(after this date/time, login is blocked with a payment-reminder message, until you clear or extend it)</span></label>
         <input class="input" type="datetime-local" name="payDue" value="${x && x.payDue ? x.payDue.replace(' ', 'T').slice(0,16) : ''}"></div>` : ''}
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save user' : 'Add user'}</button></div></form>`, 'wide');
@@ -647,7 +677,7 @@ function fmtLogTime(t){
 function logItem(l, compact){
   const good = l.result === 'Success', who = l.name || l.username || '(unknown)';
   const loc = (l.lat != null && l.lng != null)
-    ? `📍 ${l.lat.toFixed(5)}, ${l.lng.toFixed(5)} <span class="tag">${esc(l.src === 'GPS' ? 'GPS' + (l.acc != null ? ' ±' + l.acc + ' m' : '') : (l.src || 'approx.'))}</span> <a href="https://www.google.com/maps?q=${l.lat},${l.lng}" target="_blank" rel="noopener">Open map ↗</a>`
+    ? `📍 ${l.lat.toFixed(5)}, ${l.lng.toFixed(5)} <span class="tag">${esc(/^(GPS|Network)/.test(l.src || '') ? l.src + (l.acc != null ? ' ±' + l.acc + ' m' : '') : (l.src || 'approx.'))}</span>${(l.src === 'IP (approx.)' || (l.acc != null && l.acc > 200)) ? ' <span class="tag off">⚠ not exact</span>' : ''} <a href="https://www.google.com/maps?q=${l.lat},${l.lng}" target="_blank" rel="noopener">Open map ↗</a>`
     : '📍 Location not available';
   const dev = [l.device, l.browser, l.os].filter(Boolean).join(' · ');
   return `<div class="log-item ${good ? '' : 'bad'}">
@@ -655,7 +685,8 @@ function logItem(l, compact){
       <span><span class="pill ${good ? 'inc' : 'exp'}">${esc(l.result)}</span> <span class="muted">${esc(fmtLogTime(l.time))}</span></span></div>
     <div class="l2">📱 ${esc(dev || 'Unknown device')}${compact ? '' : (l.screen ? ' · ' + esc(l.screen) : '')}</div>
     <div class="l2">${loc}</div>
-    ${compact ? '' : `<div class="l2">🌐 ${esc([l.ip, l.city].filter(Boolean).join(' · ') || '—')}${l.deviceId ? ' · Device ID ' + esc(l.deviceId.slice(-6)) : ''}${l.tz ? ' · ' + esc(l.tz) : ''}${l.reason ? ' · ' + esc(l.reason) : ''}</div>`}
+    ${compact ? '' : `<div class="l2">🏠 ${esc(l.city || '—')}</div>
+    <div class="l2">🌐 ${esc(l.ip || '—')}${l.deviceId ? ' · Device ID ' + esc(l.deviceId.slice(-6)) : ''}${l.tz ? ' · ' + esc(l.tz) : ''}${l.reason ? ' · ' + esc(l.reason) : ''}</div>`}
   </div>`;
 }
 
@@ -741,6 +772,107 @@ function bindLogins(){
   if (S.logs) drawLogList();
 }
 
+/* =====================================================================
+   VIEW: DEPLOY  (main admin only) — publish updated files to GitHub, Render redeploys by itself
+   ===================================================================== */
+const DEP = { st:null, files:null, commits:[], hist:null, hpath:'', err:'' };
+const depBase = p => String(p).split('/').pop();
+const depBackend = p => /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i.test(depBase(p));
+const depWhen = t => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
+async function depLoad(){
+  try { DEP.st = await api('deployStatus'); } catch(e){ DEP.st = { configured:false }; DEP.err = e.message; }
+  if (DEP.st.configured){
+    try { const r = await api('deployFiles'); DEP.files = r.files; DEP.commits = r.commits; DEP.err = ''; }
+    catch(e){ DEP.err = e.message; DEP.files = DEP.files || []; }
+  }
+  if (S.view === 'deploy') render();
+}
+function vDeploy(){
+  if (!DEP.st) return '<div class="card"><div class="empty-state">Loading…</div></div>';
+  if (!DEP.st.configured) return `<div class="card"><h3>🚀 Connect GitHub (one time)</h3>
+    <p class="muted" style="margin-bottom:10px">So the app can publish files for you, give it a key to <b>one</b> repository. The key stays on the server (Render) — it is never shown in the app.</p>
+    <ol style="margin:0 0 12px 18px;line-height:1.7">
+      <li>On GitHub: <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
+      <li><b>Repository access</b>: “Only select repositories” → pick your website repository.</li>
+      <li><b>Permissions → Repository permissions → Contents: Read and write</b>. Generate and copy the token.</li>
+      <li>On Render → your service → <b>Environment</b>, add: <code>GITHUB_TOKEN</code> = the token, <code>GITHUB_REPO</code> = <code>your-name/your-repo</code>, and (only if not “main”) <code>GITHUB_BRANCH</code>.</li>
+      <li>Save — Render restarts — then open this tab again.</li></ol>
+    ${DEP.err ? `<p class="muted">${esc(DEP.err)}</p>` : ''}
+    <button class="btn soft sm" onclick="depLoad()">↻ Check again</button></div>`;
+  const files = DEP.files || [];
+  const fileOpts = files.map(f => `<option value="${esc(f.path)}" ${DEP.hpath === f.path ? 'selected' : ''}>${esc(f.path)}</option>`).join('');
+  const commitRow = (c, path) => `<div class="log-item"><div class="l1"><b style="word-break:break-word">${esc(c.msg || '(no message)')}</b>
+      <span class="muted">${esc(depWhen(c.at))}</span></div>
+      <div class="l2">${esc(c.by || '')} · <code>${esc(c.short)}</code>${path ? ` <button class="btn soft sm" style="margin-left:8px" onclick="depRestore('${esc(path)}','${esc(c.sha)}')">↩ Restore this version</button>` : ''}</div></div>`;
+  return `<div class="card" style="margin-bottom:16px"><h3>🚀 Publish to GitHub <button class="btn ghost sm" onclick="depLoad()">↻ Refresh</button></h3>
+      <p class="muted" style="margin-bottom:12px">Repository <b>${esc(DEP.st.repo)}</b> · branch <b>${esc(DEP.st.branch)}</b>. Choose the updated files; they go to GitHub as <b>one commit</b> and Render redeploys by itself (about 1–2 minutes).</p>
+      ${DEP.err ? `<div class="log-item bad"><div class="l1"><b>${esc(DEP.err)}</b></div></div>` : ''}
+      <div class="field"><label>Updated files <span class="muted">(app.js, style.css, index.html, server.js … you can pick several)</span></label>
+        <input class="input" type="file" id="depFiles" multiple accept=".js,.css,.html,.md,.json,.gs,.txt,.svg"></div>
+      <div class="actions"><button class="btn" onclick="depReview()">Review &amp; publish →</button></div>
+      <p class="muted" style="margin-top:10px;font-size:12.5px">Safety: a JS/JSON file with a mistake is refused before it reaches GitHub. Changing <code>server.js</code>, <code>package.json</code> or other server files asks for an extra confirmation. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
+    <div class="card" style="margin-bottom:16px"><h3>🕘 File history &amp; restore</h3>
+      <div class="form-grid"><div class="field"><label>File</label><select class="select" id="depHSel"><option value="">Choose a file…</option>${fileOpts}</select></div></div>
+      <div id="depHist">${DEP.hist ? (DEP.hist.map(c => commitRow(c, DEP.hpath)).join('') || '<div class="empty-state">No history for this file</div>') : '<div class="muted">Pick a file to see its older versions and bring one back.</div>'}</div></div>
+    <div class="card"><h3>📜 Recent changes on GitHub</h3>
+      ${(DEP.commits || []).map(c => commitRow(c, '')).join('') || '<div class="empty-state">No commits</div>'}
+      <details style="margin-top:12px"><summary class="muted" style="cursor:pointer">Files in the repository (${files.length})</summary>
+        <div style="margin-top:8px">${files.map(f => `<div class="l2">📄 ${esc(f.path)} <span class="muted">${(f.size / 1024).toFixed(1)} KB</span></div>`).join('')}</div></details></div>`;
+}
+function bindDeploy(){
+  const sel = document.getElementById('depHSel');
+  if (sel) sel.onchange = async e => {
+    DEP.hpath = e.target.value; DEP.hist = null;
+    if (!DEP.hpath){ render(); return; }
+    try { DEP.hist = (await api('deployHistory', { path:DEP.hpath })).commits; } catch(err){ DEP.hist = []; handleErr(err); }
+    render();
+  };
+}
+async function depReview(){
+  const fl = [...(document.getElementById('depFiles').files || [])];
+  if (!fl.length) return toast('Choose the files to publish first', true);
+  const rows = []; let total = 0;
+  for (const f of fl){
+    if (f.size > 900 * 1024) return toast(f.name + ' is too big (max 900 KB)', true);
+    total += f.size; const text = await f.text();
+    if (!text.trim()) return toast(f.name + ' is empty', true);
+    const m = (DEP.files || []).filter(x => depBase(x.path).toLowerCase() === f.name.toLowerCase());
+    rows.push({ name:f.name, text, size:f.size, matches:m });
+  }
+  if (total > 1500 * 1024) return toast('The files together are too big for one upload', true);
+  const backend = rows.some(r => depBackend(r.name));
+  const w = openModal(`<h3>Publish to GitHub</h3>
+    <p class="sub">${esc(DEP.st.repo)} · ${esc(DEP.st.branch)} — one commit, then the site redeploys.</p>
+    ${rows.map((r, i) => `<div class="log-item"><div class="l1"><b>${esc(r.name)}</b> <span class="muted">${(r.size / 1024).toFixed(1)} KB</span></div>
+      <div class="l2">${r.matches.length > 1 ? `Replace: <select class="select" data-i="${i}">${r.matches.map(x => `<option>${esc(x.path)}</option>`).join('')}</select>`
+        : r.matches.length ? `Replaces <code>${esc(r.matches[0].path)}</code>` : `<span class="pill exp">NEW</span> not in the repository yet — will be added as <code>${esc(r.name)}</code>`}</div></div>`).join('')}
+    ${backend ? '<div class="log-item bad"><div class="l1"><b>⚠ This changes the server itself.</b></div><div class="l2">A mistake here can take the whole site down until you restore the old version (File history). The server restarts and running Ludo games end.</div></div>' : ''}
+    <div class="field"><label>Note (optional)</label><input class="input" id="depMsg" maxlength="120" placeholder="What changed?"></div>
+    <div class="foot"><button class="btn ghost" data-x>Cancel</button><button class="btn" data-go>${backend ? 'I understand — publish' : 'Publish'}</button></div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-go]').onclick = async ev => {
+    const btn = ev.currentTarget; btn.disabled = true;
+    const files = rows.map((r, i) => { const s = w.querySelector(`select[data-i="${i}"]`); return { path: s ? s.value : (r.matches[0] ? r.matches[0].path : r.name), content:r.text }; });
+    try {
+      const r = await api('deployUpload', { files, message:(w.querySelector('#depMsg').value || '').trim(), confirmBackend:backend });
+      w.remove();
+      if (r.unchanged) toast('Nothing changed — these files are already the same on GitHub');
+      else { toast('Published ' + r.changed.length + ' file' + (r.changed.length === 1 ? '' : 's') + ' — the site will be live in 1–2 minutes'); document.getElementById('depFiles').value = ''; }
+      await depLoad();
+    } catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function depRestore(path, sha){
+  const backend = depBackend(path);
+  if (!await confirmBackendOk(path, backend)) return;
+  try {
+    const r = await api('deployRestore', { path, sha, confirmBackend:backend });
+    toast(r.unchanged ? 'That version is already live' : 'Restored — the site will be live in 1–2 minutes');
+    DEP.hist = null; DEP.hpath = ''; await depLoad();
+  } catch(e){ handleErr(e); }
+}
+const confirmBackendOk = (path, backend) => confirmBox('Restore this version of ' + depBase(path) + '?', backend ? 'This is a server file: the server restarts and a wrong version can take the site down.' : 'It is published as a new commit and the site redeploys.', 'Restore', backend);
+
 /* ---------- navigation ---------- */
 const TITLES = {
   dashboard:['Dashboard','Your attendance and salary at a glance'],
@@ -752,6 +884,7 @@ const TITLES = {
   passwords:['Password Manager','Save website logins and copy them in one tap'],
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
+  deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   settings:['Settings','Profile, security and preferences']
 };
 function setMenu(on){ document.body.classList.toggle('menu-open', !!on); const t = $('#menuToggle'); if (t) t.setAttribute('aria-expanded', on ? 'true' : 'false'); }
@@ -781,6 +914,7 @@ function go(v){
   $('#pageSub').textContent = TITLES[v][1];
   render(); window.scrollTo(0,0);
   if (v === 'logins') loadLogs();
+  if (v === 'deploy') depLoad();
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
@@ -823,12 +957,12 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, logins:vLogins, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, logins:vLogins, deploy:vDeploy, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay();
-  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
