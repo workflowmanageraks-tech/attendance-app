@@ -13,7 +13,7 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, photosOpen:false, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; S.photosOpen = false; DEP.st = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -464,7 +464,7 @@ async function loadUsers(){ try { S.users = (await api('listUsers')).users; } ca
 async function loadLogs(){
   if (!isAdmin()) return;
   try { S.logs = (await api('loginLog', { limit:300 })).logs; } catch(e){ S.logs = S.logs || []; }
-  S.photos = null;   // security photos are loaded on demand only (they carry images, so don't fetch until opened)
+  try { S.photos = (await api('loginPhotos', { limit:150 })).photos; } catch(e){ S.photos = S.photos || []; }
   if (S.view === 'logins' || (S.view === 'dashboard' && !S.as)) render();
 }
 async function loadActivity(){
@@ -729,8 +729,27 @@ function fmtLogTime(t){
   let h = +m[4]; const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
   return `${+m[3]} ${MON[+m[2] - 1]} ${m[1]}, ${h}:${m[5]} ${ap}`;
 }
+/* yyyy-MM-dd HH:mm:ss (as written by the server) -> ms, treated as local time, for matching a log row to its photo */
+function parseLogTS(t){
+  const m = String(t || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/); if (!m) return NaN;
+  return new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]).getTime();
+}
+/* The security photo is saved by a separate request right after the failed attempt, so match it to the
+   log row by username + nearest timestamp (within 5 minutes) rather than by a shared ID. */
+function photoForLog(l){
+  if (!l || l.result === 'Success' || !(S.photos && S.photos.length)) return null;
+  const uname = String(l.username || '').toLowerCase(), t = parseLogTS(l.time);
+  let best = null, bestDiff = Infinity;
+  for (const p of S.photos){
+    if (String(p.username || '').toLowerCase() !== uname) continue;
+    const pt = parseLogTS(p.time), diff = Math.abs(pt - t);
+    if (diff < bestDiff){ bestDiff = diff; best = p; }
+  }
+  return (best && bestDiff <= 5 * 60000) ? best : null;
+}
 function logItem(l, compact){
   const good = l.result === 'Success', who = l.name || l.username || '(unknown)';
+  const photo = compact ? null : photoForLog(l);
   const loc = (l.lat != null && l.lng != null)
     ? `📍 ${l.lat.toFixed(5)}, ${l.lng.toFixed(5)} <span class="tag">${esc(/^(GPS|Network)/.test(l.src || '') ? l.src + (l.acc != null ? ' ±' + l.acc + ' m' : '') : (l.src || 'approx.'))}</span>${(l.src === 'IP (approx.)' || (l.acc != null && l.acc > 200)) ? ' <span class="tag off">⚠ not exact</span>' : ''} <a href="https://www.google.com/maps?q=${l.lat},${l.lng}" target="_blank" rel="noopener">Open map ↗</a>`
     : '📍 Location not available';
@@ -742,7 +761,15 @@ function logItem(l, compact){
     <div class="l2">${loc}</div>
     ${compact ? '' : `<div class="l2">🏠 ${esc(l.city || '—')}</div>
     <div class="l2">🌐 ${esc(l.ip || '—')}${l.deviceId ? ' · Device ID ' + esc(l.deviceId.slice(-6)) : ''}${l.tz ? ' · ' + esc(l.tz) : ''}${l.reason ? ' · ' + esc(l.reason) : ''}</div>`}
+    ${photo ? `<div class="l2" style="display:flex;gap:10px;margin-top:8px;align-items:center">
+      📷 ${photoThumb(photo.front, 'Front camera')}${photoThumb(photo.back, 'Back camera')}
+    </div>` : ''}
   </div>`;
+}
+function photoThumb(src, label){
+  return src
+    ? `<a href="${src}" target="_blank" rel="noopener" title="${esc(label)} — open full size"><img src="${src}" alt="${esc(label)}" style="width:92px;height:70px;object-fit:cover;border-radius:8px;border:1px solid var(--border,#ddd)"></a>`
+    : '';
 }
 
 /* ---------- Activity log (every save / add / delete a user makes, not just sign-ins) ---------- */
@@ -826,35 +853,34 @@ function bindLogins(){
   $('#lfR').onchange = e => { S.lf.r = e.target.value; drawLogList(); };
   $('#lfQ').oninput = e => { S.lf.q = e.target.value; drawLogList(); };
   if (S.logs) drawLogList();
-  const pb = $('#photosToggle'); if (pb) pb.onclick = togglePhotos;
 }
 
-/* ---------- Security photos (front + back camera, taken only on a wrong username/password) ---------- */
-async function togglePhotos(){
-  S.photosOpen = !S.photosOpen;
-  render();
-  if (S.photosOpen && !S.photos) await loadLoginPhotos();
-}
-async function loadLoginPhotos(){
-  try { S.photos = (await api('loginPhotos', { limit:60 })).photos; } catch(e){ S.photos = S.photos || []; toast(e.message || 'Could not load security photos', true); }
-  render();
+/* ---------- Security photos (front + back camera, taken only on a wrong username/password) ----------
+   Loaded together with the login log itself (see loadLogs) and shown INSIDE each matching "Failed" /
+   "Blocked" row via photoForLog() + photoThumb() above. This card only lists photos that could NOT be
+   matched to a visible row (e.g. the log row has since scrolled out of the loaded 300, or the clocks
+   drifted by more than 5 minutes), so nothing taken gets lost / hidden. */
+function unmatchedPhotos(){
+  if (!(S.photos && S.photos.length)) return [];
+  const shown = new Set();
+  (S.logs || []).forEach(l => { const p = photoForLog(l); if (p) shown.add(p); });
+  return S.photos.filter(p => !shown.has(p));
 }
 function photoItem(p){
-  const img = (src, label) => src
-    ? `<a href="${src}" target="_blank" rel="noopener"><img src="${src}" alt="${label}" style="width:100px;height:75px;object-fit:cover;border-radius:8px;border:1px solid var(--border,#ddd)"></a>`
-    : `<span class="muted" style="font-size:12px">no ${label.toLowerCase()}</span>`;
   return `<div class="log-item bad">
     <div class="l1"><b>@${esc(p.username)}</b><span class="muted">${esc(fmtLogTime(p.time))}</span></div>
     <div class="l2">${esc(p.reason || 'Wrong username/password')}</div>
-    <div class="l2" style="display:flex;gap:10px;margin-top:6px">${img(p.front, 'Front')}${img(p.back, 'Back')}</div>
+    <div class="l2" style="display:flex;gap:10px;margin-top:6px">${photoThumb(p.front, 'Front camera') || '<span class="muted" style="font-size:12px">no front photo</span>'}${photoThumb(p.back, 'Back camera') || '<span class="muted" style="font-size:12px">no back photo</span>'}</div>
   </div>`;
 }
 function photosCard(){
-  if (!isAdmin()) return '';
+  if (!isAdmin() || !S.photos) return '';
+  const extra = unmatchedPhotos();
+  if (!extra.length) return '';
   return `<div class="card" style="margin-top:16px">
-    <h3>📷 Security photos <button id="photosToggle" class="btn ghost sm">${S.photosOpen ? 'Hide' : 'Show'}</button></h3>
-    <p class="muted" style="margin-bottom:12px">Front + back camera, taken only when someone types the wrong username or password on the login screen — always with an on-screen notice and the browser's own camera permission prompt, never silently.</p>
-    ${S.photosOpen ? `<div class="loglist">${S.photos ? (S.photos.map(photoItem).join('') || '<div class="empty-state">No security photos yet</div>') : '<div class="empty-state">Loading…</div>'}</div>` : ''}
+    <h3>📷 Other security photos</h3>
+    <p class="muted" style="margin-bottom:12px">Taken on a wrong username/password but not next to a row above (older than what's loaded, or the clocks drifted a bit).</p>
+    <div class="loglist">${extra.map(photoItem).join('')}</div>
   </div>`;
 }
 
