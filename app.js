@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -326,7 +326,7 @@ async function loadAll(){
   S.sig = sigOf(r.data); ingest(r.data);
   if (canAddUsers()) await loadUsers(); else S.users = null;
   if (isAdmin()) await loadGroups(); else S.groups = null;
-  applyAccess(); startSync();
+  applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
   S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || [];
@@ -1915,32 +1915,55 @@ async function linkDel(id){ if (!can('link')) return deny();
 function licAmt(n){ return n ? '₹' + Number(n).toLocaleString('en-IN') : '<span class="dim">—</span>'; }
 const LIC_FREQ = { '':'One-time', monthly:'Monthly', quarterly:'Quarterly', halfyearly:'Half-Yearly', yearly:'Yearly' };
 const LIC_FREQ_MONTHS = { monthly:1, quarterly:3, halfyearly:6, yearly:12 };
+const licIso = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+const licToday = () => licIso(new Date());                      // local date (not UTC), so it flips at midnight India time
+/* iso + n months, keeping the day-of-month (31 Jan + 1 month = 28/29 Feb, not 3 Mar) */
 function licAddMonths(iso, n){
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); if (!m) return '';
-  const d = new Date(+m[1], +m[2] - 1 + n, +m[3]);
-  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  const mo = +m[2] - 1 + n, last = new Date(+m[1], mo + 1, 0).getDate();
+  return licIso(new Date(+m[1], mo, Math.min(+m[3], last)));
 }
-/* the next premium-due date for a recurring policy: start date + N cycles, the first one landing today or later */
+/* whole calendar days from iso a to iso b */
+function licDayDiff(a, b){
+  const A = a.split('-').map(Number), B = b.split('-').map(Number);
+  return Math.round((Date.UTC(B[0], B[1] - 1, B[2]) - Date.UTC(A[0], A[1] - 1, A[2])) / 86400000);
+}
+/* "1 year 2 months 5 days" between two iso dates (from <= to) */
+function licSpan(from, to){
+  const f = from.split('-').map(Number), t = to.split('-').map(Number);
+  let mo = (t[0] - f[0]) * 12 + (t[1] - f[1]); if (licAddMonths(from, mo) > to) mo--;
+  const d = licDayDiff(licAddMonths(from, mo), to), y = Math.floor(mo / 12), m = mo % 12, out = [];
+  if (y) out.push(y + (y === 1 ? ' year' : ' years'));
+  if (m) out.push(m + (m === 1 ? ' month' : ' months'));
+  if (d || !out.length) out.push(d + (d === 1 ? ' day' : ' days'));
+  return out.join(' ');
+}
+/* The next premium-due date. The user enters ONE due date (x.dueDate - or, if empty, the starting date) and it repeats
+   by itself: every 1 / 3 / 6 / 12 months for Monthly / Quarterly / Half-Yearly / Yearly. Always today or later.
+   One-time policies only have a due date if one was typed in. */
 function licNextRenewal(x){
-  const step = LIC_FREQ_MONTHS[x.freq];
-  if (!step || !x.startDate) return '';
-  const todayIso = new Date().toISOString().slice(0, 10);
-  let due = x.startDate, guard = 0;
-  while (due && due < todayIso && guard++ < 2000) due = licAddMonths(due, step);
+  const anchor = x.dueDate || x.startDate, step = LIC_FREQ_MONTHS[x.freq];
+  if (!anchor || (!step && !x.dueDate)) return '';
+  const today = licToday();
+  let due = anchor;
+  if (step){ for (let k = 1; due < today && k < 2400; k++) due = licAddMonths(anchor, k * step); }   // from the anchor each time: no day drift
+  else if (due < today) return '';
   if (x.endDate && due > x.endDate) return '';     // policy term is already over — nothing left to renew
   return due;
 }
-/* "days left to pay" for the next renewal — day-level, not second-level (that's for the end-date countdown) */
+/* "how long to pay" for the next renewal: days when it is close, otherwise years / months / days */
 function licRenewInfo(x){
   const due = licNextRenewal(x);
-  if (!due) return { text:'—', cls:'', due:'' };
-  const end = new Date(due + 'T23:59:59'), left = end.getTime() - Date.now();
-  const days = Math.ceil(left / 86400000);
-  if (days <= 0) return { text:'⚠ Due now', cls:'bad', due };
-  if (days === 1) return { text:'Due tomorrow', cls:'bad', due };
-  if (days <= 7) return { text:days + ' days left', cls:'bad', due };
-  if (days <= 30) return { text:days + ' days left', cls:'warn', due };
-  return { text:days + ' days left', cls:'good', due };
+  if (!due) return { text:'—', cls:'', due:'', days:-1 };
+  const days = licDayDiff(licToday(), due);
+  const text = days === 0 ? '⚠ Due today' : days === 1 ? 'Due tomorrow' : days <= 30 ? days + ' days left' : licSpan(licToday(), due) + ' left';
+  return { text, cls: days <= 7 ? 'bad' : days <= 30 ? 'warn' : 'good', due, days };
+}
+/* one reminder toast per sign-in when a premium falls due within the next 7 days */
+function licAlert(){
+  if (S.licAlerted) return; S.licAlerted = true;
+  const n = (S.d && S.d.lic || []).filter(x => { const r = licRenewInfo(x); return r.due && r.days <= 7; }).length;
+  if (n) toast(`🔔 ${n} LIC premium${n > 1 ? 's' : ''} due within 7 days — see the LIC tab`);
 }
 function licDateFmt(iso){
   if (!iso) return '<span class="dim">—</span>';
@@ -1987,9 +2010,9 @@ function vLic(){
       if (end <= now) matured++; else if (end - now <= 30 * 86400000) maturing++;
     }
     const rn = licRenewInfo(x);
-    if (rn.due){ const d = Math.ceil((new Date(rn.due + 'T23:59:59').getTime() - now) / 86400000);
-      if (d <= 7) renew7++; if (d <= 30) renew30++; }
+    if (rn.due){ if (rn.days <= 7) renew7++; if (rn.days <= 30) renew30++; }
   });
+  const remind = all.map(x => ({ x, rn: licRenewInfo(x) })).filter(o => o.rn.due && o.rn.days <= 30).sort((a, b) => a.rn.days - b.rn.days);
   const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
       <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b>${licStatusTag(x.endDate)}</td>
       <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
@@ -2002,7 +2025,11 @@ function vLic(){
       <td class="n nowrap"><button class="btn soft sm" onclick="licCopy('${esc(x.id)}')" title="Copy all of this customer's data">📋 Copy</button>
         <button class="btn ghost sm" onclick="licForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="licDel('${esc(x.id)}')">🗑</button></td></tr>`;
   }).join('');
-  return `<div class="grid kpis" style="margin-bottom:16px">
+  const remindCard = remind.length ? `<div class="card lic-remind" style="margin-bottom:16px"><h3>🔔 Renewal reminders <span class="muted" style="font-weight:500;font-size:12.5px">· due within 30 days</span></h3>
+      ${remind.map(({ x, rn }) => `<div class="lic-ri"><div class="lic-ri-main"><b>${esc(x.name || x.policyNo || 'Policy')}</b>${x.name && x.policyNo ? ` <span class="muted">· ${esc(x.policyNo)}</span>` : ''}
+        <div class="muted" style="font-size:12.5px">${esc(LIC_FREQ[x.freq] || 'One-time')} premium${x.amount ? ' · ₹' + Number(x.amount).toLocaleString('en-IN') : ''} · ${licDateFmt(rn.due)}</div></div>
+        <span class="lic-rn lic-pill ${rn.cls}" data-lic-id="${esc(x.id)}">${esc(rn.text)}</span></div>`).join('')}</div>` : '';
+  return `${remindCard}<div class="grid kpis" style="margin-bottom:16px">
       <div class="card kpi s"><div class="lbl">Total Policies</div><div class="val">${total}</div><div class="hint">customers</div></div>
       <div class="card kpi p"><div class="lbl">Total Amount</div><div class="val" style="font-size:20px">${esc(licAmt(totalAmt))}</div></div>
       <div class="card kpi m"><div class="lbl">Renewal due ≤ 7 days</div><div class="val">${renew7}</div><div class="hint">pay soon</div></div>
@@ -2018,7 +2045,7 @@ function vLic(){
     <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
       ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Amount</th><th>Premium Mode</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
-      <p class="muted" style="margin-top:12px;font-size:13px">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> is when the next premium is due (based on Premium Mode); <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
+      <p class="muted" style="margin-top:12px;font-size:13px">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;
 }
 function licSearch(v){
@@ -2035,6 +2062,7 @@ async function licCopy(id){
     'Premium Mode: ' + (LIC_FREQ[x.freq] || 'One-time'),
     x.startDate && 'Starting Date: ' + x.startDate,
     x.endDate && 'Ending Date: ' + x.endDate,
+    x.dueDate && 'Premium Due Date: ' + x.dueDate + (x.freq ? ' (repeats ' + LIC_FREQ[x.freq] + ')' : ''),
     rn.due && 'Next Renewal: ' + rn.due + ' (' + rn.text + ')',
     c.status && 'Status: ' + c.status + (c.status !== 'Expired' ? ' (' + c.text + ' left)' : '')
   ].filter(Boolean).join('\n');
@@ -2044,7 +2072,7 @@ async function licCopy(id){
 function licForm(id){ if (!can('lic')) return deny();
   const x = id ? S.d.lic.find(e => e.id === id) : null;
   const freqOpts = Object.keys(LIC_FREQ).map(k => `<option value="${k}" ${(x ? x.freq : '') === k ? 'selected' : ''}>${LIC_FREQ[k]}</option>`).join('');
-  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer name, policy number, amount, premium mode, and the starting / ending date.</p>
+  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer name, policy number, amount, premium mode, the starting / ending date and the renewal (premium due) date.</p>
     <form id="licf" autocomplete="off">
       <div class="row2"><div class="field"><label>Customer Name</label><input class="input" name="name" maxlength="200" autocomplete="off" value="${esc(x ? x.name : '')}"></div>
         <div class="field"><label>Policy Number</label><input class="input" name="policyNo" maxlength="80" autocomplete="off" value="${esc(x ? x.policyNo : '')}"></div></div>
@@ -2054,9 +2082,16 @@ function licForm(id){ if (!can('lic')) return deny();
         <div class="field"><label>Starting Date</label><input class="input" type="date" name="startDate" value="${esc(x ? x.startDate : '')}"></div>
         <div class="field"><label>Ending Date</label><input class="input" type="date" name="endDate" value="${esc(x ? x.endDate : '')}"></div>
       </div>
-      <p class="muted" style="font-size:12.5px;margin-top:-6px">For Monthly / Quarterly / Half-Yearly / Yearly, the next renewal date is worked out automatically from the starting date.</p>
+      <div class="field"><label>Renewal / Premium Due Date</label><input class="input" type="date" name="dueDate" value="${esc(x ? x.dueDate : '')}"></div>
+      <div id="licPrev" class="lic-prev"></div>
+      <p class="muted" style="font-size:12.5px;margin-top:-2px">Enter the due date once. For Monthly / Quarterly / Half-Yearly / Yearly it then repeats by itself and shows how many days / months / years are left. If left empty, the starting date is used.</p>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
+  const prev = () => {                       // live "next due" line under the form
+    const f = Object.fromEntries(new FormData(w.querySelector('#licf'))), rn = licRenewInfo(f), el = w.querySelector('#licPrev');
+    el.innerHTML = rn.due ? `Next due: <b>${licDateFmt(rn.due)}</b> · <span class="${rn.cls}" style="font-weight:700">${esc(rn.text)}</span>${LIC_FREQ_MONTHS[f.freq] ? ` <span class="muted">(repeats every ${LIC_FREQ_MONTHS[f.freq]} month${LIC_FREQ_MONTHS[f.freq] > 1 ? 's' : ''})</span>` : ''}` : '';
+  };
+  w.querySelector('#licf').addEventListener('input', prev); w.querySelector('#licf').addEventListener('change', prev); prev();
   w.querySelector('#licf').onsubmit = async ev => {
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
     try{

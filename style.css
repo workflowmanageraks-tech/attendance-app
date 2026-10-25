@@ -535,3 +535,17 @@ textarea.input{resize:vertical;min-height:70px;font-family:inherit}
 .upd .l1 b{flex:1;min-width:0}
 .upd .l1 .tag{margin-left:0}
 .upd-file{border:2px dashed #c7cdea;border-radius:14px;background:var(--brand-soft);padding:14px;width:100%}
+
+
+/* ---------- LIC renewal reminders ---------- */
+.lic-cd.good,.lic-rn.good,.lic-prev .good{color:var(--good)}
+.lic-cd.warn,.lic-rn.warn,.lic-prev .warn{color:var(--warn)}
+.lic-cd.bad,.lic-rn.bad,.lic-prev .bad{color:var(--bad)}
+.lic-prev{min-height:20px;margin:-4px 0 8px;font-size:13.5px}
+.lic-remind{border-left:4px solid var(--warn)}
+.lic-ri{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line)}
+.lic-ri:first-of-type{border-top:0}
+.lic-ri-main{min-width:0}
+.lic-pill{flex:none;border-radius:999px;padding:4px 11px;font-size:12.5px;font-weight:700;white-space:nowrap;background:var(--warn-soft)}
+.lic-pill.bad{background:var(--bad-soft)}
+.lic-pill.good{background:var(--good-soft)}

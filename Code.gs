@@ -1141,8 +1141,8 @@ function createSheet_(k) {
     sh.getRange('A:C').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LIC') {
-    sh.getRange(1, 1, 1, 8).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'Premium Frequency', 'ID', 'Owner']]);
-    sh.getRange('A:H').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 9).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'Premium Frequency', 'ID', 'Owner', 'Renewal Due Date']]);
+    sh.getRange('A:I').setNumberFormat('@');
     sh.setFrozenRows(1);
   }
   sh.getRange(1, 1, 1, sh.getLastColumn()).setFontWeight('bold');
@@ -1815,17 +1815,30 @@ function deleteLink_(req) {
 }
 
 // ---------- LIC policies ----------
-// Customer Name | Policy Number | Amount | Start Date | End Date | Premium Frequency | ID | Owner
+// Customer Name | Policy Number | Amount | Start Date | End Date | Premium Frequency | ID | Owner | Renewal Due Date
 // Dates are kept as plain "yyyy-MM-dd" strings. The maturity countdown AND the next-renewal-due countdown
-// are never stored - both tick live in the browser (see licTick() in app.js), worked out fresh every time
-// from End Date / Start Date + Frequency, so they can never go stale.
+// are never stored - both are worked out fresh in the browser (see licNextRenewal() / licTick() in app.js).
+// "Renewal Due Date" is entered ONCE (the premium due date); the app repeats it every month / quarter /
+// half-year / year (per Premium Frequency) and always shows the next one. If it is empty, the Start Date is used.
+// It lives in column I (9) so the Owner column (H, 8) stays where older sheets and adoptData_() expect it.
 var LIC_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 var LIC_FREQS = { monthly: 1, quarterly: 1, halfyearly: 1, yearly: 1 };   // '' = one-time / single premium (no renewal)
-function readLic_() {
+// the LIC sheet with its extra "Renewal Due Date" column (older sheets get it added automatically)
+function licSheet_() {
   var sh = ownedSheet_('LIC', 8);
+  if (sh.getMaxColumns() < 9) sh.insertColumnsAfter(sh.getMaxColumns(), 9 - sh.getMaxColumns());
+  var h = sh.getRange(1, 9);
+  if (String(h.getValue()) !== 'Renewal Due Date') {
+    h.setNumberFormat('@'); h.setValue('Renewal Due Date'); h.setFontWeight('bold');
+    sh.getRange('I:I').setNumberFormat('@');
+  }
+  return sh;
+}
+function readLic_() {
+  var sh = licSheet_();
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 8).getValues();
+  var vals = sh.getRange(2, 1, last - 1, 9).getValues();
   var out = [], dirty = false;
   vals.forEach(function (r) {
     if (r[0] === '' && r[1] === '' && r[2] === '') return;
@@ -1835,7 +1848,7 @@ function readLic_() {
     var freq = String(r[5] || '').trim().toLowerCase();
     out.push({ id: id, name: String(r[0]), policyNo: String(r[1]), amount: Number(r[2]) || 0,
       startDate: LIC_DATE_RE.test(r[3]) ? String(r[3]) : '', endDate: LIC_DATE_RE.test(r[4]) ? String(r[4]) : '',
-      freq: LIC_FREQS[freq] ? freq : '' });
+      freq: LIC_FREQS[freq] ? freq : '', dueDate: LIC_DATE_RE.test(r[8]) ? String(r[8]) : '' });
   });
   if (dirty) sh.getRange(2, 7, vals.length, 1).setValues(vals.map(function (r) { return [r[6]]; }));
   return out;
@@ -1847,7 +1860,7 @@ function validLic_(req) {
     name: String(req.name || '').trim().slice(0, 200),
     policyNo: String(req.policyNo || '').trim().slice(0, 80),
     amount: Math.max(0, Number(req.amount) || 0),
-    startDate: dt(req.startDate), endDate: dt(req.endDate),
+    startDate: dt(req.startDate), endDate: dt(req.endDate), dueDate: dt(req.dueDate),
     freq: LIC_FREQS[freq] ? freq : ''
   };
   if (!(p.name || p.policyNo)) fail_('Fill in at least the customer name or policy number.');
@@ -1863,28 +1876,31 @@ function findLicRow_(sh, id) {
 }
 function addLic_(req) {
   var p = validLic_(req);
-  var sh = ownedSheet_('LIC', 8);
+  var sh = licSheet_();
   var row = sh.getLastRow() + 1;
   var id = Utilities.getUuid().slice(0, 8);
-  var rng = sh.getRange(row, 1, 1, 8);
+  var rng = sh.getRange(row, 1, 1, 9);
   rng.setNumberFormat('@');
-  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq, id, CTX.owner]]);
+  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq, id, CTX.owner, p.dueDate]]);
   p.id = id;
   return { ok: true, lic: p };
 }
 function updateLic_(req) {
   var p = validLic_(req);
-  var sh = ownedSheet_('LIC', 8);
+  var sh = licSheet_();
   var row = findLicRow_(sh, req.id);
   if (row < 0) fail_('Entry not found. Please refresh.');
   var rng = sh.getRange(row, 1, 1, 6);
   rng.setNumberFormat('@');
   rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq]]);
+  var rd = sh.getRange(row, 9);
+  rd.setNumberFormat('@');
+  rd.setValue(p.dueDate);
   p.id = String(req.id);
   return { ok: true, lic: p };
 }
 function deleteLic_(req) {
-  var sh = ownedSheet_('LIC', 8);
+  var sh = licSheet_();
   var row = findLicRow_(sh, req.id);
   if (row < 0) fail_('Entry not found. Please refresh.');
   sh.deleteRow(row);
