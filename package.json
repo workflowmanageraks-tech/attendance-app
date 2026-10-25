@@ -5,5 +5,5 @@
   "main": "server.js",
   "scripts": { "start": "node server.js", "test": "node test/test.js" },
   "engines": { "node": ">=18" },
-  "dependencies": { "nodemailer": "^6.9.14" }
+  "dependencies": { "nodemailer": "^6.9.14", "web-push": "^3.6.7" }
 }

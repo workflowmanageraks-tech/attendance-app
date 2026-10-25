@@ -46,7 +46,7 @@ const daysIn = (y, m) => new Date(y, m, 0).getDate();
 // When the page is served by Apps Script itself, google.script.run is used.
 // When the file is hosted elsewhere, it falls back to fetch(API_URL).
 const HAS_GAS = typeof google !== 'undefined' && google.script && google.script.run;
-function callServer(body){
+function callServer(body, timeoutMs){
   if (HAS_GAS){
     return new Promise((resolve, reject) => {
       google.script.run
@@ -55,16 +55,29 @@ function callServer(body){
         .apiCall(JSON.stringify(body));
     });
   }
+  const ctl = (timeoutMs && typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : 0;
   return fetch(API_URL, {
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},   // avoids CORS pre-flight
-    body: JSON.stringify(body)
-  }).then(r => r.json()).catch(() => { throw new Error('Cannot reach the server. Check the Apps Script deployment (Anyone can access).'); });
+    body: JSON.stringify(body),
+    signal: ctl ? ctl.signal : undefined
+  }).then(r => r.json())
+    .catch(() => { const e = new Error('Cannot reach the server. Check your internet connection.'); e.offline = true; throw e; })   // no network / server asleep / timed out
+    .finally(() => clearTimeout(timer));
 }
 async function api(action, payload = {}){
   busy(true);
   try{
-    const j = await callServer({ action, token:S.token, asUser:S.as || undefined, ...payload });
+    const body = { action, token:S.token, asUser:S.as || undefined, ...payload };
+    const canWait = OQ_OK.has(action) && S.me && !HAS_GAS;            // add / edit / delete entries can wait for the network
+    if (canWait){
+      body.qid = oqId();                                              // lets the server ignore a repeat if the first reply was lost
+      if (!navigator.onLine || oqMine().length) return oqEnqueue(action, body, navigator.onLine);   // older offline entries must go first
+    }
+    let j;
+    try { j = await callServer(body, canWait ? 45000 : 0); }
+    catch(e){ if (canWait && e.offline) return oqEnqueue(action, body, false); throw e; }
     if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; throw e; }
     return j;
   } finally { busy(false); }
@@ -89,12 +102,14 @@ function saveToken(t, remember){
 }
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
+  idb.del('cache'); S.offlineMode = false;            // the saved copy of the data belongs to the person who just left
   clearInterval(syncT); syncT = null; setMenu(false);
   clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
 async function logout(){
+  try { await pushOffHere(); } catch {}               // this phone stops getting this person's notifications
   try { await api('logout'); } catch {}
   forceLogout();
 }
@@ -321,9 +336,10 @@ function showLoginErr(m){ const er = $('#loginErr'); er.textContent = m; er.clas
 
 async function loadAll(){
   let r;
+  if (S.me && navigator.onLine && oqMine().length) await oqFlush(true);   // never show server data that is missing the entries still waiting on this phone
   try { r = await api('getAll'); }
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
-  S.sig = sigOf(r.data); ingest(r.data);
+  S.sig = sigOf(r.data); ingest(r.data); cacheSave();
   if (canAddUsers()) await loadUsers(); else S.users = null;
   if (isAdmin()) await loadGroups(); else S.groups = null;
   applyAccess(); startSync(); licAlert();
@@ -345,7 +361,7 @@ function startSync(){
   if (S.me && S.me.group) syncT = setInterval(syncTick, 10000);
 }
 async function syncTick(){
-  if (!S.d || !S.token || document.hidden || busyN > 0 || document.querySelector('.overlay') || typing()) return;
+  if (!S.d || !S.token || document.hidden || busyN > 0 || document.querySelector('.overlay') || typing() || S.offlineMode || oqMine().length) return;
   let r;
   try { r = await callServer({ action:'getAll', token:S.token, asUser:S.as || undefined }); } catch { return; }
   if (!r || !r.ok || !S.d || document.querySelector('.overlay') || typing()) return;     // never disturb someone who is typing
@@ -381,17 +397,27 @@ function enterApp(){
   refreshUser();
   go(S.view);
   chatStart(); vcStart(); ludoStart();
-  if (isAdmin()) loadLogs();
+  vcTick();                                           // opened from a "calling you" notification: look for the call right now
+  oqFlush(); pushSync();
+  if (isAdmin() && !S.offlineMode) loadLogs();
+  openFromUrl(location.href);                         // a tapped notification can ask for a screen: ?go=attendance
+  try { if (location.search) history.replaceState(null, '', location.pathname + location.hash); } catch {}
 }
+let booted = false;
 async function boot(){
+  if (booted) return; booted = true;
   await bioDetect();
+  await oqLoad();
   const t = store.get(TK);
   let st;
   try { st = await api('status'); }
-  catch(e){ showLogin(false, 'Cannot reach the server: ' + e.message); return; }
+  catch(e){
+    if (e.offline && t && await bootOffline(t)) return;       // no network: open with the last saved data
+    showLogin(false, 'Cannot reach the server: ' + e.message); return;
+  }
   if (t && !st.needsSetup){
     S.token = t;
-    try { await loadAll(); enterApp(); return; } catch { clearToken(); }
+    try { await loadAll(); enterApp(); return; } catch(e) { if (e.offline && await bootOffline(t)) return; clearToken(); }
   }
   showLogin(st.needsSetup, '', st.needsSetupCode);
   if (BIO.ok && bioSaved() && !st.needsSetup) bioLoginGo(true);
@@ -1225,7 +1251,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindPush(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -2343,6 +2369,7 @@ function vSettings(){
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
   if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
+  grid.insertAdjacentHTML('beforeend', pushCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
@@ -2865,6 +2892,209 @@ async function doExport(kind, fmt){
   src.after(b);     // right after "Updates" = right above "Settings"
 })();
 
+/* =====================================================================
+   OFFLINE MODE  +  PUSH NOTIFICATIONS
+   - No network: new / edited / deleted entries are kept on the phone (IndexedDB) and sent, in order, when the network is back.
+   - The last data is kept on the phone too, so the app still opens with no network.
+   - sw.js shows push notifications (calls, payment reminders, attendance reminder) even when the app is closed.
+   ===================================================================== */
+const idb = {
+  db:null,
+  open(){
+    if (!this.db) this.db = new Promise((ok, no) => {
+      if (!window.indexedDB) return no(new Error('no storage'));
+      const q = indexedDB.open('ks_offline', 1);
+      q.onupgradeneeded = () => q.result.createObjectStore('kv');
+      q.onsuccess = () => ok(q.result); q.onerror = () => no(q.error);
+    });
+    return this.db;
+  },
+  async get(k){ try { const db = await this.open(); return await new Promise(ok => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => ok(undefined); }); } catch { return undefined; } },
+  async set(k, v){ try { const db = await this.open(); await new Promise(ok => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = t.onerror = t.onabort = () => ok(); }); } catch {} },
+  async del(k){ try { const db = await this.open(); await new Promise(ok => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').delete(k); t.oncomplete = t.onerror = t.onabort = () => ok(); }); } catch {} }
+};
+
+/* ---------- offline queue ---------- */
+const OQ = { list:[], busy:false, snap:null };
+const OQ_ADD = { addExpense:'expense', addWork:'work', addLink:'link', addLic:'lic' };                 // action -> key of the saved item in the reply
+const OQ_UPD = { updateExpense:['addExpense','expense'], updateWork:['addWork','work'], updateLink:['addLink','link'], updateLic:['addLic','lic'] };
+const OQ_DEL = { deleteExpense:1, deleteWork:1, deleteLink:1, deleteLic:1 };
+const OQ_OK = new Set(['setAttendance', 'setTimetable', ...Object.keys(OQ_ADD), ...Object.keys(OQ_UPD), ...Object.keys(OQ_DEL)]);   // saved passwords are deliberately NOT kept on the phone
+const oqId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+const oqMine = () => OQ.list.filter(x => S.me && x.uid === S.me.id);
+const oqSave = () => idb.set('queue', OQ.list);
+async function oqLoad(){ const q = await idb.get('queue'); OQ.list = Array.isArray(q) ? q : []; oqPill(); }
+function oqPill(){
+  let el = document.getElementById('oqPill');
+  const n = oqMine().length, off = !navigator.onLine;
+  if (!n && !off){ if (el) el.remove(); return; }
+  if (!el){ el = document.createElement('div'); el.id = 'oqPill'; el.onclick = () => { oqFlush(); }; document.body.appendChild(el); }
+  el.className = 'oq-pill' + (off ? ' off' : '');
+  el.textContent = off ? '📴 Offline' + (n ? ' · ' + n + ' waiting to sync' : '')
+    : OQ.busy ? '⏳ Syncing ' + n + '…' : '☁️ ' + n + ' waiting to sync · tap to retry';
+}
+function oqEnqueue(action, body, online){
+  const me = S.me.id, id = body.id !== undefined ? String(body.id) : '';
+  const rec = b => { const r = { ...b }; ['action', 'token', 'asUser', 'qid'].forEach(k => delete r[k]); if ('amount' in r) r.amount = Number(r.amount) || 0; return r; };
+  const clean = { ...body }; delete clean.token;
+  let out;
+  if ((OQ_UPD[action] || OQ_DEL[action]) && id.startsWith('tmp_')){            // changing something that was added offline and is not on the server yet
+    const e = OQ.list.find(x => x.tmp === id && x.uid === me);
+    if (!e) throw new Error('This entry is still being saved. Please try again in a moment.');
+    if (OQ_DEL[action]){ OQ.list = OQ.list.filter(x => x !== e); out = { ok:true, queued:true }; }
+    else { Object.assign(e.body, rec(body)); delete e.body.id; out = { ok:true, queued:true, [OQ_UPD[action][1]]:{ ...rec(e.body), id } }; }
+  } else {
+    const e = { id:body.qid, uid:me, body:clean, t:Date.now() };
+    if (OQ_ADD[action]){ e.tmp = 'tmp_' + oqId(); out = { ok:true, queued:true, [OQ_ADD[action]]:{ ...rec(body), id:e.tmp } }; }
+    else if (OQ_UPD[action]) out = { ok:true, queued:true, [OQ_UPD[action][1]]:rec(body) };
+    else out = { ok:true, queued:true };
+    OQ.list.push(e);
+  }
+  oqSave(); oqPill();
+  clearTimeout(OQ.snap); OQ.snap = setTimeout(() => cacheSave(), 900);          // after the screen code has applied the change, keep the copy
+  if (online) setTimeout(oqFlush, 50); else toast('📴 No network — saved on this phone, it will sync by itself');
+  return out;
+}
+async function oqFlush(fromLoad){
+  if (OQ.busy || !S.token || !S.me || !navigator.onLine || !oqMine().length) return;
+  OQ.busy = true; oqPill();
+  let done = 0, authErr = null; const bad = [];
+  try{
+    for (;;){
+      const e = oqMine()[0]; if (!e) break;
+      let j;
+      try { j = await callServer({ ...e.body, token:S.token, qid:e.id }, 45000); }
+      catch(err){ break; }                                                      // still no network: keep everything, try again later
+      if (!j.ok && (j.code === 'AUTH' || j.code === 'PAYDUE')){ authErr = Object.assign(new Error(j.error || 'Please sign in again.'), { code:j.code }); break; }
+      if (!j.ok) bad.push(j.error || 'The server refused it');
+      OQ.list = OQ.list.filter(x => x !== e); await oqSave(); done++; oqPill();
+    }
+  } finally { OQ.busy = false; oqPill(); }
+  if (authErr) return handleErr(authErr);                                       // the entries stay on the phone until you sign in again
+  if (done && !fromLoad){ try { await loadAll(); render(); } catch(e){ if (!e.offline) handleErr(e); } }
+  if (done) toast('✅ ' + done + (done === 1 ? ' offline entry' : ' offline entries') + ' synced');
+  if (bad.length) toast('⚠ ' + bad.length + ' offline ' + (bad.length === 1 ? 'entry' : 'entries') + ' could not be saved: ' + bad[0], true);
+}
+
+/* ---------- last data kept for opening with no network ---------- */
+function cacheSave(){
+  if (!S.d || !S.me || S.me.viewing || S.as) return;                            // never keep "view as user" data under the admin
+  idb.set('cache', { uid:S.me.id, at:Date.now(), data:{ ...S.d, passwords:[] } });   // saved passwords are not kept on the phone
+}
+const tokUid = t => { try { return atob(String(t).split('.')[0].replace(/-/g, '+').replace(/_/g, '/')).split('|')[0]; } catch { return ''; } };
+async function bootOffline(t){
+  const c = await idb.get('cache');
+  if (!c || !c.data || !c.data.me || c.uid !== tokUid(t)) return false;
+  S.token = t; S.offlineMode = true; S.sig = '';
+  c.data.me.serverNow = Date.now();
+  ingest(c.data); applyAccess(); enterApp();
+  toast('📴 No network — showing your last saved data');
+  return true;
+}
+async function onBackOnline(){
+  oqPill();
+  if (!S.token || !S.d) return;
+  await oqFlush();
+  if (S.offlineMode){
+    try { await loadAll(); S.offlineMode = false; render(); toast('✅ Back online'); if (isAdmin()) loadLogs(); }
+    catch(e){ if (!e.offline) handleErr(e); }
+  }
+}
+window.addEventListener('online', onBackOnline);
+window.addEventListener('offline', oqPill);
+setInterval(() => { if (!navigator.onLine) return; if (S.offlineMode) onBackOnline(); else if (oqMine().length) oqFlush(); }, 20000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && S.d){ vcTick(); if (S.offlineMode) onBackOnline(); else oqFlush(); } });
+
+/* ---------- push notifications ---------- */
+const PUSH = { reg:null };
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
+const pushSupported = () => !HAS_GAS && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
+function pushWhy(){
+  if (HAS_GAS) return 'Notifications need the website version of the app.';
+  if (isIOS() && !isStandalone()) return 'On iPhone / iPad: tap Share → “Add to Home Screen”, then open the app from the Home Screen icon and come back here.';
+  if (!window.isSecureContext) return 'Notifications need the secure (https) website address.';
+  return 'This browser does not support notifications. Use Chrome on Android, or Safari on iPhone with the app added to the Home Screen.';
+}
+const u8 = x => { x = String(x).replace(/-/g, '+').replace(/_/g, '/'); while (x.length % 4) x += '='; const b = atob(x), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; };
+async function swRegister(){
+  if (HAS_GAS || !('serviceWorker' in navigator) || !window.isSecureContext) return;
+  try { PUSH.reg = await navigator.serviceWorker.register('sw.js'); navigator.serviceWorker.addEventListener('message', swMsg); } catch(e){}
+}
+function swMsg(e){
+  const m = e.data || {};
+  if (m.type === 'push' && (m.kind === 'call' || m.kind === 'missed')) vcTick();
+  if (m.type === 'nav'){ openFromUrl(m.url); vcTick(); }
+}
+function openFromUrl(u){
+  let v = ''; try { v = new URL(u || location.href, location.href).searchParams.get('go') || ''; } catch {}
+  if (!v || !TITLES[v] || !S.d) return false;
+  go(v); return true;
+}
+function swCloseNotes(tag){
+  try { if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then(r => r && r.getNotifications && r.getNotifications({ tag }).then(l => l.forEach(n => n.close()))).catch(() => {}); } catch {}
+}
+async function pushSub(){
+  try { const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, no) => setTimeout(() => no(new Error('sw')), 8000))]); return await reg.pushManager.getSubscription(); }
+  catch { return null; }
+}
+async function pushSync(){                    // keep this phone attached to whoever is signed in now
+  if (!pushSupported() || Notification.permission !== 'granted' || S.offlineMode) return;
+  try { const sub = await pushSub(); if (sub) await chatApi('pushSubscribe', { sub:sub.toJSON(), ua:navigator.userAgent.slice(0, 100) }); } catch(e){}
+}
+async function pushOffHere(){                 // on sign-out: this phone stops getting this person's notifications
+  if (!pushSupported() || !S.token) return;
+  const sub = await pushSub(); if (sub) await chatApi('pushOff', { endpoint:sub.endpoint });
+}
+async function pushEnable(){
+  if (!pushSupported()) return toast(pushWhy(), true);
+  try{
+    const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    if (perm !== 'granted') return toast('Notifications are blocked. Allow them for this site in your browser / phone settings.', true);
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, no) => setTimeout(() => no(new Error('The app is still setting itself up. Close and reopen it, then try again.')), 8000))]);
+    const want = u8((await chatApi('pushKey')).key);
+    let sub = await reg.pushManager.getSubscription();
+    if (sub){                                  // made with another server key (keys were changed): start again
+      const have = sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
+      if (have && (have.length !== want.length || have.some((x, i) => x !== want[i]))){ await sub.unsubscribe(); sub = null; }
+    }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:want });
+    await chatApi('pushSubscribe', { sub:sub.toJSON(), ua:navigator.userAgent.slice(0, 100) });
+    toast('🔔 Notifications are on for this phone');
+  }catch(e){ toast(e.message || 'Could not turn on notifications', true); }
+  pushDraw();
+}
+function pushCard(){
+  return `<div class="card" id="pushCard"><h3>🔔 Notifications</h3>
+    <p class="muted" style="margin-bottom:12px">Incoming calls, payment reminders and the 12 o’clock attendance reminder — delivered to this phone even when the app is closed.</p>
+    <div id="pushBody"><div class="empty-state">Loading…</div></div></div>`;
+}
+async function pushDraw(){
+  const el = document.querySelector('#pushBody'); if (!el) return;
+  if (!pushSupported()){ el.innerHTML = `<div class="muted">${esc(pushWhy())}</div>`; return; }
+  if (Notification.permission === 'denied'){ el.innerHTML = '<div class="muted">Notifications are blocked for this site. Open your browser / phone settings, allow notifications for this site, then come back here.</div>'; return; }
+  const sub = Notification.permission === 'granted' ? await pushSub() : null;
+  if (!sub){ el.innerHTML = '<button class="btn" id="pushOn" type="button">Turn on notifications</button>'; document.querySelector('#pushOn').onclick = pushEnable; return; }
+  let pr = { att:true, pay:true, devices:1 }; try { pr = await chatApi('pushPrefs'); } catch {}
+  if (!document.querySelector('#pushBody')) return;
+  el.innerHTML = `<div style="margin-bottom:10px">✅ <b>On for this phone</b>${pr.devices > 1 ? ` <span class="muted">(${pr.devices} devices)</span>` : ''}</div>
+    <label class="check" style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" id="pfAtt" ${pr.att !== false ? 'checked' : ''}> Attendance reminder at 12:00 PM (only if not marked)</label>
+    <label class="check" style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" id="pfPay" ${pr.pay !== false ? 'checked' : ''}> Payment reminders (access due date and LIC premiums)</label>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost sm" id="pushTest" type="button">Send a test</button><button class="btn ghost sm" id="pushOff" type="button">Turn off on this phone</button></div>`;
+  const pref = async o => { try { await chatApi('pushPrefs', o); toast('Saved'); } catch(e){ toast(e.message, true); pushDraw(); } };
+  document.querySelector('#pfAtt').onchange = ev => pref({ att:ev.target.checked });
+  document.querySelector('#pfPay').onchange = ev => pref({ pay:ev.target.checked });
+  document.querySelector('#pushTest').onclick = async () => {
+    try { const r = await chatApi('pushTest'); toast(r.sent ? 'Test sent — it should appear in a moment' : 'No phone was reached. Turn notifications off and on again.', !r.sent); } catch(e){ toast(e.message, true); }
+  };
+  document.querySelector('#pushOff').onclick = async () => {
+    try { await chatApi('pushOff', { endpoint:sub.endpoint }); await sub.unsubscribe(); toast('Notifications are off for this phone'); } catch(e){ toast(e.message, true); }
+    pushDraw();
+  };
+}
+const bindPush = () => pushDraw();
+swRegister();
+
 boot();
 
 /* =====================================================================
@@ -3195,7 +3425,6 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S.
   src.after(b);
 })();
 
-boot();
 
 /* =====================================================================
    VOICE / VIDEO CALLS  (WebRTC — the audio/video goes phone-to-phone; the server only passes the offer/answer)
@@ -3309,6 +3538,7 @@ function vcErrText(e){
   return (e && e.message) || 'Could not start the call.';
 }
 function vcCleanup(){
+  swCloseNotes('call');
   vcRingStop(); clearInterval(VC.tick); clearTimeout(VC.lost);
   try { VC.pc && VC.pc.close(); } catch {}
   try { VC.local && VC.local.getTracks().forEach(t => t.stop()); } catch {}
@@ -3349,6 +3579,7 @@ async function vcDial(kind){
 
 /* ---------- receiver ---------- */
 function vcShowIncoming(inc){
+  swCloseNotes('call');
   VC.incoming = inc; VC.kind = inc.kind; VC.peer = { id:inc.from, name:inc.fromName };
   vcOpen(inc.fromName, inc.from, 'Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call…'); vcBar('incoming'); vcRingStart(true);
 }
