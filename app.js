@@ -13,7 +13,7 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, groups:null, sig:'' };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, lic:{ q:'' }, groups:null, sig:'' };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -402,19 +402,19 @@ async function boot(){
    ===================================================================== */
 const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
-const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', tt:'edit', emp:true, creds:true };
+const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', lic:'edit', tt:'edit', emp:true, creds:true };
 const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
 const canAddUsers = () => isAdmin() || !!perms().addUser;   // admin, or a user the admin allowed to add users
 function deny(){ toast('You have view-only access to this section', true); }
-const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link' };
-const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links' };
+const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link', lic:'lic' };
+const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links', lic:'LIC' };
 
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
-  const chatOnly = ['att','exp','work','pw','link','tt'].every(k => p[k] === 'none') && !isAdmin();
+  const chatOnly = ['att','exp','work','pw','link','lic','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary));
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary));
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
@@ -429,6 +429,7 @@ function applyRO(v){
   if (!can('pw')) kill('[onclick*="pwForm"],[onclick*="pwDel"]');
   if (!can('tt')){ kill('[onclick*="ttCats"],[onclick*="ttClear"],[onclick*="ttCopyPrev"]'); v.querySelectorAll('[data-tt]').forEach(e => { e.disabled = true; }); }
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
+  if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"]');
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
     v.querySelectorAll('tr').forEach(tr => { if (tr.querySelector('input.in')) tr.remove(); });
@@ -585,7 +586,7 @@ async function collectClient(){
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
   const p = u.perms || {}, L = { none:'no access', view:'view only', edit:'can edit' };
-  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · Time Table: ${L[p.tt || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}${p.addUser ? ' · Can add users' : ''}`;
+  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · LIC: ${L[p.lic || 'edit']} · Time Table: ${L[p.tt || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}${p.addUser ? ' · Can add users' : ''}`;
 }
 function usersCard(){
   const list = S.users || [];
@@ -611,7 +612,7 @@ function usersCard(){
 }
 function userForm(id){
   const x = id ? (S.users || []).find(u => u.id === id) : null;
-  const p = (x && x.perms) || { att:'none', exp:'none', work:'none', pw:'none', link:'none', tt:'none', emp:false, creds:true };   // new user = Chat only
+  const p = (x && x.perms) || { att:'none', exp:'none', work:'none', pw:'none', link:'none', lic:'none', tt:'none', emp:false, creds:true };   // new user = Chat only
   const RK = { none:0, view:1, edit:2 }, mine = perms();   // a user who adds users can't give more access than he has
   const sel = (n, v) => { const mx = isAdmin() ? 2 : (RK[mine[n.slice(2)]] ?? 0), o = (k, t) => RK[k] <= mx ? `<option value="${k}" ${v===k?'selected':''}>${t}</option>` : '';
     return `<select class="select" name="${n}">${o('none','No access (hidden)')}${o('view','View only')}${o('edit','Can add / edit / delete')}</select>`; };
@@ -631,6 +632,7 @@ function userForm(id){
           <div class="field"><label>🛠️ Work</label>${sel('p_work', p.work)}</div>
           <div class="field"><label>🔑 Passwords</label>${sel('p_pw', p.pw || 'edit')}</div>
           <div class="field"><label>🔗 Links</label>${sel('p_link', p.link || 'edit')}</div>
+          <div class="field"><label>📄 LIC</label>${sel('p_lic', p.lic || 'edit')}</div>
           <div class="field"><label>⏱️ Time Table</label>${sel('p_tt', p.tt || 'edit')}</div>
         </div>
         <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''} ${(isAdmin() || can('emp')) ? '' : 'disabled'}> Can add / edit / delete employees</label>
@@ -652,7 +654,7 @@ function userForm(id){
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
         ...(S.me.primary ? { see:f.getAll('see') } : {}),
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
+        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
       S.users = r.users; w.remove(); if (!isAdmin()) await loadAll();   // a new user may have created / joined my group
       render(); toast(x ? 'User updated' : 'User added'); chatLoadUsers();
     } catch(e){ btn.disabled = false; handleErr(e); }
@@ -1141,6 +1143,7 @@ const TITLES = {
   chat:['Chat','Message other users — see who is online'],
   passwords:['Password Manager','Save website logins and copy them in one tap'],
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
+  lic:['LIC','Customer policies — amount, dates and how long each one runs'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
@@ -1217,7 +1220,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, logins:vLogins, deploy:vDeploy, updates:vUpdates, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, logins:vLogins, deploy:vDeploy, updates:vUpdates, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
@@ -1904,6 +1907,93 @@ async function linkDel(id){ if (!can('link')) return deny();
   const x = S.d.links.find(e => e.id === id); if (!x) return;
   if (!await confirmBox('Delete this link?', `${x.name || x.link || 'This entry'} will be removed from your sheet.`, 'Delete', true)) return;
   try { await api('deleteLink', { id }); S.d.links = S.d.links.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+
+/* =====================================================================
+   VIEW: LIC  (customer policies — name, policy no., amount, start/end month-year, duration)
+   ===================================================================== */
+const MON_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function licMY(m, y){ return (m && y) ? `${MON_NAMES[m - 1]} ${y}` : '<span class="dim">—</span>'; }
+function licAmt(n){ return n ? '₹' + Number(n).toLocaleString('en-IN') : '<span class="dim">—</span>'; }
+function filteredLic(){
+  const q = (S.lic.q || '').trim().toLowerCase();
+  return [...(S.d.lic || [])]
+    .filter(x => !q || (x.name + ' ' + x.policyNo).toLowerCase().includes(q))
+    .sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()));
+}
+function vLic(){
+  const list = filteredLic(), total = (S.d.lic || []).length;
+  const rows = list.map(x => `<tr>
+      <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:140px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b></td>
+      <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
+      <td data-l="Amount" class="n">${licAmt(x.amount)}</td>
+      <td data-l="Starting Date">${licMY(x.startMonth, x.startYear)}</td>
+      <td data-l="Ending Date">${licMY(x.endMonth, x.endYear)}</td>
+      <td data-l="Duration">${esc(x.duration) || '<span class="dim">—</span>'}</td>
+      <td class="n nowrap"><button class="btn soft sm" onclick="licCopy('${esc(x.id)}')" title="Copy all of this customer's data">📋 Copy</button>
+        <button class="btn ghost sm" onclick="licForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="licDel('${esc(x.id)}')">🗑</button></td></tr>`
+  ).join('');
+  return `<div class="card" style="margin-bottom:16px"><div class="actions">
+      <input class="input" id="licq" style="width:240px" placeholder="Search customer name or policy no.…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)">
+      <span style="flex:1"></span>
+      <button class="btn" onclick="licForm()">＋ Add policy</button></div></div>
+    <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Amount</th><th>Starting Date</th><th>Ending Date</th><th>Duration</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
+      <p class="muted" style="margin-top:12px;font-size:13px">📋 <b>Copy</b> copies that customer's name, policy number, amount, dates and duration together — one tap, ready to paste. Saved in the “LIC Policies” tab of your Google Sheet.</p>
+    </div>`;
+}
+function licSearch(v){
+  S.lic.q = v; clearTimeout(window._lict);
+  window._lict = setTimeout(() => { render(); const i = $('#licq'); if (i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
+}
+async function licCopy(id){
+  const x = (S.d.lic || []).find(e => e.id === id); if (!x) return;
+  const txt = [
+    x.name && 'Customer Name: ' + x.name,
+    x.policyNo && 'Policy Number: ' + x.policyNo,
+    x.amount ? 'Amount: ₹' + Number(x.amount).toLocaleString('en-IN') : '',
+    (x.startMonth && x.startYear) && 'Starting Date: ' + licMYPlain(x.startMonth, x.startYear),
+    (x.endMonth && x.endYear) && 'Ending Date: ' + licMYPlain(x.endMonth, x.endYear),
+    x.duration && 'Duration: ' + x.duration
+  ].filter(Boolean).join('\n');
+  if (!txt) return toast('Nothing to copy', true);
+  (await copyText(txt)) ? toast('Customer data copied') : toast('Could not copy — please copy it manually', true);
+}
+function licMYPlain(m, y){ return (m && y) ? `${MON_NAMES[m - 1]} ${y}` : ''; }
+function licForm(id){ if (!can('lic')) return deny();
+  const x = id ? S.d.lic.find(e => e.id === id) : null;
+  const yNow = new Date().getFullYear();
+  const yOpts = (sel) => { let o = ''; for (let y = yNow - 20; y <= yNow + 30; y++) o += `<option value="${y}" ${sel === y ? 'selected' : ''}>${y}</option>`; return o; };
+  const mOpts = (sel) => MON_NAMES.map((n, i) => `<option value="${i + 1}" ${sel === i + 1 ? 'selected' : ''}>${n}</option>`).join('');
+  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer name, policy number, amount, and the starting / ending month-year.</p>
+    <form id="licf" autocomplete="off">
+      <div class="row2"><div class="field"><label>Customer Name</label><input class="input" name="name" maxlength="200" autocomplete="off" value="${esc(x ? x.name : '')}"></div>
+        <div class="field"><label>Policy Number</label><input class="input" name="policyNo" maxlength="80" autocomplete="off" value="${esc(x ? x.policyNo : '')}"></div></div>
+      <div class="field"><label>Amount</label><input class="input" name="amount" type="number" min="0" step="0.01" inputmode="decimal" value="${x && x.amount ? x.amount : ''}"></div>
+      <div class="row2">
+        <div class="field"><label>Starting Month</label><select class="select" name="startMonth"><option value="">—</option>${mOpts(x ? x.startMonth : 0)}</select></div>
+        <div class="field"><label>Starting Year</label><select class="select" name="startYear"><option value="">—</option>${yOpts(x ? x.startYear : 0)}</select></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Ending Month</label><select class="select" name="endMonth"><option value="">—</option>${mOpts(x ? x.endMonth : 0)}</select></div>
+        <div class="field"><label>Ending Year</label><select class="select" name="endYear"><option value="">—</option>${yOpts(x ? x.endYear : 0)}</select></div>
+      </div>
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#licf').onsubmit = async ev => {
+    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
+    try{
+      if (x){ const r = await api('updateLic', { id:x.id, ...f }); Object.assign(x, r.lic); }
+      else { const r = await api('addLic', f); S.d.lic.push(r.lic); }
+      w.remove(); render(); toast('Saved');
+    }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function licDel(id){ if (!can('lic')) return deny();
+  const x = S.d.lic.find(e => e.id === id); if (!x) return;
+  if (!await confirmBox('Delete this policy?', `${x.name || x.policyNo || 'This entry'} will be removed from your sheet.`, 'Delete', true)) return;
+  try { await api('deleteLic', { id }); S.d.lic = S.d.lic.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
 }
 
 /* =====================================================================
@@ -2597,6 +2687,23 @@ async function doExport(kind, fmt){
   while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
   tn.forEach(n => { n.nodeValue = n.nodeValue.replace('🔑', '🔗').replace('Passwords', 'Links'); });
   src.after(b);
+})();
+
+/* ---------- add the "LIC" tab to the menu, right above Settings ---------- */
+(function addLicTab(){
+  const nav = $('#nav'), src = nav && nav.querySelector('[data-v="updates"]');
+  if (!src || nav.querySelector('[data-v="lic"]')) return;
+  const b = src.cloneNode(true);
+  b.dataset.v = 'lic'; b.classList.remove('active', 'hidden');
+  const ic = b.querySelector('svg, img, i');
+  if (ic){ const sp = document.createElement('span'); sp.textContent = '📄'; ic.replaceWith(sp); }
+  const tn = []; const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+  while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
+  if (ic){ if (tn.length) tn[tn.length - 1].nodeValue = 'LIC'; else b.append(' LIC'); }
+  else if (tn.length >= 2){ tn[0].nodeValue = '📄'; tn[tn.length - 1].nodeValue = 'LIC'; }
+  else if (tn.length === 1) tn[0].nodeValue = '📄 LIC';
+  else b.textContent = '📄 LIC';
+  src.after(b);     // right after "Updates" = right above "Settings"
 })();
 
 boot();

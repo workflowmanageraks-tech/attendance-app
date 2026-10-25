@@ -48,9 +48,10 @@ const SHEET_KEYS = {
   CHAT: ['chat'],
   CGRP: ['group conversations'],
   ACT: ['activity log', 'activity'],
-  LPH: ['login security photos', 'security photos', 'login photos']
+  LPH: ['login security photos', 'security photos', 'login photos'],
+  LIC: ['lic', 'lic policies', 'policies']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -168,6 +169,7 @@ var NEED = {
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
+  addLic: 'lic', updateLic: 'lic', deleteLic: 'lic',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
   changeCredentials: 'creds',
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
@@ -182,13 +184,13 @@ var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvata
 //   (owner differs from uid only when an admin uses "View as user")
 var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '', group: null };
 
-function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', tt: 'edit', emp: true, creds: true, addUser: true }; }
+function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', lic: 'edit', tt: 'edit', emp: true, creds: true, addUser: true }; }
 function normPerms_(p, role) {
   if (role === 'admin') return fullPerms_();
   p = p || {};
   function lvl(v) { v = String(v || '').toLowerCase(); return (v === 'none' || v === 'view' || v === 'edit') ? v : 'edit'; }
   function bool(v, d) { return (v === undefined || v === null || v === '') ? d : (v === true || v === 'true' || v === 'yes' || v === 1 || v === '1'); }
-  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false) };
+  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), lic: lvl(p.lic), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false) };
 }
 function need_(sec) {
   var p = CTX.perms || {};
@@ -283,6 +285,9 @@ function route_(req) {
       case 'addLink':           out = addLink_(req); break;
       case 'updateLink':        out = updateLink_(req); break;
       case 'deleteLink':        out = deleteLink_(req); break;
+      case 'addLic':            out = addLic_(req); break;
+      case 'updateLic':         out = updateLic_(req); break;
+      case 'deleteLic':         out = deleteLic_(req); break;
       case 'setTimetable':      out = setTimetable_(req); break;
       case 'calAuthUrl':        return calAuthUrl_();
       case 'calStatus':         return calStatus_();
@@ -865,7 +870,7 @@ function setSee_(cur, ids, users) {
 function capPerms_(p, mine, keepAdd) {
   p = normPerms_(p, 'user'); mine = mine || {};
   var rank = { none: 0, view: 1, edit: 2 }, out = {};
-  ['att', 'exp', 'work', 'pw', 'link', 'tt'].forEach(function (k) {
+  ['att', 'exp', 'work', 'pw', 'link', 'lic', 'tt'].forEach(function (k) {
     var m = mine[k] || 'none';
     out[k] = rank[p[k]] <= rank[m] ? p[k] : m;
   });
@@ -981,7 +986,7 @@ function listGroups_() {
 }
 // moves every row owned by `fromId` to the group, so the group starts with that person's existing data
 function adoptData_(fromId, toOwner) {
-  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['CAT', 3], ['TT', 4]].forEach(function (p) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 9], ['CAT', 3], ['TT', 4]].forEach(function (p) {
     var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
     if (last < 2) return;
     var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
@@ -1134,6 +1139,10 @@ function createSheet_(k) {
     // with the person's on-screen consent notice shown first. Never taken on a successful sign-in.
     sh.getRange(1, 1, 1, 5).setValues([['Time', 'Username tried', 'Reason', 'Front camera (base64 image)', 'Back camera (base64 image)']]);
     sh.getRange('A:C').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'LIC') {
+    sh.getRange(1, 1, 1, 9).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Month', 'Start Year', 'End Month', 'End Year', 'ID', 'Owner']]);
+    sh.getRange('A:I').setNumberFormat('@');
     sh.setFrozenRows(1);
   }
   sh.getRange(1, 1, 1, sh.getLastColumn()).setFontWeight('bold');
@@ -1805,6 +1814,91 @@ function deleteLink_(req) {
   return { ok: true };
 }
 
+// ---------- LIC policies ----------
+// Customer Name | Policy Number | Amount | Start Month | Start Year | End Month | End Year | ID | Owner
+// Duration (years / months to complete) is never stored - it is always worked out fresh from
+// start + end so it can never go stale if someone edits the dates later.
+function licDuration_(sy, sm, ey, em) {
+  if (!(sy && sm && ey && em)) return '';
+  var total = (ey - sy) * 12 + (em - sm);
+  if (total < 0) return '';
+  var y = Math.floor(total / 12), m = total % 12;
+  var parts = [];
+  if (y) parts.push(y + (y === 1 ? ' year' : ' years'));
+  if (m || !y) parts.push(m + (m === 1 ? ' month' : ' months'));
+  return parts.join(' ');
+}
+function readLic_() {
+  var sh = ownedSheet_('LIC', 9);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var vals = sh.getRange(2, 1, last - 1, 9).getValues();
+  var out = [], dirty = false;
+  vals.forEach(function (r) {
+    if (r[0] === '' && r[1] === '' && r[2] === '') return;
+    var id = String(r[7] || '').trim();
+    if (!id) { id = Utilities.getUuid().slice(0, 8); r[7] = id; dirty = true; }
+    if (ownerOf_(r[8]) !== CTX.owner) return;
+    var sm = Number(r[3]) || 0, sy = Number(r[4]) || 0, em = Number(r[5]) || 0, ey = Number(r[6]) || 0;
+    out.push({ id: id, name: String(r[0]), policyNo: String(r[1]), amount: Number(r[2]) || 0,
+      startMonth: sm, startYear: sy, endMonth: em, endYear: ey, duration: licDuration_(sy, sm, ey, em) });
+  });
+  if (dirty) sh.getRange(2, 8, vals.length, 1).setValues(vals.map(function (r) { return [r[7]]; }));
+  return out;
+}
+function validLic_(req) {
+  function mon(v) { v = Math.round(Number(v) || 0); return (v >= 1 && v <= 12) ? v : 0; }
+  function yr(v) { v = Math.round(Number(v) || 0); return (v >= 1900 && v <= 2200) ? v : 0; }
+  var p = {
+    name: String(req.name || '').trim().slice(0, 200),
+    policyNo: String(req.policyNo || '').trim().slice(0, 80),
+    amount: Math.max(0, Number(req.amount) || 0),
+    startMonth: mon(req.startMonth), startYear: yr(req.startYear),
+    endMonth: mon(req.endMonth), endYear: yr(req.endYear)
+  };
+  if (!(p.name || p.policyNo)) fail_('Fill in at least the customer name or policy number.');
+  return p;
+}
+function findLicRow_(sh, id) {
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var v = sh.getRange(2, 8, last - 1, 2).getValues();            // ID, Owner
+  for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id) && ownerOf_(v[i][1]) === CTX.owner) return i + 2;
+  return -1;
+}
+function licOut_(p) {
+  return Object.assign({}, p, { duration: licDuration_(p.startYear, p.startMonth, p.endYear, p.endMonth) });
+}
+function addLic_(req) {
+  var p = validLic_(req);
+  var sh = ownedSheet_('LIC', 9);
+  var row = sh.getLastRow() + 1;
+  var id = Utilities.getUuid().slice(0, 8);
+  var rng = sh.getRange(row, 1, 1, 9);
+  rng.setNumberFormat('@');
+  rng.setValues([[p.name, p.policyNo, p.amount, p.startMonth, p.startYear, p.endMonth, p.endYear, id, CTX.owner]]);
+  p.id = id;
+  return { ok: true, lic: licOut_(p) };
+}
+function updateLic_(req) {
+  var p = validLic_(req);
+  var sh = ownedSheet_('LIC', 9);
+  var row = findLicRow_(sh, req.id);
+  if (row < 0) fail_('Entry not found. Please refresh.');
+  var rng = sh.getRange(row, 1, 1, 7);
+  rng.setNumberFormat('@');
+  rng.setValues([[p.name, p.policyNo, p.amount, p.startMonth, p.startYear, p.endMonth, p.endYear]]);
+  p.id = String(req.id);
+  return { ok: true, lic: licOut_(p) };
+}
+function deleteLic_(req) {
+  var sh = ownedSheet_('LIC', 9);
+  var row = findLicRow_(sh, req.id);
+  if (row < 0) fail_('Entry not found. Please refresh.');
+  sh.deleteRow(row);
+  return { ok: true };
+}
+
 // ---------- TIME TABLE ----------
 // Sheet "Timetable": Type | Key | Value | Owner
 //   Type "Category" -> Key = category name (these fill the dropdown of every slot)
@@ -2197,6 +2291,7 @@ function getAll_() {
     work: p.work === 'none' ? [] : readWork_(),
     passwords: p.pw === 'none' ? [] : readPw_(),
     links: p.link === 'none' ? [] : readLink_(),
+    lic: p.lic === 'none' ? [] : readLic_(),
     ttCats: T.cats.map(function (c) { return c.name; }),
     timetable: ttDaysOut_(T)
   };
