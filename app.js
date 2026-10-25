@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; DEP.st = null; DEP.files = null; DEP.hist = null; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; DEP.st = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -775,7 +775,7 @@ function bindLogins(){
 /* =====================================================================
    VIEW: DEPLOY  (main admin only) — publish updated files to GitHub, Render redeploys by itself
    ===================================================================== */
-const DEP = { st:null, files:null, commits:[], hist:null, hpath:'', err:'' };
+const DEP = { st:null, files:null, commits:[], hist:null, hpath:'', err:'', prog:null, timer:null, ticks:0 };
 const depBase = p => String(p).split('/').pop();
 const depBackend = p => /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i.test(depBase(p));
 const depWhen = t => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
@@ -784,8 +784,46 @@ async function depLoad(){
   if (DEP.st.configured){
     try { const r = await api('deployFiles'); DEP.files = r.files; DEP.commits = r.commits; DEP.err = ''; }
     catch(e){ DEP.err = e.message; DEP.files = DEP.files || []; }
+    await depPoll();
+    if (DEP.prog && DEP.prog.state === 'pending' && Date.now() - new Date(DEP.prog.at).getTime() < 15 * 60000) depWatch(true);   // a deploy is still running
   }
   if (S.view === 'deploy') render();
+}
+/* ---- live progress: the same x/3 checks GitHub shows next to the commit (pending -> 1/3 -> 2/3 -> 3/3 = live) ---- */
+async function depPoll(){
+  try { const j = await callServer({ action:'deployProgress', token:S.token }); if (j.ok) DEP.prog = j; } catch(e){}
+  return DEP.prog;
+}
+function depDraw(){ const el = document.getElementById('depProg'); if (S.view === 'deploy' && el) el.innerHTML = depProgHtml(); }
+function depWatch(resume){
+  clearInterval(DEP.timer); DEP.ticks = 0;
+  if (!resume) DEP.prog = { state:'pending', total:0, done:0, items:[], at:new Date().toISOString(), msg:'Publishing…', short:'', fresh:true };
+  depDraw();
+  DEP.timer = setInterval(async () => {
+    if (!S.token || ++DEP.ticks > 150){ clearInterval(DEP.timer); return; }     // stop after ~12 minutes
+    const before = DEP.prog && DEP.prog.state;
+    const p = await depPoll(); depDraw();
+    if (p && p.state !== 'pending'){
+      clearInterval(DEP.timer);
+      if (before !== p.state || DEP.ticks > 1) toast(p.state === 'success' ? '✅ Live! ' + p.done + '/' + p.total + ' checks passed' : '❌ Deploy failed (' + p.done + '/' + p.total + ') — open the Live status card', p.state !== 'success');
+    }
+  }, 5000);
+}
+function depProgHtml(){
+  const p = DEP.prog; if (!p) return '<div class="muted">Loading status…</div>';
+  const age = Date.now() - new Date(p.at || Date.now()).getTime();
+  if (!p.total){
+    if (p.limited) return `<div class="log-item bad"><div class="l1"><b>Live progress needs 2 more token permissions</b></div>
+      <div class="l2">GitHub → Settings → Developer settings → Fine-grained tokens → your token → <b>Edit</b> → Repository permissions: set <b>Commit statuses</b> and <b>Checks</b> to <b>Read-only</b> → Update. (No new token, nothing to change on Render.)</div></div>`;
+    return `<div class="log-item"><div class="l1"><b>${age > 5 * 60000 && !p.fresh ? 'No status checks found for the latest commit' : '⏳ Waiting for the deploy to start…'}</b></div>
+      <div class="l2">${esc(p.msg || '')}${p.short ? ' · <code>' + esc(p.short) + '</code>' : ''}</div></div>`;
+  }
+  const col = { ok:'#16a34a', wait:'#f59e0b', bad:'#dc2626' }, ic = { ok:'✔', wait:'⏳', bad:'✖' };
+  const head = p.state === 'success' ? `✅ Live — ${p.done}/${p.total}` : p.state === 'failure' ? `❌ Failed — ${p.done}/${p.total}` : `🟡 Going live… ${p.done}/${p.total}`;
+  return `<div style="font-weight:800;font-size:18px;margin-bottom:8px">${head}</div>
+    <div style="display:flex;gap:4px;margin-bottom:10px">${p.items.map(x => `<div style="flex:1;height:8px;border-radius:4px;background:${col[x.state]}${x.state === 'wait' ? ';opacity:.55' : ''}"></div>`).join('')}</div>
+    ${p.items.map(x => `<div class="l2">${ic[x.state]} ${esc(x.name)}</div>`).join('')}
+    <div class="muted" style="margin-top:8px;font-size:12.5px">${esc(p.msg || '')} · <code>${esc(p.short || '')}</code>${p.state === 'pending' ? ' · updates by itself every 5 seconds' : ''}</div>`;
 }
 function vDeploy(){
   if (!DEP.st) return '<div class="card"><div class="empty-state">Loading…</div></div>';
@@ -796,6 +834,7 @@ function vDeploy(){
       <li><b>Repository access</b>: “Only select repositories” → pick your website repository.</li>
       <li><b>Permissions → Repository permissions → Contents: Read and write</b>. Generate and copy the token.</li>
       <li>On Render → your service → <b>Environment</b>, add: <code>GITHUB_TOKEN</code> = the token, <code>GITHUB_REPO</code> = <code>your-name/your-repo</code>, and (only if not “main”) <code>GITHUB_BRANCH</code>.</li>
+      <li>For the live progress (1/3, 2/3, 3/3) also set <b>Commit statuses</b> and <b>Checks</b> to <b>Read-only</b> in the token’s permissions.</li>
       <li>Save — Render restarts — then open this tab again.</li></ol>
     ${DEP.err ? `<p class="muted">${esc(DEP.err)}</p>` : ''}
     <button class="btn soft sm" onclick="depLoad()">↻ Check again</button></div>`;
@@ -804,7 +843,9 @@ function vDeploy(){
   const commitRow = (c, path) => `<div class="log-item"><div class="l1"><b style="word-break:break-word">${esc(c.msg || '(no message)')}</b>
       <span class="muted">${esc(depWhen(c.at))}</span></div>
       <div class="l2">${esc(c.by || '')} · <code>${esc(c.short)}</code>${path ? ` <button class="btn soft sm" style="margin-left:8px" onclick="depRestore('${esc(path)}','${esc(c.sha)}')">↩ Restore this version</button>` : ''}</div></div>`;
-  return `<div class="card" style="margin-bottom:16px"><h3>🚀 Publish to GitHub <button class="btn ghost sm" onclick="depLoad()">↻ Refresh</button></h3>
+  return `<div class="card" style="margin-bottom:16px"><h3>📡 Live status <button class="btn ghost sm" onclick="depLoad()">↻ Refresh</button></h3>
+      <div id="depProg">${depProgHtml()}</div></div>
+    <div class="card" style="margin-bottom:16px"><h3>🚀 Publish to GitHub</h3>
       <p class="muted" style="margin-bottom:12px">Repository <b>${esc(DEP.st.repo)}</b> · branch <b>${esc(DEP.st.branch)}</b>. Choose the updated files; they go to GitHub as <b>one commit</b> and Render redeploys by itself (about 1–2 minutes).</p>
       ${DEP.err ? `<div class="log-item bad"><div class="l1"><b>${esc(DEP.err)}</b></div></div>` : ''}
       <div class="field"><label>Updated files <span class="muted">(app.js, style.css, index.html, server.js … you can pick several)</span></label>
@@ -857,8 +898,8 @@ async function depReview(){
       const r = await api('deployUpload', { files, message:(w.querySelector('#depMsg').value || '').trim(), confirmBackend:backend });
       w.remove();
       if (r.unchanged) toast('Nothing changed — these files are already the same on GitHub');
-      else { toast('Published ' + r.changed.length + ' file' + (r.changed.length === 1 ? '' : 's') + ' — the site will be live in 1–2 minutes'); document.getElementById('depFiles').value = ''; }
-      await depLoad();
+      else { toast('Published ' + r.changed.length + ' file' + (r.changed.length === 1 ? '' : 's') + ' — watch the Live status card'); document.getElementById('depFiles').value = ''; }
+      await depLoad(); if (!r.unchanged) depWatch();
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
@@ -868,7 +909,7 @@ async function depRestore(path, sha){
   try {
     const r = await api('deployRestore', { path, sha, confirmBackend:backend });
     toast(r.unchanged ? 'That version is already live' : 'Restored — the site will be live in 1–2 minutes');
-    DEP.hist = null; DEP.hpath = ''; await depLoad();
+    DEP.hist = null; DEP.hpath = ''; await depLoad(); if (!r.unchanged) depWatch();
   } catch(e){ handleErr(e); }
 }
 const confirmBackendOk = (path, backend) => confirmBox('Restore this version of ' + depBase(path) + '?', backend ? 'This is a server file: the server restarts and a wrong version can take the site down.' : 'It is published as a new commit and the site redeploys.', 'Restore', backend);

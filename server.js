@@ -439,7 +439,7 @@ function makeApp(store, env) {
 
   // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
   // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
-  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore']);
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
   const DEP_EXT = /\.(js|css|html|md|json|gs|txt|svg)$/i;
   const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself
@@ -504,6 +504,23 @@ function makeApp(store, env) {
       const files = (t.tree || []).filter(x => x.type === 'blob' && depPathOk(x.path)).map(x => ({ path: x.path, size: x.size || 0 }));
       const cm = await gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&per_page=15');
       return { ok: true, files, commits: depCommits(cm) };
+    }
+    if (a === 'deployProgress') {                 // the same "x/3" checks GitHub shows next to a commit (Render's deploy is one of them)
+      const c = await gh('GET', '/commits/' + encodeURIComponent(GH.branch));
+      const items = []; let limited = false;
+      try {
+        const st = await gh('GET', '/commits/' + c.sha + '/status');
+        (st.statuses || []).forEach(x => items.push({ name: String(x.context || 'Status'), state: x.state === 'success' ? 'ok' : x.state === 'pending' ? 'wait' : 'bad' }));
+      } catch (e) { if (e.code === 'GITHUB') limited = true; else throw e; }
+      try {
+        const ck = await gh('GET', '/commits/' + c.sha + '/check-runs?per_page=50');
+        (ck.check_runs || []).forEach(x => items.push({ name: String(x.name || 'Check'),
+          state: x.status !== 'completed' ? 'wait' : (['success', 'neutral', 'skipped'].includes(x.conclusion) ? 'ok' : 'bad') }));
+      } catch (e) { if (e.code === 'GITHUB') limited = true; else throw e; }
+      const done = items.filter(x => x.state === 'ok').length, bad = items.some(x => x.state === 'bad');
+      return { ok: true, sha: c.sha, short: String(c.sha).slice(0, 7), msg: String((c.commit && c.commit.message) || '').split('\n')[0],
+        at: c.commit && c.commit.author ? c.commit.author.date : '', total: items.length, done, items, limited,
+        state: bad ? 'failure' : (items.length && done === items.length ? 'success' : 'pending') };
     }
     if (a === 'deployHistory') {
       const path = String(req.path || ''); if (!depPathOk(path)) globalThis.fail_('Invalid file.', 'DEPLOY');
