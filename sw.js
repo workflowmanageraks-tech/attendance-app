@@ -42,17 +42,20 @@ async function netFirst(req, u) {
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (x) { d = { title: 'KS', body: e.data ? e.data.text() : '' }; }
-  const call = d.kind === 'call';
+  const call = d.kind === 'call', msg = d.kind === 'msg';
+  // call: long buzz-pause pattern (~30 s, like a ringing phone). message: two short buzzes.
+  const ring = []; for (let i = 0; i < 20; i++) ring.push(900, 600);
   e.waitUntil((async () => {
     await self.registration.showNotification(d.title || 'KS', {
       body: d.body || '',
       tag: d.tag || 'ks',
       renotify: true,
+      silent: false,                                         // use the phone's notification sound
       icon: 'icon-192.png',
       badge: 'badge-72.png',
       timestamp: d.ts || Date.now(),
       requireInteraction: call,                              // an incoming call stays on screen until you tap it
-      vibrate: call ? [500, 250, 500, 250, 500, 250, 500] : [200, 100, 200],
+      vibrate: call ? ring : msg ? [250, 120, 250] : [200, 100, 200],
       data: { url: d.url || './', kind: d.kind || '', callId: d.callId || '' }
     });
     const cl = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

@@ -93,3 +93,13 @@ Setup:
 5. Optional env vars: `PUSH_ATT_HOUR` (12), `PUSH_ATT_END_HOUR` (19), `PUSH_ATT_REPEAT_MIN` (120), `PUSH_PAY_HOUR` (10), `PUSH_TICK_SEC` (120).
 
 Notes: a web app cannot make the phone ring like the phone dialer (no full-screen call screen over the lock screen) - the call arrives as a high-priority notification. When somebody signs out, that phone stops receiving their notifications.
+
+## Chat ＋ menu: photos, videos and location
+
+In any chat tap the **＋** next to the message box: **Photo / Video**, **Camera**, **Record video** or **Location**.
+
+- Photos (shrunk to ~1600 px) and videos (max 25 MB, env `MEDIA_MAX_MB`) are saved in the **main admin's Google Drive**, folder **KS Chat Media**. The chat message only holds a small marker; the sheet stores no media.
+- Location is sent as a pin; tapping it opens Google Maps. The sender is asked to confirm first.
+- Only people in that chat (or group) can view a file; the server streams it from Drive after checking.
+- **One-time setup (main admin):** Google Cloud Console > enable **Google Drive API**; OAuth consent screen > add scope `.../auth/drive.file`; then in the app: Settings > **Google Drive** > *Connect Google Drive* and approve. It reuses `CAL_CLIENT_ID`, `CAL_CLIENT_SECRET` and `PUBLIC_URL`; the redirect address is the same as for Calendar. (A service account cannot be used: it has no Drive storage of its own.)
+- Photos / videos need the website (Render), not the Apps Script version.

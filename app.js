@@ -1251,7 +1251,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindPush(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindPush(); bindDrive(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -2370,6 +2370,7 @@ function vSettings(){
   if (!can('exp')) drop('Expense categories');
   if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
   grid.insertAdjacentHTML('beforeend', pushCard());
+  if (S.me && S.me.primary && !HAS_GAS) grid.insertAdjacentHTML('beforeend', driveCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
@@ -3024,6 +3025,7 @@ async function swRegister(){
 function swMsg(e){
   const m = e.data || {};
   if (m.type === 'push' && (m.kind === 'call' || m.kind === 'missed')) vcTick();
+  if (m.type === 'push' && m.kind === 'msg' && !document.hidden) chatLoadUsers();
   if (m.type === 'nav'){ openFromUrl(m.url); vcTick(); }
 }
 function openFromUrl(u){
@@ -3094,6 +3096,137 @@ async function pushDraw(){
 }
 const bindPush = () => pushDraw();
 swRegister();
+
+/* =====================================================================
+   CHAT: ＋ menu  ->  photos / videos (saved in the admin's Google Drive) and live location
+   A message only carries a small marker:  [[KSMEDIA:{"k":"img|vid","id":"<Drive file id>",...}]]  or  [[KSLOC:lat,lng]]
+   ===================================================================== */
+const MEDIA_MAX_MB = 25;
+const chPrev = t => { t = String(t || ''); return t.startsWith('[[KSLOC:') ? '📍 Location' : t.startsWith('[[KSMEDIA:') ? (/"k":"vid"/.test(t) ? '🎥 Video' : '📷 Photo') : t; };
+const MEDIA = { pass:'', exp:0, loading:false };
+function mediaPassGet(){
+  if (MEDIA.pass && MEDIA.exp > Date.now() + 60000) return MEDIA.pass;
+  if (!MEDIA.loading && S.token){
+    MEDIA.loading = true;
+    chatApi('mediaPass').then(r => { MEDIA.pass = r.pass; MEDIA.exp = r.exp; }).catch(() => {}).finally(() => { MEDIA.loading = false; if (MEDIA.pass && S.view === 'chat'){ S.chat.sig = ''; chatRenderMsgs(); } });
+  }
+  return MEDIA.exp > Date.now() ? MEDIA.pass : '';
+}
+function chBody(t){
+  t = String(t || '');
+  let m = t.match(/^\[\[KSLOC:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\]\]$/);
+  if (m) return `<a class="ch-loc" href="https://www.google.com/maps?q=${m[1]},${m[2]}" target="_blank" rel="noopener"><span class="pin">📍</span><b>Location</b><small>Tap to open in Google Maps</small></a>`;
+  m = t.match(/^\[\[KSMEDIA:(\{.*\})\]\]$/);
+  if (m){
+    try{
+      const o = JSON.parse(m[1]); if (!/^[\w-]{10,90}$/.test(String(o.id))) throw 0;
+      const p = mediaPassGet(); if (!p) return '<div class="ch-med ph">⏳ Loading…</div>';
+      const src = API_URL + '/chat/media?id=' + encodeURIComponent(o.id) + '&p=' + encodeURIComponent(p);
+      return o.k === 'vid' ? `<video class="ch-med" controls playsinline preload="metadata" src="${esc(src)}"></video>`
+                           : `<img class="ch-med" loading="lazy" alt="Photo" src="${esc(src)}" onclick="mediaView(this.src)">`;
+    }catch(e){}
+  }
+  return esc(t);
+}
+function mediaView(src){
+  const d = document.createElement('div'); d.className = 'ch-view';
+  d.innerHTML = `<img src="${esc(src)}" alt=""><button type="button" aria-label="Close">✕</button><a href="${esc(src)}" target="_blank" rel="noopener">Open ↗</a>`;
+  d.onclick = e => { if (e.target.tagName !== 'IMG') d.remove(); };
+  document.body.appendChild(d);
+}
+function chatPlus(ev){ if (ev) ev.stopPropagation(); const m = $('#chMenu'); if (m) m.classList.toggle('hidden'); }
+document.addEventListener('click', e => { const m = $('#chMenu'); if (m && !m.classList.contains('hidden') && !e.target.closest('#chMenu')) m.classList.add('hidden'); });
+function chatPick(kind){
+  const m = $('#chMenu'); if (m) m.classList.add('hidden');
+  if (HAS_GAS) return toast('Photo / video sharing works only on the main website.', true);
+  const i = $('#chFile' + ({ gal:'Gal', cam:'Cam', rec:'Rec' })[kind]); if (i) i.click();
+}
+function chatFilePicked(inp){
+  const f = inp.files && inp.files[0], to = S.chat.with; inp.value = '';
+  if (f && to) chatUploadMedia(f, to);
+}
+function chatUpBar(pct, label){
+  let el = $('#chUp');
+  if (pct === null){ if (el) el.remove(); return; }
+  if (!el){ el = document.createElement('div'); el.id = 'chUp'; el.className = 'ch-up'; const c = document.querySelector('.ch-comp'); if (c && c.parentNode) c.parentNode.insertBefore(el, c); else return; }
+  el.innerHTML = `<div class="upbar"><i style="width:${pct}%"></i></div><span>${esc(label)}</span>`;
+}
+async function mediaPrep(file){
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return file;
+  try{
+    const bmp = await createImageBitmap(file), sc = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * sc); cv.height = Math.round(bmp.height * sc);
+    cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', .82));
+    if (blob && blob.size < file.size) return new File([blob], (file.name || 'photo').replace(/\.\w+$/, '') + '.jpg', { type:'image/jpeg' });
+  }catch(e){}
+  return file;
+}
+async function chatSendText(to, text){
+  const c = S.chat, cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
+  const m = { id:cid, t:Date.now(), mine:true, text, state:'pending' };
+  (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
+  if (c.with === to) chatRenderMsgs(true);
+  await chatDeliver(to, m);
+}
+async function chatUploadMedia(file, to){
+  if (!/^(image|video)\//.test(file.type)) return toast('Please choose a photo or a video.', true);
+  if (!navigator.onLine) return toast('No internet — try again when you are online.', true);
+  const lim = MEDIA_MAX_MB * 1048576;
+  if (file.type.startsWith('video/') && file.size > lim) return toast('This video is too big (max ' + MEDIA_MAX_MB + ' MB). Record a shorter one.', true);
+  chatUpBar(0, 'Preparing…');
+  try{
+    const f = await mediaPrep(file); if (f.size > lim) throw new Error('This file is too big (max ' + MEDIA_MAX_MB + ' MB).');
+    const q = new URLSearchParams({ name:f.name || 'file', mime:f.type, to });
+    const r = await new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest(); x.open('POST', API_URL + '/chat/media?' + q.toString());
+      x.setRequestHeader('Authorization', 'Bearer ' + S.token); x.setRequestHeader('Content-Type', 'application/octet-stream');
+      x.upload.onprogress = e => { if (e.lengthComputable) chatUpBar(Math.min(99, Math.round(e.loaded * 100 / e.total)), 'Uploading… ' + Math.round(e.loaded * 100 / e.total) + '%'); };
+      x.onload = () => { try { resolve(JSON.parse(x.responseText)); } catch { reject(new Error('Unexpected server response.')); } };
+      x.onerror = x.ontimeout = () => reject(new Error('Upload failed — check your internet connection and try again.'));
+      x.send(f);
+    });
+    if (!r.ok){ const e = new Error(r.error || 'Upload failed'); e.code = r.code; throw e; }
+    chatUpBar(100, 'Sending…');
+    await chatSendText(to, '[[KSMEDIA:' + JSON.stringify({ k:r.k, id:r.id, n:r.n, m:r.m, s:r.s }) + ']]');
+  }catch(e){ chatErr(e); toast(e.message || 'Upload failed', true); }
+  finally { chatUpBar(null); }
+}
+function chatLoc(){
+  const m = $('#chMenu'); if (m) m.classList.add('hidden');
+  const to = S.chat.with, u = chatPeer(to); if (!to || !u) return;
+  if (!navigator.geolocation) return toast('This phone / browser cannot share location.', true);
+  if (!confirm('Send your current location to ' + (u.name || u.username) + '?')) return;
+  toast('Getting your location…');
+  navigator.geolocation.getCurrentPosition(
+    p => chatSendText(to, '[[KSLOC:' + p.coords.latitude.toFixed(6) + ',' + p.coords.longitude.toFixed(6) + ']]'),
+    err => toast(err && err.code === 1 ? 'Location is blocked. Allow it for this site in your phone settings.' : 'Could not get your location. Turn on GPS and try again.', true),
+    { enableHighAccuracy:true, timeout:20000, maximumAge:15000 });
+}
+
+/* ---- Settings card (main admin): connect the Google Drive where chat media is saved ---- */
+function driveCard(){
+  return `<div class="card" id="drvCard"><h3>☁️ Google Drive (Chat photos & videos)</h3>
+    <p class="muted" style="margin-bottom:12px">Every photo / video sent in Chat is saved in the folder <b>KS Chat Media</b> in the Google Drive you connect here (max ${MEDIA_MAX_MB} MB each).</p>
+    <div id="drvBody"><div class="empty-state">Loading…</div></div></div>`;
+}
+async function drvDraw(){
+  const el = $('#drvBody'); if (!el) return;
+  try{
+    const r = await chatApi('driveStatus');
+    el.innerHTML = r.connected
+      ? `<div style="margin-bottom:10px">✅ <b>Connected</b>${r.email ? ' · ' + esc(r.email) : ''}</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost sm" id="drvOn" type="button">Reconnect</button><button class="btn ghost sm" id="drvOff" type="button">Disconnect</button></div>`
+      : (r.ready ? `<div class="muted" style="margin-bottom:10px">Not connected yet — chat photos / videos will not send until you connect.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="drvOn" type="button">Connect Google Drive</button><button class="btn ghost sm" id="drvChk" type="button">I connected — check</button></div>`
+                 : '<div class="muted">Google sign-in is not set up on the server yet (CAL_CLIENT_ID, CAL_CLIENT_SECRET, PUBLIC_URL on Render).</div>');
+    const on = $('#drvOn'), off = $('#drvOff'), chk = $('#drvChk');
+    if (on) on.onclick = async () => { try { const j = await chatApi('driveConnect'); window.open(j.url, '_blank'); toast('Finish in the Google page, then come back and tap “check”.'); } catch(e){ toast(e.message, true); } };
+    if (chk) chk.onclick = drvDraw;
+    if (off) off.onclick = async () => { if (!confirm('Disconnect Google Drive? New photos / videos cannot be sent until you connect again. Files already in Drive stay there.')) return; try { await chatApi('driveOff'); toast('Google Drive disconnected'); } catch(e){ toast(e.message, true); } drvDraw(); };
+  }catch(e){ el.innerHTML = `<div class="muted">${esc(e.message || 'Could not load')}</div>`; }
+}
+const bindDrive = () => { drvDraw(); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.view === 'settings') drvDraw(); });
+
 
 boot();
 
@@ -3184,7 +3317,7 @@ function chatRenderList(){
   if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No users to chat with yet. The main admin decides who you can see.'}</div>`; return; }
   el.innerHTML = list.map(u => {
     const st = chatStatus(u);
-    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : (u.lastFrom ? esc(u.lastFrom) + ': ' : '')}${esc(u.lastText)}</div>` : '';
+    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : (u.lastFrom ? esc(u.lastFrom) + ': ' : '')}${esc(chPrev(u.lastText))}</div>` : '';
     return `<div class="ch-row ${S.chat.with === u.id ? 'sel' : ''}" onclick="chatOpen('${esc(u.id)}')">
       <div class="ch-av" style="background:${chColor(u.id)}">${chInit(u)}${u.isGroup ? '' : `<span class="dot ${st.cls}"></span>`}</div>
       <div class="ch-info">
@@ -3208,7 +3341,16 @@ function chatRenderPane(){
       <div class="ch-calls"><button class="ch-cbtn" onclick="ludoDial()" aria-label="Play Ludo">🎲</button>${u.isGroup ? `<button class="ch-cbtn" onclick="groupChatForm('${esc(u.id)}')" aria-label="Group info">ℹ️</button>` : `<button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button>`}</div>
     </div>
     <div class="ch-msgs" id="chMsgs"></div>
-    <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
+    <div class="ch-menu hidden" id="chMenu">
+      <button type="button" onclick="chatPick('gal')"><span>🖼️</span>Photo / Video</button>
+      <button type="button" onclick="chatPick('cam')"><span>📷</span>Camera</button>
+      <button type="button" onclick="chatPick('rec')"><span>🎥</span>Record video</button>
+      <button type="button" onclick="chatLoc()"><span>📍</span>Location</button>
+    </div>
+    <input type="file" id="chFileGal" class="hidden" accept="image/*,video/*" onchange="chatFilePicked(this)">
+    <input type="file" id="chFileCam" class="hidden" accept="image/*" capture="environment" onchange="chatFilePicked(this)">
+    <input type="file" id="chFileRec" class="hidden" accept="video/*" capture="environment" onchange="chatFilePicked(this)">
+    <div class="ch-comp"><button class="ch-plus" id="chPlus" type="button" onclick="chatPlus(event)" aria-label="Attach">＋</button><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
       <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
   const ta = $('#chInput');
   ta.value = S.chat.drafts[u.id] || '';
@@ -3245,7 +3387,7 @@ function chatRenderMsgs(toBottom){
       else if (m.state === 'failed') meta = 'Not sent · tap to retry';
       else meta += ` <span class="tick ${m.t <= pr ? 'read' : ''}">${m.t <= pr ? '✓✓' : '✓'}</span>`;
     }
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}<div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}<div class="tx">${chBody(m.text)}</div><div class="mt">${meta}</div></div>`;
   });
   box.innerHTML = html;
   if (toBottom || near) box.scrollTop = box.scrollHeight;
@@ -3273,7 +3415,7 @@ async function chatLoadUsers(){
     S.chat.users.concat(S.chat.groups).forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
     if (S.chat.with && !chatPeer(S.chat.with)){ S.chat.with = null; document.body.classList.remove('chat-conv'); if (S.view === 'chat') chatRenderPane(); }   // group deleted / permission removed
     S.chat.loaded = true; chatSumUnread();
-    if (incoming) toast('💬 New message');
+    if (incoming){ toast('💬 New message'); chatBuzz(); }
     S.chat.err = '';
     if (S.view === 'chat'){ chatRenderList(); chatHeader(); }
   }catch(e){ chatErr(e); S.chat.err = (e && e.message) || 'Request failed'; if (S.view === 'chat') chatRenderList(); }
@@ -3282,7 +3424,7 @@ async function chatLoadUsers(){
 async function chatPingNow(){
   try{
     const r = await chatApi('chatPing');
-    if (r.unread > S.chat.unread && S.view !== 'chat') toast('💬 New message');
+    if (r.unread > S.chat.unread && S.view !== 'chat'){ toast('💬 New message'); chatBuzz(); }
     S.chat.unread = r.unread; chatBadge();
   }catch(e){ chatErr(e); }
 }
@@ -3300,6 +3442,7 @@ async function chatFetchConv(first){
     if (u && u.isGroup && r.group){ u.name = r.group.name; u.members = r.group.members; }
     if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
     if (u && r.messages.some(m => !m.mine)){
+      if (!first && ch) chatBuzz();                              // a message arrived in the chat that is open right now
       u.unread = 0; chatSumUnread();
       const last = r.messages[r.messages.length - 1]; u.lastText = last.text.slice(0, 80); u.lastTime = last.t; u.lastMine = last.mine;
       chatRenderList();
@@ -3443,10 +3586,15 @@ function vcBeep(freq, dur){
     o.connect(g); g.connect(vcActx.destination); o.start(t); o.stop(t + dur + 0.05);
   } catch {}
 }
+/* new chat message: 2 short buzzes + 2 soft beeps */
+function chatBuzz(){
+  try { vcBeep(990, .12); setTimeout(() => vcBeep(1320, .16), 170); } catch {}
+  try { navigator.vibrate && navigator.vibrate([220, 110, 220]); } catch {}
+}
 function vcRingStart(incoming){
   vcRingStop();
   const once = () => {
-    if (incoming){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); try { navigator.vibrate && navigator.vibrate([350, 150, 350]); } catch {} }
+    if (incoming){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); try { navigator.vibrate && navigator.vibrate([900, 400, 900]); } catch {} }
     else vcBeep(440, .7);
   };
   once(); VC.ring = setInterval(once, incoming ? 2200 : 3200);
