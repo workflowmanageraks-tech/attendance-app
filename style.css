@@ -526,3 +526,12 @@ body.vc-open{overflow:hidden}
 /* group chat */
 .ch-b .mf{font-size:12px;font-weight:700;margin-bottom:2px}
 .ch-stat.grp{color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+
+/* ---------- UPDATES (app files to download) ---------- */
+textarea.input{resize:vertical;min-height:70px;font-family:inherit}
+.upbar{height:9px;background:#eef1f7;border-radius:9px;overflow:hidden;margin:8px 0 4px}
+.upbar i{display:block;height:100%;width:0;border-radius:9px;background:linear-gradient(90deg,var(--brand),var(--brand-2));transition:width .15s}
+.upd .l1 b{flex:1;min-width:0}
+.upd .l1 .tag{margin-left:0}
+.upd-file{border:2px dashed #c7cdea;border-radius:14px;background:var(--brand-soft);padding:14px;width:100%}

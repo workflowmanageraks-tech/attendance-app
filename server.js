@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const crypto = require('crypto');
+const { Readable } = require('stream');
 const { Workbook, install } = require('./gas-shim');
 
 function makeApp(store, env) {
@@ -556,12 +557,113 @@ function makeApp(store, env) {
     }
   }
 
+  // ---------- Updates tab: the main admin uploads app-update files, every signed-in user can download them ----------
+  // The files are stored in the GitHub repository on a SEPARATE branch (default "app-updates"), so uploading never makes Render redeploy.
+  // The list (title, version, notes, file name ...) is kept in the sheet's "_App Properties" tab. Uses the same GITHUB_TOKEN / GITHUB_REPO as Deploy.
+  const UPD_ACTIONS = new Set(['updList', 'updEdit', 'updDelete', 'updTicket']);
+  const UPD_MAX = 40 * 1024 * 1024;                                  // biggest file (40 MB)
+  const UPD_BRANCH = String(env.UPDATES_BRANCH || 'app-updates').trim();
+  const UPD_KEY = 'APP_UPDATES';
+  const updReady = () => !!(GH.repo && GH.token);
+  const updRead = () => { try { const a = JSON.parse(globalThis.PropertiesService.getScriptProperties().getProperty(UPD_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+  const updFits = list => JSON.stringify(list).length <= 45000;       // one sheet cell holds 50,000 characters
+  const updWrite = list => { if (!updFits(list)) globalThis.fail_('Too many updates are saved. Delete some old ones first.', 'UPD'); globalThis.PropertiesService.getScriptProperties().setProperty(UPD_KEY, JSON.stringify(list)); };
+  const updClean = (v, n) => String(v == null ? '' : v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, n);
+  const updName = n => String(n || 'update').split(/[\\\/]/).pop().replace(/[^\w.\- ()]/g, '_').replace(/^\.+/, '').trim().slice(-100) || 'update';
+  const updView = u => ({ id: u.id, title: u.title, version: u.version || '', notes: u.notes || '', name: u.name, size: u.size || 0, at: u.at });
+  function updWho(token) {                                            // any valid, active user
+    const uid = globalThis.checkToken_(token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    const acc = globalThis.getAccount_(uid, globalThis.readSettings_().values);
+    if (!acc || !acc.active) globalThis.fail_('This account is disabled. Please contact the admin.', 'DISABLED');
+    if (globalThis.payExpired_(acc.payDue)) globalThis.fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
+    return uid;
+  }
+  const updAdmin = token => { const uid = updWho(token); if (uid !== 'ADMIN') globalThis.fail_('Only the main admin can change updates.', 'PERM'); return uid; };
+  const updTicketSig = (id, exp) => sign('upd:' + id + '|' + exp);
+  let updBranchOk = false;
+  async function updEnsureBranch() {                                   // create the storage branch from the main branch the first time
+    if (updBranchOk) return;
+    try { await gh('GET', '/git/ref/heads/' + encodeURIComponent(UPD_BRANCH)); }
+    catch (e) {
+      if (e.code !== 'GITHUB') throw e;
+      const base = await gh('GET', '/git/ref/heads/' + encodeURIComponent(GH.branch));
+      await gh('POST', '/git/refs', { ref: 'refs/heads/' + UPD_BRANCH, sha: base.object.sha });
+    }
+    updBranchOk = true;
+  }
+  async function updRoute(req) {                                       // runs inside the normal request queue
+    const a = req.action;
+    if (a === 'updList') { updWho(req.token); return { ok: true, items: updRead().map(updView), canManage: globalThis.checkToken_(req.token) === 'ADMIN', ready: updReady(), max: UPD_MAX }; }
+    if (a === 'updTicket') {                                           // short-lived download pass (2 minutes), so the session token never goes in a link
+      updWho(req.token);
+      const u = updRead().find(x => x.id === String(req.id || '')); if (!u) globalThis.fail_('This update was removed.', 'UPD');
+      const exp = Date.now() + 120000;
+      return { ok: true, ticket: exp + '.' + updTicketSig(u.id, exp) };
+    }
+    updAdmin(req.token);
+    const list = updRead(), i = list.findIndex(x => x.id === String(req.id || '')), u = list[i];
+    if (!u) globalThis.fail_('This update was not found. Refresh the list.', 'UPD');
+    if (a === 'updEdit') {
+      const title = updClean(req.title, 120); if (!title) globalThis.fail_('Please enter a title.', 'UPD');
+      u.title = title; u.version = updClean(req.version, 40); u.notes = updClean(req.notes, 600);
+      updWrite(list); return { ok: true, items: list.map(updView) };
+    }
+    if (a === 'updDelete') {
+      if (updReady()) {
+        try { await gh('DELETE', '/contents/' + ghPath(u.path), { message: 'Remove update: ' + u.name, sha: u.sha, branch: UPD_BRANCH }); }
+        catch (e) { if (!(e.code === 'GITHUB' && /could not find/i.test(e.message))) throw e; }      // already gone on GitHub = fine
+      }
+      list.splice(i, 1); updWrite(list); return { ok: true, items: list.map(updView) };
+    }
+  }
+  // Upload: the big GitHub transfer runs OUTSIDE the request queue, so chat / attendance never wait for it.
+  async function updUpload(token, q, buf) {
+    await withWb(() => {
+      updAdmin(token);
+      if (!updReady()) globalThis.fail_('GitHub is not connected yet. Add GITHUB_TOKEN and GITHUB_REPO on Render first.', 'NOGH');
+      if (!buf.length) globalThis.fail_('The file is empty.', 'UPD');
+      if (buf.length > UPD_MAX) globalThis.fail_('The file is too big (max ' + (UPD_MAX / 1048576) + ' MB).', 'UPD');
+      const probe = updRead(); probe.unshift({ id: '0'.repeat(10), title: updClean(q.title, 120), version: updClean(q.version, 40), notes: updClean(q.notes, 600), name: updName(q.name), size: buf.length, at: new Date().toISOString(), path: 'updates/' + '0'.repeat(10) + '/' + updName(q.name), sha: '0'.repeat(40) });
+      if (!updFits(probe)) globalThis.fail_('Too many updates are saved. Delete some old ones first.', 'UPD');
+    });
+    const name = updName(q.name), title = updClean(q.title, 120) || name, id = crypto.randomBytes(5).toString('hex'), path = 'updates/' + id + '/' + name;
+    await updEnsureBranch();
+    const put = await gh('PUT', '/contents/' + ghPath(path), { message: 'Add update: ' + title.slice(0, 80), content: buf.toString('base64'), branch: UPD_BRANCH });
+    const item = { id, title, version: updClean(q.version, 40), notes: updClean(q.notes, 600), name, size: buf.length, at: new Date().toISOString(), path, sha: put.content.sha };
+    try { return await withWb(() => { const list = updRead(); list.unshift(item); updWrite(list); return { ok: true, items: list.map(updView) }; }); }
+    catch (e) { try { await gh('DELETE', '/contents/' + ghPath(path), { message: 'Undo failed upload', sha: item.sha, branch: UPD_BRANCH }); } catch (x) {} throw e; }
+  }
+  // Download: check the pass, then stream the file from GitHub straight to the user (never kept in memory).
+  async function updOpen(q) {
+    const id = String(q.id || ''), [exp, sig] = String(q.k || '').split('.'), good = updTicketSig(id, exp);
+    if (!sig || sig.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good)) || !(Number(exp) > Date.now()))
+      return { code: 403, error: 'This download link expired. Go back to the app and tap Download again.' };
+    const u = await withWb(() => updRead().find(x => x.id === id));
+    if (!u) return { code: 404, error: 'This update was removed.' };
+    if (!updReady()) return { code: 503, error: 'GitHub is not connected on the server.' };
+    const r = await fetch('https://api.github.com/repos/' + GH.repo + '/contents/' + ghPath(u.path) + '?ref=' + encodeURIComponent(UPD_BRANCH),
+      { headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github.raw+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy' } });
+    if (!r.ok || !r.body) return { code: 502, error: 'GitHub could not give this file (error ' + r.status + ').' };
+    return { code: 200, u, body: r.body };
+  }
+
   let chain = Promise.resolve();
+  function withWb(fn) {                                                // run fn in the request queue with fresh sheet data, save its changes
+    const job = async () => {
+      if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
+      let out, err;
+      try { out = await fn(); } catch (e) { err = e; }
+      try { await wb.flush(); } catch (e) { if (!err) err = e; }
+      if (err) throw err;
+      return out;
+    };
+    const p = chain.then(job, job); chain = p.catch(() => {}); return p;
+  }
   async function run(body) {
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
     rt.delay = 0; rt.mails = []; rt.cal = [];
     let req, res;
-    try { req = JSON.parse(body); res = DEPLOY_ACTIONS.has(req.action) ? await deployRoute(req) : BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req); }
+    try { req = JSON.parse(body); res = DEPLOY_ACTIONS.has(req.action) ? await deployRoute(req) : UPD_ACTIONS.has(req.action) ? await updRoute(req) : BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req); }
     catch (err) { res = { ok: false, error: err.message || String(err), code: err.code || 'ERR' }; }
     if (req && req.action === 'logout') revoked.add(req.token);
     try { await wb.flush(); } catch (e) { res = { ok: false, error: 'Could not save to the sheet: ' + e.message, code: 'ERR' }; }
@@ -582,7 +684,9 @@ function makeApp(store, env) {
     if (!r || !(CALL_ACTIONS.has(r.action) || LUDO_ACTIONS.has(r.action))) return null;
     return Promise.resolve().then(() => LUDO_ACTIONS.has(r.action) ? ludoRoute(r) : callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
   };
+  const errOut = err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' });
   return { handle: body => fastCall(body) || (chain = chain.then(() => run(body), () => run(body))),
+           updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
 }
 
@@ -595,10 +699,26 @@ async function sendMail(m, env) {
 
 function start(app, env) {
   const origin = env.ALLOWED_ORIGIN || '*';
-  const cors = { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
+  const cors = { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' };
   return http.createServer((rq, rs) => {
     const send = (code, obj) => { rs.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, cors)); rs.end(JSON.stringify(obj)); };
     if (rq.method === 'OPTIONS') { rs.writeHead(204, cors); return rs.end(); }
+    const url = new URL(rq.url, 'http://x');
+    if (rq.method === 'GET' && url.pathname === '/updates/download' && app.updOpen) {      // stream an update file to the user
+      return app.updOpen(Object.fromEntries(url.searchParams)).then(o => {
+        if (o.code !== 200) { rs.writeHead(o.code, { 'Content-Type': 'text/html; charset=utf-8' }); return rs.end('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:32px;max-width:480px;margin:auto"><h2>⚠️ Download failed</h2><p>' + String(o.error).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + '</p></body>'); }
+        const h = { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="' + o.u.name + '"; filename*=UTF-8\'\'' + encodeURIComponent(o.u.name), 'Cache-Control': 'private, no-store' };
+        if (o.u.size) h['Content-Length'] = String(o.u.size);
+        rs.writeHead(200, h);
+        const src = Readable.fromWeb(o.body); src.on('error', () => rs.destroy()); rs.on('close', () => src.destroy()); src.pipe(rs);
+      });
+    }
+    if (rq.method === 'POST' && url.pathname === '/updates/upload' && app.upload) {        // raw file body, session token in the Authorization header
+      const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
+      rq.on('data', c => { n += c.length; if (n > app.updMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
+      rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.updMax / 1048576) + ' MB).', code: 'UPD' } : await app.upload(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
+      return;
+    }
     if (rq.method === 'GET' && rq.url.startsWith('/oauth/google/callback') && app.oauth) {
       const q = Object.fromEntries(new URL(rq.url, 'http://x').searchParams);
       return app.oauth(q).then(o => { rs.writeHead(o.code, { 'Content-Type': 'text/html; charset=utf-8' }); rs.end(o.html); });

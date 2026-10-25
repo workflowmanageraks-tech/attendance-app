@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; DEP.st = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; DEP.st = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -916,6 +916,109 @@ async function depRestore(path, sha){
 }
 const confirmBackendOk = (path, backend) => confirmBox('Restore this version of ' + depBase(path) + '?', backend ? 'This is a server file: the server restarts and a wrong version can take the site down.' : 'It is published as a new commit and the site redeploys.', 'Restore', backend);
 
+/* =====================================================================
+   VIEW: UPDATES — the main admin uploads app files, every signed-in user can download them
+   ===================================================================== */
+const UPD = { items:null, can:false, ready:true, max:40 * 1024 * 1024, err:'', open:false, busy:false };
+const updSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+async function updLoad(){
+  try { const r = await api('updList'); UPD.items = r.items; UPD.can = !!r.canManage; UPD.ready = r.ready !== false; UPD.max = r.max || UPD.max; UPD.err = ''; }
+  catch(e){ UPD.err = e.message; UPD.items = UPD.items || []; if (e.code === 'AUTH' || e.code === 'PAYDUE') handleErr(e); }
+  if (S.view === 'updates') render();
+}
+function updItemHtml(u){
+  return `<div class="log-item upd"><div class="l1"><b style="word-break:break-word">${esc(u.title)}</b>${u.version ? `<span class="tag adm">${esc(u.version)}</span>` : ''}
+      <span class="muted">${esc(depWhen(u.at))}</span></div>
+    ${u.notes ? `<div class="l2" style="white-space:pre-wrap">${esc(u.notes)}</div>` : ''}
+    <div class="l2">📄 ${esc(u.name)} · ${updSize(u.size)}</div>
+    <div class="actions" style="margin-top:6px"><button class="btn sm" data-dl="${esc(u.id)}">⬇ Download</button>
+      ${UPD.can ? `<button class="btn soft sm" data-ed="${esc(u.id)}">✏️ Edit</button><button class="btn danger sm" data-del="${esc(u.id)}">🗑 Delete</button>` : ''}</div></div>`;
+}
+function vUpdates(){
+  if (!UPD.items) return '<div class="card"><div class="empty-state">Loading…</div></div>';
+  const box = !UPD.can ? '' : !UPD.ready
+    ? `<div class="card" style="margin-bottom:16px"><h3>🔌 Connect GitHub first</h3><p class="muted">Uploads are stored in your GitHub repository. Open the <b>Deploy</b> tab and follow the one-time setup (<code>GITHUB_TOKEN</code> and <code>GITHUB_REPO</code> on Render), then come back here.</p></div>`
+    : `<details class="card regbox" id="updBox" style="margin-bottom:16px" ${UPD.open ? 'open' : ''}>
+      <summary>＋ Upload a new update</summary>
+      <div class="field"><label>File <span class="muted">(any type, up to ${Math.round(UPD.max / 1048576)} MB)</span></label>
+        <input class="input upd-file" type="file" id="updFile"></div>
+      <div class="form-grid">
+        <div class="field"><label>Title</label><input class="input" id="updTitle" maxlength="120" placeholder="e.g. Attendance App – new look"></div>
+        <div class="field"><label>Version <span class="muted">(optional)</span></label><input class="input" id="updVer" maxlength="40" placeholder="e.g. v2.4"></div></div>
+      <div class="field"><label>What is new? <span class="muted">(optional)</span></label><textarea class="input" id="updNotes" maxlength="600" rows="3" placeholder="Short note for the users"></textarea></div>
+      <div class="actions"><button class="btn" id="updGo">⬆ Upload</button></div>
+      <div id="updProg"></div></details>`;
+  const items = UPD.items;
+  return box + (UPD.err ? `<div class="log-item bad" style="margin-bottom:12px"><div class="l1"><b>${esc(UPD.err)}</b></div></div>` : '') +
+    `<div class="card"><h3>⬇️ Available updates <button class="btn ghost sm" onclick="updLoad()">↻ Refresh</button></h3>
+      <p class="muted" style="margin-bottom:12px">Download the file and install it to update the application.</p>
+      <div class="loglist">${items.map(updItemHtml).join('') || '<div class="empty-state">No updates have been uploaded yet</div>'}</div></div>`;
+}
+function bindUpdates(){
+  const v = $('#view');
+  v.querySelectorAll('[data-dl]').forEach(b => b.onclick = () => updDownload(b.dataset.dl));
+  v.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => updEdit(b.dataset.ed));
+  v.querySelectorAll('[data-del]').forEach(b => b.onclick = () => updDelete(b.dataset.del));
+  const up = $('#updGo'); if (up) up.onclick = updSubmit;
+  const f = $('#updFile'); if (f) f.onchange = () => { const t = $('#updTitle'); if (f.files[0] && t && !t.value.trim()) t.value = f.files[0].name.replace(/\.[^.]+$/, ''); };
+  const box = $('#updBox'); if (box) box.ontoggle = () => { UPD.open = box.open; };
+}
+async function updDownload(id){
+  try {
+    const r = await api('updTicket', { id });                 // a 2-minute pass, so your login is never put in the link
+    const a = document.createElement('a'); a.href = API_URL + '/updates/download?id=' + encodeURIComponent(id) + '&k=' + encodeURIComponent(r.ticket); a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('Download started');
+  } catch(e){ handleErr(e); if (e.code === 'UPD') updLoad(); }
+}
+async function updSubmit(){
+  if (UPD.busy) return;
+  const f = ($('#updFile').files || [])[0];
+  if (!f) return toast('Choose a file first', true);
+  if (!f.size) return toast('This file is empty', true);
+  if (f.size > UPD.max) return toast('This file is too big (max ' + Math.round(UPD.max / 1048576) + ' MB)', true);
+  const q = new URLSearchParams({ name:f.name, title:($('#updTitle').value || '').trim(), version:($('#updVer').value || '').trim(), notes:($('#updNotes').value || '').trim() });
+  const btn = $('#updGo'), prog = $('#updProg'); btn.disabled = true; UPD.busy = true;
+  const bar = pct => { prog.innerHTML = `<div class="upbar"><i style="width:${pct}%"></i></div><div class="muted" style="font-size:12.5px">${pct < 100 ? 'Uploading… ' + pct + '%' : 'Saving to GitHub… please wait'}</div>`; };
+  bar(0); busy(true);
+  try {
+    const r = await new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest(); x.open('POST', API_URL + '/updates/upload?' + q.toString());
+      x.setRequestHeader('Authorization', 'Bearer ' + S.token); x.setRequestHeader('Content-Type', 'application/octet-stream');
+      x.upload.onprogress = e => { if (e.lengthComputable && document.body.contains(prog)) bar(Math.min(100, Math.round(e.loaded * 100 / e.total))); };
+      x.onload = () => { try { resolve(JSON.parse(x.responseText)); } catch { reject(new Error('Unexpected server response.')); } };
+      x.onerror = x.ontimeout = () => reject(new Error('Upload failed — check your internet connection and try again.'));
+      x.send(f);
+    });
+    if (!r.ok){ const e = new Error(r.error || 'Upload failed'); e.code = r.code; throw e; }
+    UPD.items = r.items; UPD.open = false; toast('✅ Update uploaded — everyone can download it now');
+    if (S.view === 'updates') render();
+  } catch(e){ if (document.body.contains(btn)){ btn.disabled = false; prog.innerHTML = ''; } handleErr(e); }
+  finally { UPD.busy = false; busy(false); }
+}
+function updEdit(id){
+  const u = (UPD.items || []).find(x => x.id === id); if (!u) return;
+  const w = openModal(`<h3>Edit update</h3><p class="sub">${esc(u.name)} · ${updSize(u.size)} — to change the file itself, delete this update and upload the new file.</p>
+    <div class="field"><label>Title</label><input class="input" id="ueT" maxlength="120" value="${esc(u.title)}"></div>
+    <div class="field"><label>Version</label><input class="input" id="ueV" maxlength="40" value="${esc(u.version)}"></div>
+    <div class="field"><label>What is new?</label><textarea class="input" id="ueN" maxlength="600" rows="4">${esc(u.notes)}</textarea></div>
+    <div class="foot"><button class="btn ghost" data-x>Cancel</button><button class="btn" data-ok>Save</button></div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-ok]').onclick = async ev => {
+    const btn = ev.currentTarget, title = w.querySelector('#ueT').value.trim();
+    if (!title) return toast('Please enter a title', true);
+    btn.disabled = true;
+    try { const r = await api('updEdit', { id, title, version:w.querySelector('#ueV').value.trim(), notes:w.querySelector('#ueN').value.trim() }); UPD.items = r.items; w.remove(); toast('Saved'); render(); }
+    catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function updDelete(id){
+  const u = (UPD.items || []).find(x => x.id === id); if (!u) return;
+  if (!await confirmBox('Delete this update?', '“' + u.title + '” (' + u.name + ') is removed for everyone and cannot be brought back.', 'Delete', true)) return;
+  try { const r = await api('updDelete', { id }); UPD.items = r.items; toast('Deleted'); render(); }
+  catch(e){ handleErr(e); if (e.code === 'UPD') updLoad(); }
+}
+
 /* ---------- navigation ---------- */
 const TITLES = {
   dashboard:['Dashboard','Your attendance and salary at a glance'],
@@ -928,6 +1031,7 @@ const TITLES = {
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
+  updates:['Updates','Download the latest application files'],
   settings:['Settings','Profile, security and preferences']
 };
 function setMenu(on){ document.body.classList.toggle('menu-open', !!on); const t = $('#menuToggle'); if (t) t.setAttribute('aria-expanded', on ? 'true' : 'false'); }
@@ -958,10 +1062,11 @@ function go(v){
   render(); window.scrollTo(0,0);
   if (v === 'logins') loadLogs();
   if (v === 'deploy') depLoad();
+  if (v === 'updates') updLoad();
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
-$('#refreshBtn').onclick = async () => { try { await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); } catch(e){ handleErr(e); } };
+$('#refreshBtn').onclick = async () => { try { await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); if (S.view === 'updates') updLoad(); } catch(e){ handleErr(e); } };
 /* ---------- payment / access countdown (Dashboard) ---------- */
 let payTimer = null;
 const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date.now()) : 0;   // server clock minus this device's clock
@@ -1000,12 +1105,12 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, logins:vLogins, deploy:vDeploy, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, logins:vLogins, deploy:vDeploy, updates:vUpdates, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay();
-  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */

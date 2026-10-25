@@ -58,3 +58,12 @@ One-time setup on Render > Environment: `GITHUB_TOKEN` (a fine-grained token wit
 Safety: only .js / .css / .html / .md / .json / .gs / .txt / .svg files; no dotfiles or `node_modules`; JS and JSON with a syntax error are refused; server files (`server.js`, `package.json`, `google-store.js`, `gas-shim.js`, `Code.gs`) need an extra confirmation; every publish / restore is written to the Activity log. `Code.gs` runs in Apps Script, so it is still pasted there by hand.
 
 The **Live status** card on the Deploy tab shows the same checks GitHub shows next to a commit (Render's deploy is one of them): *Going live… 1/3 → 2/3 → ✅ Live 3/3* (or ❌ Failed). It refreshes by itself every 5 seconds after a publish. For this, give the token two more **Read-only** repository permissions: **Commit statuses** and **Checks** (GitHub > Settings > Developer settings > Fine-grained tokens > your token > Edit).
+
+## Updates tab (everyone can download, main admin uploads)
+
+Sidebar > **Updates**, right below Deploy. The main admin opens **＋ Upload a new update**, picks a file (any type, up to 40 MB), adds a title / version / note and taps **Upload**. Every signed-in user sees the list and can tap **⬇ Download**. The admin also gets **✏️ Edit** (title, version, note) and **🗑 Delete** on each item. To replace the file itself: delete the item and upload the new one.
+
+- Files are stored in your GitHub repository on a **separate branch** (`app-updates`, created automatically; change it with the optional env var `UPDATES_BRANCH`). Uploading therefore does **not** make Render redeploy. The list itself is kept in the sheet's `_App Properties` tab.
+- Needs the same `GITHUB_TOKEN` (Contents: Read and write) and `GITHUB_REPO` as the Deploy tab. Nothing new to set up.
+- Downloads go through the server with a 2-minute pass, so the repository can stay private and nobody's login is put in a link.
+- Files only reach the app through the website (not from inside Apps Script).
