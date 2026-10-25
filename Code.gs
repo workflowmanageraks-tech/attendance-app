@@ -986,7 +986,7 @@ function listGroups_() {
 }
 // moves every row owned by `fromId` to the group, so the group starts with that person's existing data
 function adoptData_(fromId, toOwner) {
-  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 9], ['CAT', 3], ['TT', 4]].forEach(function (p) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 7], ['CAT', 3], ['TT', 4]].forEach(function (p) {
     var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
     if (last < 2) return;
     var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
@@ -1141,8 +1141,8 @@ function createSheet_(k) {
     sh.getRange('A:C').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LIC') {
-    sh.getRange(1, 1, 1, 9).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Month', 'Start Year', 'End Month', 'End Year', 'ID', 'Owner']]);
-    sh.getRange('A:I').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 7).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'ID', 'Owner']]);
+    sh.getRange('A:G').setNumberFormat('@');
     sh.setFrozenRows(1);
   }
   sh.getRange(1, 1, 1, sh.getLastColumn()).setFontWeight('bold');
@@ -1815,84 +1815,70 @@ function deleteLink_(req) {
 }
 
 // ---------- LIC policies ----------
-// Customer Name | Policy Number | Amount | Start Month | Start Year | End Month | End Year | ID | Owner
-// Duration (years / months to complete) is never stored - it is always worked out fresh from
-// start + end so it can never go stale if someone edits the dates later.
-function licDuration_(sy, sm, ey, em) {
-  if (!(sy && sm && ey && em)) return '';
-  var total = (ey - sy) * 12 + (em - sm);
-  if (total < 0) return '';
-  var y = Math.floor(total / 12), m = total % 12;
-  var parts = [];
-  if (y) parts.push(y + (y === 1 ? ' year' : ' years'));
-  if (m || !y) parts.push(m + (m === 1 ? ' month' : ' months'));
-  return parts.join(' ');
-}
+// Customer Name | Policy Number | Amount | Start Date | End Date | ID | Owner
+// Dates are kept as plain "yyyy-MM-dd" strings. The countdown / "time left" shown to the person is
+// never stored - it ticks live in the browser (see licTick() in app.js) worked out fresh from End Date.
+var LIC_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function readLic_() {
-  var sh = ownedSheet_('LIC', 9);
+  var sh = ownedSheet_('LIC', 7);
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 9).getValues();
+  var vals = sh.getRange(2, 1, last - 1, 7).getValues();
   var out = [], dirty = false;
   vals.forEach(function (r) {
     if (r[0] === '' && r[1] === '' && r[2] === '') return;
-    var id = String(r[7] || '').trim();
-    if (!id) { id = Utilities.getUuid().slice(0, 8); r[7] = id; dirty = true; }
-    if (ownerOf_(r[8]) !== CTX.owner) return;
-    var sm = Number(r[3]) || 0, sy = Number(r[4]) || 0, em = Number(r[5]) || 0, ey = Number(r[6]) || 0;
+    var id = String(r[5] || '').trim();
+    if (!id) { id = Utilities.getUuid().slice(0, 8); r[5] = id; dirty = true; }
+    if (ownerOf_(r[6]) !== CTX.owner) return;
     out.push({ id: id, name: String(r[0]), policyNo: String(r[1]), amount: Number(r[2]) || 0,
-      startMonth: sm, startYear: sy, endMonth: em, endYear: ey, duration: licDuration_(sy, sm, ey, em) });
+      startDate: LIC_DATE_RE.test(r[3]) ? String(r[3]) : '', endDate: LIC_DATE_RE.test(r[4]) ? String(r[4]) : '' });
   });
-  if (dirty) sh.getRange(2, 8, vals.length, 1).setValues(vals.map(function (r) { return [r[7]]; }));
+  if (dirty) sh.getRange(2, 6, vals.length, 1).setValues(vals.map(function (r) { return [r[5]]; }));
   return out;
 }
 function validLic_(req) {
-  function mon(v) { v = Math.round(Number(v) || 0); return (v >= 1 && v <= 12) ? v : 0; }
-  function yr(v) { v = Math.round(Number(v) || 0); return (v >= 1900 && v <= 2200) ? v : 0; }
+  function dt(v) { v = String(v || '').trim(); return LIC_DATE_RE.test(v) ? v : ''; }
   var p = {
     name: String(req.name || '').trim().slice(0, 200),
     policyNo: String(req.policyNo || '').trim().slice(0, 80),
     amount: Math.max(0, Number(req.amount) || 0),
-    startMonth: mon(req.startMonth), startYear: yr(req.startYear),
-    endMonth: mon(req.endMonth), endYear: yr(req.endYear)
+    startDate: dt(req.startDate), endDate: dt(req.endDate)
   };
   if (!(p.name || p.policyNo)) fail_('Fill in at least the customer name or policy number.');
+  if (p.startDate && p.endDate && p.endDate < p.startDate) fail_('Ending date cannot be before the starting date.');
   return p;
 }
 function findLicRow_(sh, id) {
   var last = sh.getLastRow();
   if (last < 2) return -1;
-  var v = sh.getRange(2, 8, last - 1, 2).getValues();            // ID, Owner
+  var v = sh.getRange(2, 6, last - 1, 2).getValues();            // ID, Owner
   for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id) && ownerOf_(v[i][1]) === CTX.owner) return i + 2;
   return -1;
 }
-function licOut_(p) {
-  return Object.assign({}, p, { duration: licDuration_(p.startYear, p.startMonth, p.endYear, p.endMonth) });
-}
 function addLic_(req) {
   var p = validLic_(req);
-  var sh = ownedSheet_('LIC', 9);
+  var sh = ownedSheet_('LIC', 7);
   var row = sh.getLastRow() + 1;
   var id = Utilities.getUuid().slice(0, 8);
-  var rng = sh.getRange(row, 1, 1, 9);
+  var rng = sh.getRange(row, 1, 1, 7);
   rng.setNumberFormat('@');
-  rng.setValues([[p.name, p.policyNo, p.amount, p.startMonth, p.startYear, p.endMonth, p.endYear, id, CTX.owner]]);
+  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, id, CTX.owner]]);
   p.id = id;
-  return { ok: true, lic: licOut_(p) };
+  return { ok: true, lic: p };
 }
 function updateLic_(req) {
   var p = validLic_(req);
-  var sh = ownedSheet_('LIC', 9);
+  var sh = ownedSheet_('LIC', 7);
   var row = findLicRow_(sh, req.id);
   if (row < 0) fail_('Entry not found. Please refresh.');
-  var rng = sh.getRange(row, 1, 1, 7);
+  var rng = sh.getRange(row, 1, 1, 5);
   rng.setNumberFormat('@');
-  rng.setValues([[p.name, p.policyNo, p.amount, p.startMonth, p.startYear, p.endMonth, p.endYear]]);
+  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate]]);
   p.id = String(req.id);
-  return { ok: true, lic: licOut_(p) };
+  return { ok: true, lic: p };
 }
 function deleteLic_(req) {
-  var sh = ownedSheet_('LIC', 9);
+  var sh = ownedSheet_('LIC', 7);
   var row = findLicRow_(sh, req.id);
   if (row < 0) fail_('Entry not found. Please refresh.');
   sh.deleteRow(row);

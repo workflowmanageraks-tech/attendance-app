@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -1224,7 +1224,7 @@ function render(){
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
-  startPay();
+  startPay(); startLic();
   const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
 }
 
@@ -1910,37 +1910,78 @@ async function linkDel(id){ if (!can('link')) return deny();
 }
 
 /* =====================================================================
-   VIEW: LIC  (customer policies — name, policy no., amount, start/end month-year, duration)
+   VIEW: LIC  (customer policies — name, policy no., amount, start/end date, live countdown to end date)
    ===================================================================== */
-const MON_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function licMY(m, y){ return (m && y) ? `${MON_NAMES[m - 1]} ${y}` : '<span class="dim">—</span>'; }
 function licAmt(n){ return n ? '₹' + Number(n).toLocaleString('en-IN') : '<span class="dim">—</span>'; }
+function licDateFmt(iso){
+  if (!iso) return '<span class="dim">—</span>';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso); if (!m) return esc(iso);
+  return `${+m[3]} ${MON[+m[2] - 1]} ${m[1]}`;
+}
+/* live countdown to End Date (treated as 23:59:59 that day), ticking down to the second */
+function licCountdown(endIso){
+  if (!endIso) return { text:'—', cls:'' };
+  const end = new Date(endIso + 'T23:59:59');
+  const left = end.getTime() - Date.now();
+  if (isNaN(end.getTime())) return { text:'—', cls:'' };
+  if (left <= 0){
+    const ago = Math.floor(-left / 86400000);
+    return { text:'⏹ Expired' + (ago ? ' · ' + ago + 'd ago' : ''), cls:'bad', status:'Expired' };
+  }
+  const s = Math.floor(left / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  const p2 = n => String(n).padStart(2, '0');
+  const text = (d ? d + 'd ' : '') + p2(h) + 'h ' + p2(m) + 'm ' + p2(sec) + 's';
+  if (d <= 7) return { text, cls:'bad', status:'Expiring soon' };
+  if (d <= 30) return { text, cls:'warn', status:'Expiring soon' };
+  return { text, cls:'good', status:'Active' };
+}
+function licStatusTag(endIso){
+  const c = licCountdown(endIso);
+  if (!c.status) return '';
+  const cls = c.status === 'Expired' ? 'off' : c.status === 'Expiring soon' ? 'main' : 'adm';
+  return `<span class="tag ${cls}">${c.status}</span>`;
+}
 function filteredLic(){
   const q = (S.lic.q || '').trim().toLowerCase();
   return [...(S.d.lic || [])]
     .filter(x => !q || (x.name + ' ' + x.policyNo).toLowerCase().includes(q))
-    .sort((a, b) => (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()));
+    .sort((a, b) => (a.endDate || '9999').localeCompare(b.endDate || '9999'));     // soonest-ending first
 }
 function vLic(){
-  const list = filteredLic(), total = (S.d.lic || []).length;
-  const rows = list.map(x => `<tr>
-      <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:140px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b></td>
+  const all = S.d.lic || [], list = filteredLic(), total = all.length;
+  const now = Date.now();
+  let expiring = 0, expired = 0, totalAmt = 0;
+  all.forEach(x => {
+    totalAmt += Number(x.amount) || 0;
+    if (!x.endDate) return;
+    const end = new Date(x.endDate + 'T23:59:59').getTime();
+    if (end <= now) expired++; else if (end - now <= 30 * 86400000) expiring++;
+  });
+  const rows = list.map(x => { const c = licCountdown(x.endDate); return `<tr>
+      <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b>${licStatusTag(x.endDate)}</td>
       <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
       <td data-l="Amount" class="n">${licAmt(x.amount)}</td>
-      <td data-l="Starting Date">${licMY(x.startMonth, x.startYear)}</td>
-      <td data-l="Ending Date">${licMY(x.endMonth, x.endYear)}</td>
-      <td data-l="Duration">${esc(x.duration) || '<span class="dim">—</span>'}</td>
+      <td data-l="Starting Date">${licDateFmt(x.startDate)}</td>
+      <td data-l="Ending Date">${licDateFmt(x.endDate)}</td>
+      <td data-l="Time Left"><span class="lic-cd ${c.cls}" data-end="${esc(x.endDate || '')}" style="font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap">${esc(c.text)}</span></td>
       <td class="n nowrap"><button class="btn soft sm" onclick="licCopy('${esc(x.id)}')" title="Copy all of this customer's data">📋 Copy</button>
-        <button class="btn ghost sm" onclick="licForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="licDel('${esc(x.id)}')">🗑</button></td></tr>`
-  ).join('');
-  return `<div class="card" style="margin-bottom:16px"><div class="actions">
-      <input class="input" id="licq" style="width:240px" placeholder="Search customer name or policy no.…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)">
+        <button class="btn ghost sm" onclick="licForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="licDel('${esc(x.id)}')">🗑</button></td></tr>`;
+  }).join('');
+  return `<div class="grid kpis" style="margin-bottom:16px">
+      <div class="card kpi s"><div class="lbl">Total Policies</div><div class="val">${total}</div><div class="hint">customers</div></div>
+      <div class="card kpi p"><div class="lbl">Total Amount</div><div class="val" style="font-size:20px">${esc(licAmt(totalAmt))}</div></div>
+      <div class="card kpi w"><div class="lbl">Expiring ≤ 30 days</div><div class="val">${expiring}</div><div class="hint">renew soon</div></div>
+      <div class="card kpi a"><div class="lbl">Expired</div><div class="val">${expired}</div></div>
+    </div>
+    <div class="card" style="margin-bottom:16px"><div class="actions">
+      <input class="input" id="licq" style="width:220px" placeholder="Search customer name or policy no.…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)">
       <span style="flex:1"></span>
+      <button class="btn soft" onclick="licExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="licExport('pdf')">⬇ PDF</button>
       <button class="btn" onclick="licForm()">＋ Add policy</button></div></div>
     <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
-      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Amount</th><th>Starting Date</th><th>Ending Date</th><th>Duration</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Amount</th><th>Starting Date</th><th>Ending Date</th><th>Time Left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
-      <p class="muted" style="margin-top:12px;font-size:13px">📋 <b>Copy</b> copies that customer's name, policy number, amount, dates and duration together — one tap, ready to paste. Saved in the “LIC Policies” tab of your Google Sheet.</p>
+      <p class="muted" style="margin-top:12px;font-size:13px">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Time Left</b> counts down live to the ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;
 }
 function licSearch(v){
@@ -1949,35 +1990,28 @@ function licSearch(v){
 }
 async function licCopy(id){
   const x = (S.d.lic || []).find(e => e.id === id); if (!x) return;
+  const c = licCountdown(x.endDate);
   const txt = [
     x.name && 'Customer Name: ' + x.name,
     x.policyNo && 'Policy Number: ' + x.policyNo,
     x.amount ? 'Amount: ₹' + Number(x.amount).toLocaleString('en-IN') : '',
-    (x.startMonth && x.startYear) && 'Starting Date: ' + licMYPlain(x.startMonth, x.startYear),
-    (x.endMonth && x.endYear) && 'Ending Date: ' + licMYPlain(x.endMonth, x.endYear),
-    x.duration && 'Duration: ' + x.duration
+    x.startDate && 'Starting Date: ' + x.startDate,
+    x.endDate && 'Ending Date: ' + x.endDate,
+    c.status && 'Status: ' + c.status + (c.status !== 'Expired' ? ' (' + c.text + ' left)' : '')
   ].filter(Boolean).join('\n');
   if (!txt) return toast('Nothing to copy', true);
   (await copyText(txt)) ? toast('Customer data copied') : toast('Could not copy — please copy it manually', true);
 }
-function licMYPlain(m, y){ return (m && y) ? `${MON_NAMES[m - 1]} ${y}` : ''; }
 function licForm(id){ if (!can('lic')) return deny();
   const x = id ? S.d.lic.find(e => e.id === id) : null;
-  const yNow = new Date().getFullYear();
-  const yOpts = (sel) => { let o = ''; for (let y = yNow - 20; y <= yNow + 30; y++) o += `<option value="${y}" ${sel === y ? 'selected' : ''}>${y}</option>`; return o; };
-  const mOpts = (sel) => MON_NAMES.map((n, i) => `<option value="${i + 1}" ${sel === i + 1 ? 'selected' : ''}>${n}</option>`).join('');
-  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer name, policy number, amount, and the starting / ending month-year.</p>
+  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer name, policy number, amount, and the starting / ending date.</p>
     <form id="licf" autocomplete="off">
       <div class="row2"><div class="field"><label>Customer Name</label><input class="input" name="name" maxlength="200" autocomplete="off" value="${esc(x ? x.name : '')}"></div>
         <div class="field"><label>Policy Number</label><input class="input" name="policyNo" maxlength="80" autocomplete="off" value="${esc(x ? x.policyNo : '')}"></div></div>
       <div class="field"><label>Amount</label><input class="input" name="amount" type="number" min="0" step="0.01" inputmode="decimal" value="${x && x.amount ? x.amount : ''}"></div>
       <div class="row2">
-        <div class="field"><label>Starting Month</label><select class="select" name="startMonth"><option value="">—</option>${mOpts(x ? x.startMonth : 0)}</select></div>
-        <div class="field"><label>Starting Year</label><select class="select" name="startYear"><option value="">—</option>${yOpts(x ? x.startYear : 0)}</select></div>
-      </div>
-      <div class="row2">
-        <div class="field"><label>Ending Month</label><select class="select" name="endMonth"><option value="">—</option>${mOpts(x ? x.endMonth : 0)}</select></div>
-        <div class="field"><label>Ending Year</label><select class="select" name="endYear"><option value="">—</option>${yOpts(x ? x.endYear : 0)}</select></div>
+        <div class="field"><label>Starting Date</label><input class="input" type="date" name="startDate" value="${esc(x ? x.startDate : '')}"></div>
+        <div class="field"><label>Ending Date</label><input class="input" type="date" name="endDate" value="${esc(x ? x.endDate : '')}"></div>
       </div>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
@@ -1994,6 +2028,23 @@ async function licDel(id){ if (!can('lic')) return deny();
   const x = S.d.lic.find(e => e.id === id); if (!x) return;
   if (!await confirmBox('Delete this policy?', `${x.name || x.policyNo || 'This entry'} will be removed from your sheet.`, 'Delete', true)) return;
   try { await api('deleteLic', { id }); S.d.lic = S.d.lic.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+async function licExport(fmt){
+  if (!(S.d.lic || []).length) return toast('No policies to export', true);
+  doExport('lic', fmt);
+}
+/* live tick: updates every "Time Left" cell in place, once a second, without re-rendering the page */
+let licTimer = null;
+function licTick(){
+  document.querySelectorAll('.lic-cd').forEach(el => {
+    const c = licCountdown(el.dataset.end || '');
+    el.textContent = c.text; el.className = 'lic-cd ' + (c.cls || '');
+  });
+}
+function startLic(){
+  clearInterval(licTimer); licTimer = null;
+  if (!document.querySelector('.lic-cd')) return;
+  licTick(); licTimer = setInterval(licTick, 1000);
 }
 
 /* =====================================================================
@@ -2360,7 +2411,8 @@ function exPrep(){
   const wMonList = Object.values(wMon).sort((a, b) => a.k.localeCompare(b.k)).map(o => ({ k:o.k, n:o.n, days:o.days.size }));
   const wProdList = Object.entries(wProd).sort((a, b) => b[1] - a[1]);
   const pw = [...(S.d.passwords || [])].sort((a, b) => (a.url || '').toLowerCase().localeCompare((b.url || '').toLowerCase()));
-  return { s, e, y, sts, sm, months, yt, totalDays, log, led, inc, exp, bal, catList, monList, work, wMonList, wProdList, wDays:wDays.size, pw };
+  const lic = [...(S.d.lic || [])].sort((a, b) => (a.endDate || '9999').localeCompare(b.endDate || '9999'));
+  return { s, e, y, sts, sm, months, yt, totalDays, log, led, inc, exp, bal, catList, monList, work, wMonList, wProdList, wDays:wDays.size, pw, lic };
 }
 
 /* ---------- EXCEL helpers ---------- */
@@ -2626,15 +2678,36 @@ function pdfPasswords(P, d, first){
     body:d.pw.map((x, i) => [i + 1, x.url, x.user, x.pass].map(PT)),
     styles:{ fontSize:9 }, columnStyles:{ 0:{ cellWidth:12, halign:'center' }, 1:{ cellWidth:95 }, 2:{ cellWidth:80 }, 3:{ cellWidth:80 } } });
 }
+function licStatusPlain(endDate){ return licCountdown(endDate).status || '—'; }
+function xlLic(wb, d){
+  const ws = xSheet(wb, 'LIC Policies', 7, [26, 20, 16, 14, 14, 16, 14], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
+  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Amount', 'Starting Date', 'Ending Date', 'Status']);
+  d.lic.forEach((x, i) => { const row = ws.getRow(5 + i), z = i % 2 ? X.zebra : null;
+    xCell(row.getCell(1), i + 1, { h:'center', fill:z });
+    xCell(row.getCell(2), x.name, { h:'left', fill:z });
+    xCell(row.getCell(3), x.policyNo, { h:'left', fill:z, fmt:'@' });
+    xCell(row.getCell(4), x.amount, { h:'right', fill:z, fmt:XM() });
+    xCell(row.getCell(5), xDate(x.startDate), { h:'left', fill:z, fmt:x.startDate ? 'dd-mmm-yyyy' : '@' });
+    xCell(row.getCell(6), xDate(x.endDate), { h:'left', fill:z, fmt:x.endDate ? 'dd-mmm-yyyy' : '@' });
+    const st = licStatusPlain(x.endDate);
+    xCell(row.getCell(7), st, { h:'center', fill:z, bold:true, color:st === 'Expired' ? X.bad : st === 'Expiring soon' ? 'FFB45309' : X.good }); });
+  if (d.lic.length) ws.autoFilter = { from:'A4', to:`G${4 + d.lic.length}` };
+}
+function pdfLic(P, d, first){
+  const y = pdfStart(P, 'LIC Policies', `${d.lic.length} policies   |   Generated ${STAMP()}`, 'l', first);
+  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy Number', 'Amount', 'Starting Date', 'Ending Date', 'Status']],
+    body:d.lic.map((x, i) => [i + 1, x.name, x.policyNo, x.amount ? PM(x.amount) : '—', x.startDate || '—', x.endDate || '—', licStatusPlain(x.endDate)].map(PT)),
+    styles:{ fontSize:9 }, columnStyles:{ 0:{ cellWidth:10, halign:'center' }, 1:{ cellWidth:70 }, 2:{ cellWidth:50 }, 3:{ cellWidth:40, halign:'right' }, 4:{ cellWidth:40 }, 5:{ cellWidth:40 }, 6:{ cellWidth:40, halign:'center' } } });
+}
 
 /* ---------- entry point ---------- */
 async function doExport(kind, fmt){
   if (S.exBusy) return; S.exBusy = true;
   toast('Preparing your ' + (fmt === 'pdf' ? 'PDF' : 'Excel') + ' file…');
   try{
-    const d = exPrep(), names = { att:`KS-attendance-${(d.e.name || 'employee').replace(/[^\w\u0900-\u097F-]+/g,'_')}-${d.y}`, exp:'KS-expense-ledger', work:'KS-work-record', pw:'KS-passwords', all:'KS-all-data' };
+    const d = exPrep(), names = { att:`KS-attendance-${(d.e.name || 'employee').replace(/[^\w\u0900-\u097F-]+/g,'_')}-${d.y}`, exp:'KS-expense-ledger', work:'KS-work-record', pw:'KS-passwords', lic:'KS-lic-policies', all:'KS-all-data' };
     const PP = perms(), inc = { att:(kind === 'att' || kind === 'all') && PP.att !== 'none', exp:(kind === 'exp' || kind === 'all') && PP.exp !== 'none', work:(kind === 'work' || kind === 'all') && PP.work !== 'none' };
-    if (!inc.att && !inc.exp && !inc.work && kind !== 'pw'){ toast('Nothing to export for your account', true); return; }
+    if (!inc.att && !inc.exp && !inc.work && kind !== 'pw' && kind !== 'lic'){ toast('Nothing to export for your account', true); return; }
     if (fmt === 'pdf'){
       await needPdf();
       const P = { doc:new window.jspdf.jsPDF({ orientation:(inc.att ? 'l' : inc.exp ? 'p' : 'l'), unit:'mm', format:'a4' }) };
@@ -2643,6 +2716,7 @@ async function doExport(kind, fmt){
       if (inc.exp){ pdfLedger(P, d, first); first = false; }
       if (inc.work){ pdfWork(P, d, first); first = false; }
       if (kind === 'pw'){ pdfPasswords(P, d, first); first = false; }
+      if (kind === 'lic'){ pdfLic(P, d, first); first = false; }
       pdfFooter(P.doc); saveBlob(names[kind] + '.pdf', P.doc.output('blob'));
     } else {
       await needExcel();
@@ -2651,6 +2725,7 @@ async function doExport(kind, fmt){
       if (inc.exp){ xlLedger(wb, d); xlLedgerSummary(wb, d); }
       if (inc.work){ xlWork(wb, d); xlWorkSummary(wb, d); }
       if (kind === 'pw') xlPasswords(wb, d);
+      if (kind === 'lic') xlLic(wb, d);
       const buf = await wb.xlsx.writeBuffer();
       saveBlob(names[kind] + '.xlsx', new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     }
