@@ -81,11 +81,10 @@ function makeApp(store, env) {
   function calRun(jobs) {            // background, one by one - never blocks the app's own requests
     jobs.forEach(j => { calChain = calChain.then(() => calDo(j)).catch(e => console.warn('Calendar sync:', e.message)); });
   }
-  const page = (code, msg, ttl) => ({ code, html: '<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:32px;max-width:480px;margin:auto"><h2>' +
-    (code === 200 ? (ttl || '✅ Google Calendar connected') : '⚠️ Could not connect') + '</h2><p>' + String(msg).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + '</p></body>' });
+  const page = (code, msg) => ({ code, html: '<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:32px;max-width:480px;margin:auto"><h2>' +
+    (code === 200 ? '✅ Google Calendar connected' : '⚠️ Could not connect') + '</h2><p>' + String(msg).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + '</p></body>' });
   async function runOauth(q) {
     if (q.error) return page(400, 'Google said: ' + q.error);
-    if (drvCheck(q.state)) return runDriveOauth(q);
     const uid = calCheck(q.state); if (!uid) return page(400, 'This link expired. Go back to the app and click "Connect Google Calendar" again.');
     if (!globalThis.CAL_CFG_.ready) return page(400, 'Calendar sync is not configured on the server.');
     const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -227,10 +226,7 @@ function makeApp(store, env) {
   }
   function vcFinish(c, by, reason) {
     if (c.state === 'ended') return;
-    const wasRinging = c.state === 'ringing';
     c.state = 'ended'; c.endedBy = by; c.reason = reason; c.endAt = Date.now();
-    if (wasRinging && (reason === 'missed' || reason === 'cancelled'))        // nobody picked up: leave a "missed call" on the phone
-      pushToUser(c.to, { title: '📵 Missed ' + (c.kind === 'video' ? 'video' : 'voice') + ' call', body: 'from ' + c.fromName, tag: 'call', url: './?go=chat', kind: 'missed', ts: Date.now() }, { ttl: 3600 });
     if (vbusy.get(c.from) === c.id) vbusy.delete(c.from);
     if (vbusy.get(c.to) === c.id) vbusy.delete(c.to);
   }
@@ -249,7 +245,6 @@ function makeApp(store, env) {
       const c = { id, from: uid, to, fromName: (me && (me.name || me.username)) || 'Someone', kind, offer: vcSdp(req.offer), answer: null,
         state: 'ringing', t0: now, seen: { from: now, to: now }, endedBy: '', reason: '', endAt: 0 };
       vcalls.set(id, c); vbusy.set(uid, id); vbusy.set(to, id);
-      pushToUser(to, { title: kind === 'video' ? '📹 Incoming video call' : '📞 Incoming voice call', body: c.fromName + ' is calling you', tag: 'call', url: './?go=chat', kind: 'call', callId: id, ts: now }, { ttl: 45, urgency: 'high' });   // rings even if the app is closed
       return { ok: true, id };
     }
     if (a === 'callPoll') {
@@ -652,272 +647,6 @@ function makeApp(store, env) {
     return { code: 200, u, body: r.body };
   }
 
-  // ---------- Chat photos / videos -> the admin's Google Drive (OAuth, scope drive.file: the app only sees files it made itself) ----------
-  // Media is NOT stored in the sheet: a chat message only carries a small marker  [[KSMEDIA:{...}]]  with the Drive file id.
-  const MEDIA_ACTIONS = new Set(['driveStatus', 'driveConnect', 'driveOff', 'mediaPass']);
-  const MEDIA_MAX = Number(env.MEDIA_MAX_MB || 25) * 1048576;
-  const drvState = () => { const p = 'ADMIN|' + (Date.now() + 600000) + '|' + crypto.randomBytes(6).toString('hex'); return Buffer.from(p).toString('base64url') + '.' + sign('drv:' + p); };
-  function drvCheck(st) { const [b, g] = String(st || '').split('.'); if (!b || !g) return false;
-    const p = Buffer.from(b, 'base64url').toString(), good = sign('drv:' + p);
-    if (g.length !== good.length || !crypto.timingSafeEqual(Buffer.from(g), Buffer.from(good))) return false;
-    return Number(p.split('|')[1]) > Date.now(); }
-  const drvProps = () => globalThis.PropertiesService.getScriptProperties();
-  const drvCache = { tok: '', exp: 0 };
-  const passSig = (uid, exp) => sign('mpass:' + uid + '|' + exp);
-  function passCheck(p) { const [uid, exp, sg] = String(p || '').split('.'); if (!uid || !sg) return '';
-    const good = passSig(uid, exp); if (sg.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sg), Buffer.from(good))) return '';
-    return Number(exp) > Date.now() ? uid : ''; }
-  async function runDriveOauth(q) {
-    if (!globalThis.CAL_CFG_.ready) return page(400, 'Google sign-in is not configured on the server (CAL_CLIENT_ID / CAL_CLIENT_SECRET / PUBLIC_URL).');
-    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ code: q.code || '', client_id: env.CAL_CLIENT_ID, client_secret: env.CAL_CLIENT_SECRET, redirect_uri: globalThis.CAL_CFG_.redirect, grant_type: 'authorization_code' }) });
-    const j = await r.json().catch(() => ({}));
-    if (!j.access_token) return page(400, j.error_description || j.error || 'Google did not return a token.');
-    if (!j.refresh_token) return page(400, 'Google did not give offline access. Remove this app from myaccount.google.com/permissions and connect again.');
-    let email = ''; try { email = (await (await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: 'Bearer ' + j.access_token } })).json()).email || ''; } catch (e) {}
-    await withWb(() => { const P = drvProps(); P.setProperty('DRV_TOK', enc(j.refresh_token)); P.setProperty('DRV_META', JSON.stringify({ email, at: Date.now() })); P.setProperty('DRV_FOLDER', ''); });
-    drvCache.tok = ''; drvCache.exp = 0;
-    return page(200, (email ? email + ' is' : 'Your Google Drive is') + ' now linked. Chat photos and videos will be saved there. Close this tab and go back to the app.', '✅ Google Drive connected');
-  }
-  async function drvAccess() {
-    if (drvCache.tok && drvCache.exp > Date.now() + 30000) return drvCache.tok;
-    const refresh = await withWb(() => dec(drvProps().getProperty('DRV_TOK') || ''));
-    if (!refresh) globalThis.fail_('Google Drive is not connected yet. The main admin must connect it in Settings > Google Drive.', 'NODRIVE');
-    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: env.CAL_CLIENT_ID, client_secret: env.CAL_CLIENT_SECRET, refresh_token: refresh, grant_type: 'refresh_token' }) });
-    const j = await r.json().catch(() => ({}));
-    if (!j.access_token) globalThis.fail_('Google Drive access was lost (' + (j.error || 'unknown') + '). The main admin must connect Google Drive again.', 'NODRIVE');
-    drvCache.tok = j.access_token; drvCache.exp = Date.now() + (j.expires_in || 3600) * 1000; return drvCache.tok;
-  }
-  async function drvFolder(tok, force) {
-    let id = force ? '' : await withWb(() => drvProps().getProperty('DRV_FOLDER') || '');
-    if (id) return id;
-    const r = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', { method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'KS Chat Media', mimeType: 'application/vnd.google-apps.folder' }) });
-    const j = await r.json().catch(() => ({}));
-    if (!j.id) globalThis.fail_('Could not create the Drive folder: ' + ((j.error && j.error.message) || r.status), 'DRIVE');
-    await withWb(() => drvProps().setProperty('DRV_FOLDER', j.id)); return j.id;
-  }
-  async function mediaRoute(req) {
-    const a = req.action, uid = updWho(req.token);
-    if (a === 'mediaPass') { const exp = Date.now() + 6 * 3600000; return { ok: true, pass: uid + '.' + exp + '.' + passSig(uid, exp), exp }; }
-    if (uid !== 'ADMIN') globalThis.fail_('Only the main admin can change this.', 'PERM');
-    const P = drvProps();
-    if (a === 'driveStatus') { let m = {}; try { m = JSON.parse(P.getProperty('DRV_META') || '{}'); } catch (e) {}
-      return { ok: true, ready: globalThis.CAL_CFG_.ready, connected: !!P.getProperty('DRV_TOK'), email: m.email || '', max: MEDIA_MAX / 1048576 }; }
-    if (a === 'driveConnect') {
-      if (!globalThis.CAL_CFG_.ready) globalThis.fail_('Google sign-in is not set up on Render (CAL_CLIENT_ID, CAL_CLIENT_SECRET, PUBLIC_URL).', 'DRIVE');
-      const u = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({ client_id: env.CAL_CLIENT_ID, redirect_uri: globalThis.CAL_CFG_.redirect, response_type: 'code',
-        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email', access_type: 'offline', prompt: 'consent', state: drvState() });
-      return { ok: true, url: u };
-    }
-    if (a === 'driveOff') { P.setProperty('DRV_TOK', ''); P.setProperty('DRV_META', ''); P.setProperty('DRV_FOLDER', ''); drvCache.tok = ''; drvCache.exp = 0; return { ok: true, connected: false }; }
-  }
-  const mediaName = n => String(n || 'file').split(/[\\\/]/).pop().replace(/[^\w.\- ()]/g, '_').replace(/^\.+/, '').trim().slice(-80) || 'file';
-  async function mediaUpload(token, q, buf) {
-    const uid = await withWb(() => {
-      const u = updWho(token), to = String(q.to || '');
-      const ok = /^CG/i.test(to) ? !!globalThis.chatGroupMembers_(to, u) : !!globalThis.chatCanSee_(u, to);
-      if (!ok) globalThis.fail_('You cannot send to this chat.', 'MEDIA');
-      return u;
-    });
-    const mime = String(q.mime || '').toLowerCase(), kind = /^image\/(jpeg|png|webp|gif|heic|heif)$/.test(mime) ? 'img' : /^video\/(mp4|webm|quicktime|3gpp|x-matroska)$/.test(mime) ? 'vid' : '';
-    if (!kind) globalThis.fail_('Only photos and videos can be sent.', 'MEDIA');
-    if (!buf.length) globalThis.fail_('The file is empty.', 'MEDIA');
-    if (buf.length > MEDIA_MAX) globalThis.fail_('The file is too big (max ' + (MEDIA_MAX / 1048576) + ' MB).', 'MEDIA');
-    const tok = await drvAccess(), name = Date.now() + '_' + uid + '_' + mediaName(q.name);
-    for (let tryNo = 0; tryNo < 2; tryNo++) {
-      const folder = await drvFolder(tok, tryNo > 0), bd = 'ks' + crypto.randomBytes(8).toString('hex');
-      const body = Buffer.concat([Buffer.from('--' + bd + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify({ name, parents: [folder], mimeType: mime }) + '\r\n--' + bd + '\r\nContent-Type: ' + mime + '\r\n\r\n'), buf, Buffer.from('\r\n--' + bd + '--')]);
-      const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'multipart/related; boundary=' + bd }, body });
-      const j = await r.json().catch(() => ({}));
-      if (j.id) return { ok: true, id: j.id, k: kind, n: mediaName(q.name), m: mime, s: buf.length };
-      if (r.status === 404 && tryNo === 0) continue;                                   // the folder was deleted in Drive: make a new one
-      globalThis.fail_('Google Drive refused the file: ' + ((j.error && j.error.message) || r.status), 'DRIVE');
-    }
-  }
-  async function mediaOpen(q, range) {
-    const uid = passCheck(q.p), id = String(q.id || '');
-    if (!uid) return { code: 403, error: 'This link expired. Reopen the chat.' };
-    if (!/^[\w-]{10,90}$/.test(id)) return { code: 400, error: 'Bad file.' };
-    const mt = await withWb(() => {                                              // may this person see a message that carries this file?
-      const rows = globalThis.chatRows_(); let found = '';
-      for (let i = rows.length - 1; i >= 0 && !found; i--) {
-        const r = rows[i]; if (r.text.indexOf(id) < 0 || r.text.indexOf('[[KSMEDIA:') < 0) continue;
-        const mine = r.from === uid || r.to === uid || (/^CG/i.test(r.to) && globalThis.chatGroupMembers_(r.to, uid));
-        if (mine) { try { found = JSON.parse(r.text.slice(r.text.indexOf('[[KSMEDIA:') + 10, r.text.lastIndexOf(']]'))).m || 'application/octet-stream'; } catch (e) { found = 'application/octet-stream'; } }
-      }
-      return found;
-    });
-    if (!mt) return { code: 404, error: 'File not found.' };
-    const tok = await drvAccess(), h = { Authorization: 'Bearer ' + tok }; if (range) h.Range = range;
-    const r = await fetch('https://www.googleapis.com/drive/v3/files/' + id + '?alt=media', { headers: h });
-    if (!(r.status === 200 || r.status === 206) || !r.body) return { code: 502, error: 'Google Drive could not give this file (' + r.status + ').' };
-    const out = { 'Content-Type': mt, 'Cache-Control': 'private, max-age=3600', 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff' };
-    ['content-length', 'content-range'].forEach(k => { const v = r.headers.get(k); if (v) out[k] = v; });
-    return { code: r.status, headers: out, body: r.body };
-  }
-
-  // ---------- Push notifications (Web Push / VAPID): calls, payment + attendance reminders ----------
-  // They reach the phone even when the app is closed. Each device's subscription is kept in the sheet's _App Properties tab
-  // (key PUSH_<userId>), so a Render restart loses nothing. Needs the "web-push" npm package (see package.json).
-  const PUSH_ACTIONS = new Set(['pushKey', 'pushSubscribe', 'pushOff', 'pushTest', 'pushPrefs']);
-  let WP = null; try { WP = require('web-push'); } catch (e) { console.warn('Push: the "web-push" package is missing - run npm install. Notifications are off.'); }
-  const PUSH_ATT_HOUR = Number(env.PUSH_ATT_HOUR || 12), PUSH_ATT_END = Number(env.PUSH_ATT_END_HOUR || 19);   // remind from 12:00 until 19:00
-  const PUSH_ATT_EVERY = Number(env.PUSH_ATT_REPEAT_MIN || 120) * 60000;                                       // ... again every 2 hours while still not marked
-  const PUSH_PAY_HOUR = Number(env.PUSH_PAY_HOUR || 10);                                                        // payment reminders go out at 10:00
-  const pushProps = () => globalThis.PropertiesService.getScriptProperties();
-  let vapid = null;
-  function pushVapid(create) {          // keys: env VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY, else made once and saved in the sheet
-    if (vapid) return vapid;
-    if (!WP) return null;
-    let pub = env.VAPID_PUBLIC_KEY || '', priv = env.VAPID_PRIVATE_KEY || '';
-    if (!pub || !priv) {
-      const P = pushProps(); pub = P.getProperty('VAPID_PUB') || ''; priv = P.getProperty('VAPID_PRIV') || '';
-      if (!pub || !priv) {
-        if (!create) return null;       // keys are only ever created inside the request queue (never from the call fast-path)
-        const k = crypto.createECDH('prime256v1'); k.generateKeys();
-        const pad = b => (b.length >= 32 ? b : Buffer.concat([Buffer.alloc(32 - b.length), b]));
-        pub = k.getPublicKey().toString('base64url'); priv = pad(k.getPrivateKey()).toString('base64url');
-        P.setProperty('VAPID_PUB', pub); P.setProperty('VAPID_PRIV', priv);
-      }
-    }
-    WP.setVapidDetails(env.VAPID_SUBJECT || (publicUrl.startsWith('https://') ? publicUrl : 'mailto:' + (env.SMTP_USER || 'admin@example.com')), pub, priv);
-    vapid = { pub, priv }; return vapid;
-  }
-  const pushBlank = () => ({ s: [], att: true, pay: true });
-  const pushRead = uid => { try { const o = JSON.parse(pushProps().getProperty('PUSH_' + uid) || 'null'); return o && Array.isArray(o.s) ? Object.assign(pushBlank(), o) : pushBlank(); } catch (e) { return pushBlank(); } };
-  const pushWrite = (uid, o) => pushProps().setProperty('PUSH_' + uid, JSON.stringify(o));
-  async function pushToUser(uid, payload, opt) {        // never throws; resolves to the number of phones reached
-    try {
-      if (!WP || !pushVapid(false)) return 0;
-      const rec = pushRead(uid); if (!rec.s.length) return 0;
-      const body = JSON.stringify(payload), dead = []; let sent = 0;
-      await Promise.all(rec.s.map(async s => {
-        try { await WP.sendNotification({ endpoint: s.e, keys: s.k }, body, { TTL: (opt && opt.ttl) || 3600, urgency: (opt && opt.urgency) || 'normal' }); sent++; }
-        catch (e) { if (e.statusCode === 404 || e.statusCode === 410) dead.push(s.e); else console.warn('Push failed:', e.statusCode || e.message); }
-      }));
-      if (dead.length) withWb(() => { const r = pushRead(uid); r.s = r.s.filter(x => !dead.includes(x.e)); pushWrite(uid, r); }).catch(() => {});   // phone uninstalled / revoked
-      return sent;
-    } catch (e) { console.warn('Push error:', e.message); return 0; }
-  }
-  async function pushRoute(req) {
-    const a = req.action;
-    if (!WP) globalThis.fail_('Notifications are not installed on the server yet. Deploy package.json (it adds web-push) so Render runs npm install.', 'PUSH');
-    if (a === 'pushKey') return { ok: true, key: pushVapid(true).pub };
-    const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
-    const acc = globalThis.getAccount_(uid, globalThis.readSettings_().values);
-    if (!acc || !acc.active) globalThis.fail_('This account is disabled. Please contact the admin.', 'DISABLED');
-    const rec = pushRead(uid), info = () => ({ ok: true, att: rec.att !== false, pay: rec.pay !== false, devices: rec.s.length });
-    if (a === 'pushSubscribe') {
-      const s = req.sub || {}, k = s.keys || {};
-      if (!/^https:\/\//.test(String(s.endpoint || '')) || String(s.endpoint).length > 800 || !k.p256dh || !k.auth) globalThis.fail_('Bad notification registration. Please try again.', 'PUSH');
-      pushVapid(true);
-      const all = pushProps().getProperties();             // one phone = one account: take this phone away from anybody else
-      for (const key of Object.keys(all)) {
-        if (!key.startsWith('PUSH_') || key === 'PUSH_' + uid) continue;
-        try { const o = JSON.parse(all[key]); if (o.s && o.s.some(x => x.e === s.endpoint)) { o.s = o.s.filter(x => x.e !== s.endpoint); pushProps().setProperty(key, JSON.stringify(o)); } } catch (e) {}
-      }
-      rec.s = rec.s.filter(x => x.e !== s.endpoint);
-      rec.s.push({ e: s.endpoint, k: { p256dh: String(k.p256dh), auth: String(k.auth) }, ua: String(req.ua || '').slice(0, 100), at: Date.now() });
-      if (rec.s.length > 6) rec.s = rec.s.slice(-6);
-      pushWrite(uid, rec); return info();
-    }
-    if (a === 'pushOff') { rec.s = rec.s.filter(x => x.e !== String(req.endpoint || '')); pushWrite(uid, rec); return info(); }
-    if (a === 'pushPrefs') {
-      if (req.att !== undefined) rec.att = !!req.att;
-      if (req.pay !== undefined) rec.pay = !!req.pay;
-      if (req.att !== undefined || req.pay !== undefined) pushWrite(uid, rec);
-      return info();
-    }
-    if (a === 'pushTest') {
-      const n = await pushToUser(uid, { title: '🔔 Notifications are working', body: 'You will get calls and reminders here, even when the app is closed.', tag: 'test', url: './', kind: 'test', ts: Date.now() }, { ttl: 300 });
-      return { ok: true, sent: n };
-    }
-  }
-  // ---- reminders: a timer (started at the bottom of this file) calls pushTick every couple of minutes ----
-  const tzNow = () => {
-    const p = {}; new Intl.DateTimeFormat('en-CA', { timeZone: TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-      .formatToParts(new Date()).forEach(x => { p[x.type] = x.value; });
-    return { date: p.year + '-' + p.month + '-' + p.day, y: +p.year, m: +p.month, d: +p.day, h: +p.hour };
-  };
-  const dayDiff = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
-  const licAdd = (iso, n) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); if (!m) return ''; const mo = +m[2] - 1 + n, last = new Date(Date.UTC(+m[1], mo + 1, 0)).getUTCDate(); return new Date(Date.UTC(+m[1], mo, Math.min(+m[3], last))).toISOString().slice(0, 10); };
-  const LIC_STEP = { monthly: 1, quarterly: 3, halfyearly: 6, yearly: 12 };
-  function licNext(x, today) {          // same rule as the LIC tab in app.js
-    const anchor = x.dueDate || x.startDate, step = LIC_STEP[x.freq];
-    if (!anchor || (!step && !x.dueDate)) return '';
-    let due = anchor;
-    if (step) { for (let k = 1; due < today && k < 2400; k++) due = licAdd(anchor, k * step); }
-    else if (due < today) return '';
-    if (x.endDate && due > x.endDate) return '';
-    return due;
-  }
-  const inr = n => '₹' + Number(n).toLocaleString('en-IN');
-  async function pushTick() {
-    if (!WP) return;
-    const sends = await withWb(() => {
-      const P = pushProps(), all = P.getProperties(), out = [];
-      const ids = Object.keys(all).filter(k => k.startsWith('PUSH_')).map(k => k.slice(5));
-      if (!ids.length) return out;
-      pushVapid(true);
-      const now = Date.now(), t = tzNow(), S0 = globalThis.readSettings_();
-      let st = {}; try { st = JSON.parse(all.PUSHST || '{}'); } catch (e) {}
-      const before = JSON.stringify(st);
-      const fmt = new Intl.DateTimeFormat('en-IN', { timeZone: TZ, day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-      for (const uid of ids) {
-        const rec = pushRead(uid); if (!rec.s.length) continue;
-        let acc; try { acc = globalThis.getAccount_(uid, S0.values); } catch (e) { continue; }
-        if (!acc || !acc.active) continue;
-        // 1) access payment: from 7 days before the due time until 7 days after, once a day at PUSH_PAY_HOUR
-        if (rec.pay !== false && acc.payDue && t.h >= PUSH_PAY_HOUR && st['pay:' + uid] !== t.date) {
-          const due = globalThis.parseDue_(acc.payDue);
-          if (!isNaN(due)) {
-            const left = due - now, days = left / 86400000, when = fmt.format(new Date(due));
-            if (days <= 7 && days > -7) {
-              const hrs = Math.max(1, Math.round(left / 3600000)), d = Math.max(1, Math.floor(days));
-              out.push({ uid, opt: { ttl: 6 * 3600 }, payload: left <= 0
-                ? { title: '⛔ Payment pending', body: 'Your access ended on ' + when + '. Please pay to continue using the app.', tag: 'pay', url: './', kind: 'pay', ts: now }
-                : { title: '⏳ Payment reminder', body: 'Your access expires ' + (left < 86400000 ? 'in about ' + hrs + (hrs === 1 ? ' hour' : ' hours') : 'in ' + d + (d === 1 ? ' day' : ' days')) + ' (' + when + '). Please pay to keep using the app.', tag: 'pay', url: './', kind: 'pay', ts: now } });
-              st['pay:' + uid] = t.date;
-            }
-          }
-        }
-        // the next two need this person's own data, so they are read the same way a normal request reads it
-        try { globalThis.buildCtx_(uid, ''); } catch (e) { continue; }    // disabled / payment-pending accounts get no data reminders
-        const perms = globalThis.CTX.perms || {};
-        // 2) attendance not marked: from PUSH_ATT_HOUR (12:00), again every PUSH_ATT_REPEAT_MIN until PUSH_ATT_END_HOUR
-        if (rec.att !== false && perms.att === 'edit' && t.h >= PUSH_ATT_HOUR && t.h < PUSH_ATT_END && now - (st['att:' + uid] || 0) >= PUSH_ATT_EVERY - 30000
-            && Number(globalThis.publicSettings_(S0).year) === t.y) {
-          const emps = globalThis.readEmployees_(), att = globalThis.attAll_();
-          const miss = emps.filter(e => !(((att[e.id] || {})[t.m] || {})[t.d]));
-          if (miss.length) {
-            out.push({ uid, opt: { ttl: 3 * 3600 }, payload: { title: '🗓️ Attendance not marked', tag: 'att', url: './?go=attendance', kind: 'att', ts: now,
-              body: emps.length === 1 ? 'You have not marked today’s attendance yet.' : 'Not marked today: ' + miss.slice(0, 3).map(e => e.name || 'Employee').join(', ') + (miss.length > 3 ? ' +' + (miss.length - 3) + ' more' : '') } });
-            st['att:' + uid] = now;
-          }
-        }
-        // 3) LIC premiums falling due in 7 / 3 / 1 days or today, once a day at PUSH_PAY_HOUR
-        if (rec.pay !== false && perms.lic && perms.lic !== 'none' && t.h >= PUSH_PAY_HOUR && st['lic:' + uid] !== t.date) {
-          st['lic:' + uid] = t.date;
-          const due = globalThis.readLic_().map(x => ({ x, days: dayDiff(t.date, licNext(x, t.date) || '1970-01-01') })).filter(o => o.days >= 0 && o.days < 20000 && [7, 3, 1, 0].includes(o.days)).sort((a, b) => a.days - b.days);
-          if (due.length) {
-            const word = d => d === 0 ? 'today' : d === 1 ? 'tomorrow' : 'in ' + d + ' days';
-            out.push({ uid, opt: { ttl: 6 * 3600 }, payload: { title: '🔔 LIC premium due ' + word(due[0].days), tag: 'lic', url: './?go=lic', kind: 'pay', ts: now,
-              body: due.slice(0, 3).map(o => (o.x.name || o.x.policyNo || 'Policy') + (o.x.amount ? ' · ' + inr(o.x.amount) : '') + ' · ' + word(o.days)).join('\n') + (due.length > 3 ? '\n+' + (due.length - 3) + ' more' : '') } });
-          }
-        }
-      }
-      for (const k of Object.keys(st)) {                      // forget old bookkeeping
-        const v = st[k], uid = k.slice(k.indexOf(':') + 1);
-        if (!ids.includes(uid) || (typeof v === 'number' && v < now - 3 * 86400000) || (typeof v === 'string' && v !== t.date)) delete st[k];
-      }
-      if (JSON.stringify(st) !== before) P.setProperty('PUSHST', JSON.stringify(st));
-      return out;
-    });
-    await Promise.all(sends.map(s => pushToUser(s.uid, s.payload, s.opt)));
-  }
-
   let chain = Promise.resolve();
   function withWb(fn) {                                                // run fn in the request queue with fresh sheet data, save its changes
     const job = async () => {
@@ -930,32 +659,14 @@ function makeApp(store, env) {
     };
     const p = chain.then(job, job); chain = p.catch(() => {}); return p;
   }
-  const qdone = new Map();                             // qid|token -> the answer already given
   async function run(body) {
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
     rt.delay = 0; rt.mails = []; rt.cal = [];
-    let req, res, qk = '';
-    try {
-      req = JSON.parse(body);
-      qk = req.qid ? String(req.qid).slice(0, 40) + '|' + String(req.token || '') : '';       // an offline entry sent twice (reply got lost) is applied only once
-      if (qk && qdone.has(qk)) return qdone.get(qk);
-      res = DEPLOY_ACTIONS.has(req.action) ? await deployRoute(req) : UPD_ACTIONS.has(req.action) ? await updRoute(req) : PUSH_ACTIONS.has(req.action) ? await pushRoute(req) : MEDIA_ACTIONS.has(req.action) ? await mediaRoute(req) : BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req);
-    }
+    let req, res;
+    try { req = JSON.parse(body); res = DEPLOY_ACTIONS.has(req.action) ? await deployRoute(req) : UPD_ACTIONS.has(req.action) ? await updRoute(req) : BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req); }
     catch (err) { res = { ok: false, error: err.message || String(err), code: err.code || 'ERR' }; }
     if (req && req.action === 'logout') revoked.add(req.token);
-    let msgPush = null;                                       // new chat message -> push to the other person / group members (phone buzzes + sound)
-    try {
-      if (req && req.action === 'chatSend' && res && res.ok && res.message) {
-        const C = globalThis.CTX || {}, to = String(req.to || ''), txt = String(res.message.text || '');
-        const body = txt.indexOf('[[KSLOC:') === 0 ? '📍 Location' : txt.indexOf('[[KSMEDIA:') === 0 ? (/"k":"vid"/.test(txt) ? '🎥 Video' : '📷 Photo') : (txt.length > 90 ? txt.slice(0, 90) + '…' : txt);
-        let targets = [], title = C.name || C.username || 'New message';
-        if (/^CG/i.test(to)) { const gi = globalThis.chatGroupMembers_(to, C.uid); if (gi) { targets = gi.members.map(m => m.id).filter(id => id !== C.uid); title = gi.name + ' · ' + title; } }
-        else targets = [to];
-        msgPush = targets.map(id => ({ uid: id, payload: { title: '💬 ' + title, body, tag: 'msg-' + (/^CG/i.test(to) ? to : C.uid), url: './?go=chat', kind: 'msg', ts: Date.now() } }));
-      }
-    } catch (e) {}
     try { await wb.flush(); } catch (e) { res = { ok: false, error: 'Could not save to the sheet: ' + e.message, code: 'ERR' }; }
-    if (qk && res && res.ok) { qdone.set(qk, res); if (qdone.size > 3000) qdone.delete(qdone.keys().next().value); }
     if (rt.cal.length && !(res && res.ok === false)) {          // attach each user's (decrypted) refresh token, then sync in the background
       const P = globalThis.PropertiesService.getScriptProperties(), tk = {};
       const jobs = rt.cal.map(j => { if (!(j.uid in tk)) tk[j.uid] = dec(P.getProperty('CAL_TOK_' + j.uid) || ''); return Object.assign({}, j, { refresh: tk[j.uid] }); }).filter(j => j.refresh);
@@ -965,7 +676,6 @@ function makeApp(store, env) {
       try { await sendMail(m, env); }
       catch (e) { res = { ok: false, error: 'Could not send the e-mail: ' + e.message }; }
     }
-    if (msgPush) msgPush.forEach(m => pushToUser(m.uid, m.payload, { ttl: 3600, urgency: 'high' }));
     if (rt.delay) await new Promise(r => setTimeout(r, Math.min(rt.delay, 1500)));
     return res;
   }
@@ -975,7 +685,7 @@ function makeApp(store, env) {
     return Promise.resolve().then(() => LUDO_ACTIONS.has(r.action) ? ludoRoute(r) : callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
   };
   const errOut = err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' });
-  return { pushTick, mediaUpload: (token, q, buf) => mediaUpload(token, q, buf).catch(errOut), mediaOpen: (q, range) => mediaOpen(q, range).catch(e => ({ code: 500, error: e.message || 'Error' })), mediaMax: MEDIA_MAX, handle: body => fastCall(body) || (chain = chain.then(() => run(body), () => run(body))),
+  return { handle: body => fastCall(body) || (chain = chain.then(() => run(body), () => run(body))),
            updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
 }
@@ -994,19 +704,6 @@ function start(app, env) {
     const send = (code, obj) => { rs.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, cors)); rs.end(JSON.stringify(obj)); };
     if (rq.method === 'OPTIONS') { rs.writeHead(204, cors); return rs.end(); }
     const url = new URL(rq.url, 'http://x');
-    if (rq.method === 'GET' && url.pathname === '/chat/media' && app.mediaOpen) {           // stream a chat photo / video from Google Drive (supports Range for video)
-      return app.mediaOpen(Object.fromEntries(url.searchParams), rq.headers.range).then(o => {
-        if (!o.body) { rs.writeHead(o.code, { 'Content-Type': 'text/plain; charset=utf-8' }); return rs.end(String(o.error || 'Error')); }
-        rs.writeHead(o.code, Object.assign({}, o.headers, cors));
-        const src = Readable.fromWeb(o.body); src.on('error', () => rs.destroy()); rs.on('close', () => src.destroy()); src.pipe(rs);
-      });
-    }
-    if (rq.method === 'POST' && url.pathname === '/chat/media' && app.mediaUpload) {        // raw photo / video body, session token in the Authorization header
-      const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
-      rq.on('data', c => { n += c.length; if (n > app.mediaMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
-      rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.mediaMax / 1048576) + ' MB).', code: 'MEDIA' } : await app.mediaUpload(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
-      return;
-    }
     if (rq.method === 'GET' && url.pathname === '/updates/download' && app.updOpen) {      // stream an update file to the user
       return app.updOpen(Object.fromEntries(url.searchParams)).then(o => {
         if (o.code !== 200) { rs.writeHead(o.code, { 'Content-Type': 'text/html; charset=utf-8' }); return rs.end('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:32px;max-width:480px;margin:auto"><h2>⚠️ Download failed</h2><p>' + String(o.error).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + '</p></body>'); }
@@ -1042,7 +739,4 @@ if (require.main === module) {
   const { GoogleStore } = require('./google-store');
   const app = makeApp(new GoogleStore({ email, key, sheetId: env.SHEET_ID }), Object.assign({}, env, { GOOGLE_PRIVATE_KEY: key }));
   start(app, env).listen(env.PORT || 3000, () => console.log('API running on port ' + (env.PORT || 3000)));
-  const tickMs = Math.max(30, Number(env.PUSH_TICK_SEC || 120)) * 1000;      // payment / attendance reminders
-  const tick = () => app.pushTick().catch(e => console.warn('Push tick:', e.message));
-  setTimeout(tick, 25000); setInterval(tick, tickMs);
 }

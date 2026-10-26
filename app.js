@@ -46,7 +46,7 @@ const daysIn = (y, m) => new Date(y, m, 0).getDate();
 // When the page is served by Apps Script itself, google.script.run is used.
 // When the file is hosted elsewhere, it falls back to fetch(API_URL).
 const HAS_GAS = typeof google !== 'undefined' && google.script && google.script.run;
-function callServer(body, timeoutMs){
+function callServer(body){
   if (HAS_GAS){
     return new Promise((resolve, reject) => {
       google.script.run
@@ -55,29 +55,16 @@ function callServer(body, timeoutMs){
         .apiCall(JSON.stringify(body));
     });
   }
-  const ctl = (timeoutMs && typeof AbortController !== 'undefined') ? new AbortController() : null;
-  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : 0;
   return fetch(API_URL, {
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},   // avoids CORS pre-flight
-    body: JSON.stringify(body),
-    signal: ctl ? ctl.signal : undefined
-  }).then(r => r.json())
-    .catch(() => { const e = new Error('Cannot reach the server. Check your internet connection.'); e.offline = true; throw e; })   // no network / server asleep / timed out
-    .finally(() => clearTimeout(timer));
+    body: JSON.stringify(body)
+  }).then(r => r.json()).catch(() => { throw new Error('Cannot reach the server. Check the Apps Script deployment (Anyone can access).'); });
 }
 async function api(action, payload = {}){
   busy(true);
   try{
-    const body = { action, token:S.token, asUser:S.as || undefined, ...payload };
-    const canWait = OQ_OK.has(action) && S.me && !HAS_GAS;            // add / edit / delete entries can wait for the network
-    if (canWait){
-      body.qid = oqId();                                              // lets the server ignore a repeat if the first reply was lost
-      if (!navigator.onLine || oqMine().length) return oqEnqueue(action, body, navigator.onLine);   // older offline entries must go first
-    }
-    let j;
-    try { j = await callServer(body, canWait ? 45000 : 0); }
-    catch(e){ if (canWait && e.offline) return oqEnqueue(action, body, false); throw e; }
+    const j = await callServer({ action, token:S.token, asUser:S.as || undefined, ...payload });
     if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; throw e; }
     return j;
   } finally { busy(false); }
@@ -102,14 +89,12 @@ function saveToken(t, remember){
 }
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
-  idb.del('cache'); S.offlineMode = false;            // the saved copy of the data belongs to the person who just left
   clearInterval(syncT); syncT = null; setMenu(false);
   clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
 async function logout(){
-  try { await pushOffHere(); } catch {}               // this phone stops getting this person's notifications
   try { await api('logout'); } catch {}
   forceLogout();
 }
@@ -336,10 +321,9 @@ function showLoginErr(m){ const er = $('#loginErr'); er.textContent = m; er.clas
 
 async function loadAll(){
   let r;
-  if (S.me && navigator.onLine && oqMine().length) await oqFlush(true);   // never show server data that is missing the entries still waiting on this phone
   try { r = await api('getAll'); }
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
-  S.sig = sigOf(r.data); ingest(r.data); cacheSave();
+  S.sig = sigOf(r.data); ingest(r.data);
   if (canAddUsers()) await loadUsers(); else S.users = null;
   if (isAdmin()) await loadGroups(); else S.groups = null;
   applyAccess(); startSync(); licAlert();
@@ -361,7 +345,7 @@ function startSync(){
   if (S.me && S.me.group) syncT = setInterval(syncTick, 10000);
 }
 async function syncTick(){
-  if (!S.d || !S.token || document.hidden || busyN > 0 || document.querySelector('.overlay') || typing() || S.offlineMode || oqMine().length) return;
+  if (!S.d || !S.token || document.hidden || busyN > 0 || document.querySelector('.overlay') || typing()) return;
   let r;
   try { r = await callServer({ action:'getAll', token:S.token, asUser:S.as || undefined }); } catch { return; }
   if (!r || !r.ok || !S.d || document.querySelector('.overlay') || typing()) return;     // never disturb someone who is typing
@@ -397,27 +381,17 @@ function enterApp(){
   refreshUser();
   go(S.view);
   chatStart(); vcStart(); ludoStart();
-  vcTick();                                           // opened from a "calling you" notification: look for the call right now
-  oqFlush(); pushSync();
-  if (isAdmin() && !S.offlineMode) loadLogs();
-  openFromUrl(location.href);                         // a tapped notification can ask for a screen: ?go=attendance
-  try { if (location.search) history.replaceState(null, '', location.pathname + location.hash); } catch {}
+  if (isAdmin()) loadLogs();
 }
-let booted = false;
 async function boot(){
-  if (booted) return; booted = true;
   await bioDetect();
-  await oqLoad();
   const t = store.get(TK);
   let st;
   try { st = await api('status'); }
-  catch(e){
-    if (e.offline && t && await bootOffline(t)) return;       // no network: open with the last saved data
-    showLogin(false, 'Cannot reach the server: ' + e.message); return;
-  }
+  catch(e){ showLogin(false, 'Cannot reach the server: ' + e.message); return; }
   if (t && !st.needsSetup){
     S.token = t;
-    try { await loadAll(); enterApp(); return; } catch(e) { if (e.offline && await bootOffline(t)) return; clearToken(); }
+    try { await loadAll(); enterApp(); return; } catch { clearToken(); }
   }
   showLogin(st.needsSetup, '', st.needsSetupCode);
   if (BIO.ok && bioSaved() && !st.needsSetup) bioLoginGo(true);
@@ -1251,7 +1225,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindPush(); bindDrive(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -2369,8 +2343,6 @@ function vSettings(){
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
   if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
-  grid.insertAdjacentHTML('beforeend', pushCard());
-  if (S.me && S.me.primary && !HAS_GAS) grid.insertAdjacentHTML('beforeend', driveCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
@@ -2893,341 +2865,6 @@ async function doExport(kind, fmt){
   src.after(b);     // right after "Updates" = right above "Settings"
 })();
 
-/* =====================================================================
-   OFFLINE MODE  +  PUSH NOTIFICATIONS
-   - No network: new / edited / deleted entries are kept on the phone (IndexedDB) and sent, in order, when the network is back.
-   - The last data is kept on the phone too, so the app still opens with no network.
-   - sw.js shows push notifications (calls, payment reminders, attendance reminder) even when the app is closed.
-   ===================================================================== */
-const idb = {
-  db:null,
-  open(){
-    if (!this.db) this.db = new Promise((ok, no) => {
-      if (!window.indexedDB) return no(new Error('no storage'));
-      const q = indexedDB.open('ks_offline', 1);
-      q.onupgradeneeded = () => q.result.createObjectStore('kv');
-      q.onsuccess = () => ok(q.result); q.onerror = () => no(q.error);
-    });
-    return this.db;
-  },
-  async get(k){ try { const db = await this.open(); return await new Promise(ok => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => ok(undefined); }); } catch { return undefined; } },
-  async set(k, v){ try { const db = await this.open(); await new Promise(ok => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = t.onerror = t.onabort = () => ok(); }); } catch {} },
-  async del(k){ try { const db = await this.open(); await new Promise(ok => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').delete(k); t.oncomplete = t.onerror = t.onabort = () => ok(); }); } catch {} }
-};
-
-/* ---------- offline queue ---------- */
-const OQ = { list:[], busy:false, snap:null };
-const OQ_ADD = { addExpense:'expense', addWork:'work', addLink:'link', addLic:'lic' };                 // action -> key of the saved item in the reply
-const OQ_UPD = { updateExpense:['addExpense','expense'], updateWork:['addWork','work'], updateLink:['addLink','link'], updateLic:['addLic','lic'] };
-const OQ_DEL = { deleteExpense:1, deleteWork:1, deleteLink:1, deleteLic:1 };
-const OQ_OK = new Set(['setAttendance', 'setTimetable', ...Object.keys(OQ_ADD), ...Object.keys(OQ_UPD), ...Object.keys(OQ_DEL)]);   // saved passwords are deliberately NOT kept on the phone
-const oqId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-const oqMine = () => OQ.list.filter(x => S.me && x.uid === S.me.id);
-const oqSave = () => idb.set('queue', OQ.list);
-async function oqLoad(){ const q = await idb.get('queue'); OQ.list = Array.isArray(q) ? q : []; oqPill(); }
-function oqPill(){
-  let el = document.getElementById('oqPill');
-  const n = oqMine().length, off = !navigator.onLine;
-  if (!n && !off){ if (el) el.remove(); return; }
-  if (!el){ el = document.createElement('div'); el.id = 'oqPill'; el.onclick = () => { oqFlush(); }; document.body.appendChild(el); }
-  el.className = 'oq-pill' + (off ? ' off' : '');
-  el.textContent = off ? '📴 Offline' + (n ? ' · ' + n + ' waiting to sync' : '')
-    : OQ.busy ? '⏳ Syncing ' + n + '…' : '☁️ ' + n + ' waiting to sync · tap to retry';
-}
-function oqEnqueue(action, body, online){
-  const me = S.me.id, id = body.id !== undefined ? String(body.id) : '';
-  const rec = b => { const r = { ...b }; ['action', 'token', 'asUser', 'qid'].forEach(k => delete r[k]); if ('amount' in r) r.amount = Number(r.amount) || 0; return r; };
-  const clean = { ...body }; delete clean.token;
-  let out;
-  if ((OQ_UPD[action] || OQ_DEL[action]) && id.startsWith('tmp_')){            // changing something that was added offline and is not on the server yet
-    const e = OQ.list.find(x => x.tmp === id && x.uid === me);
-    if (!e) throw new Error('This entry is still being saved. Please try again in a moment.');
-    if (OQ_DEL[action]){ OQ.list = OQ.list.filter(x => x !== e); out = { ok:true, queued:true }; }
-    else { Object.assign(e.body, rec(body)); delete e.body.id; out = { ok:true, queued:true, [OQ_UPD[action][1]]:{ ...rec(e.body), id } }; }
-  } else {
-    const e = { id:body.qid, uid:me, body:clean, t:Date.now() };
-    if (OQ_ADD[action]){ e.tmp = 'tmp_' + oqId(); out = { ok:true, queued:true, [OQ_ADD[action]]:{ ...rec(body), id:e.tmp } }; }
-    else if (OQ_UPD[action]) out = { ok:true, queued:true, [OQ_UPD[action][1]]:rec(body) };
-    else out = { ok:true, queued:true };
-    OQ.list.push(e);
-  }
-  oqSave(); oqPill();
-  clearTimeout(OQ.snap); OQ.snap = setTimeout(() => cacheSave(), 900);          // after the screen code has applied the change, keep the copy
-  if (online) setTimeout(oqFlush, 50); else toast('📴 No network — saved on this phone, it will sync by itself');
-  return out;
-}
-async function oqFlush(fromLoad){
-  if (OQ.busy || !S.token || !S.me || !navigator.onLine || !oqMine().length) return;
-  OQ.busy = true; oqPill();
-  let done = 0, authErr = null; const bad = [];
-  try{
-    for (;;){
-      const e = oqMine()[0]; if (!e) break;
-      let j;
-      try { j = await callServer({ ...e.body, token:S.token, qid:e.id }, 45000); }
-      catch(err){ break; }                                                      // still no network: keep everything, try again later
-      if (!j.ok && (j.code === 'AUTH' || j.code === 'PAYDUE')){ authErr = Object.assign(new Error(j.error || 'Please sign in again.'), { code:j.code }); break; }
-      if (!j.ok) bad.push(j.error || 'The server refused it');
-      OQ.list = OQ.list.filter(x => x !== e); await oqSave(); done++; oqPill();
-    }
-  } finally { OQ.busy = false; oqPill(); }
-  if (authErr) return handleErr(authErr);                                       // the entries stay on the phone until you sign in again
-  if (done && !fromLoad){ try { await loadAll(); render(); } catch(e){ if (!e.offline) handleErr(e); } }
-  if (done) toast('✅ ' + done + (done === 1 ? ' offline entry' : ' offline entries') + ' synced');
-  if (bad.length) toast('⚠ ' + bad.length + ' offline ' + (bad.length === 1 ? 'entry' : 'entries') + ' could not be saved: ' + bad[0], true);
-}
-
-/* ---------- last data kept for opening with no network ---------- */
-function cacheSave(){
-  if (!S.d || !S.me || S.me.viewing || S.as) return;                            // never keep "view as user" data under the admin
-  idb.set('cache', { uid:S.me.id, at:Date.now(), data:{ ...S.d, passwords:[] } });   // saved passwords are not kept on the phone
-}
-const tokUid = t => { try { return atob(String(t).split('.')[0].replace(/-/g, '+').replace(/_/g, '/')).split('|')[0]; } catch { return ''; } };
-async function bootOffline(t){
-  const c = await idb.get('cache');
-  if (!c || !c.data || !c.data.me || c.uid !== tokUid(t)) return false;
-  S.token = t; S.offlineMode = true; S.sig = '';
-  c.data.me.serverNow = Date.now();
-  ingest(c.data); applyAccess(); enterApp();
-  toast('📴 No network — showing your last saved data');
-  return true;
-}
-async function onBackOnline(){
-  oqPill();
-  if (!S.token || !S.d) return;
-  await oqFlush();
-  if (S.offlineMode){
-    try { await loadAll(); S.offlineMode = false; render(); toast('✅ Back online'); if (isAdmin()) loadLogs(); }
-    catch(e){ if (!e.offline) handleErr(e); }
-  }
-}
-window.addEventListener('online', onBackOnline);
-window.addEventListener('offline', oqPill);
-setInterval(() => { if (!navigator.onLine) return; if (S.offlineMode) onBackOnline(); else if (oqMine().length) oqFlush(); }, 20000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && S.d){ vcTick(); if (S.offlineMode) onBackOnline(); else oqFlush(); } });
-
-/* ---------- push notifications ---------- */
-const PUSH = { reg:null };
-const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const isStandalone = () => !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
-const pushSupported = () => !HAS_GAS && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
-function pushWhy(){
-  if (HAS_GAS) return 'Notifications need the website version of the app.';
-  if (isIOS() && !isStandalone()) return 'On iPhone / iPad: tap Share → “Add to Home Screen”, then open the app from the Home Screen icon and come back here.';
-  if (!window.isSecureContext) return 'Notifications need the secure (https) website address.';
-  return 'This browser does not support notifications. Use Chrome on Android, or Safari on iPhone with the app added to the Home Screen.';
-}
-const u8 = x => { x = String(x).replace(/-/g, '+').replace(/_/g, '/'); while (x.length % 4) x += '='; const b = atob(x), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; };
-async function swRegister(){
-  if (HAS_GAS || !('serviceWorker' in navigator) || !window.isSecureContext) return;
-  try { PUSH.reg = await navigator.serviceWorker.register('sw.js'); navigator.serviceWorker.addEventListener('message', swMsg); } catch(e){}
-}
-function swMsg(e){
-  const m = e.data || {};
-  if (m.type === 'push' && (m.kind === 'call' || m.kind === 'missed')) vcTick();
-  if (m.type === 'push' && m.kind === 'msg' && !document.hidden) chatLoadUsers();
-  if (m.type === 'nav'){ openFromUrl(m.url); vcTick(); }
-}
-function openFromUrl(u){
-  let v = ''; try { v = new URL(u || location.href, location.href).searchParams.get('go') || ''; } catch {}
-  if (!v || !TITLES[v] || !S.d) return false;
-  go(v); return true;
-}
-function swCloseNotes(tag){
-  try { if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then(r => r && r.getNotifications && r.getNotifications({ tag }).then(l => l.forEach(n => n.close()))).catch(() => {}); } catch {}
-}
-async function pushSub(){
-  try { const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, no) => setTimeout(() => no(new Error('sw')), 8000))]); return await reg.pushManager.getSubscription(); }
-  catch { return null; }
-}
-async function pushSync(){                    // keep this phone attached to whoever is signed in now
-  if (!pushSupported() || Notification.permission !== 'granted' || S.offlineMode) return;
-  try { const sub = await pushSub(); if (sub) await chatApi('pushSubscribe', { sub:sub.toJSON(), ua:navigator.userAgent.slice(0, 100) }); } catch(e){}
-}
-async function pushOffHere(){                 // on sign-out: this phone stops getting this person's notifications
-  if (!pushSupported() || !S.token) return;
-  const sub = await pushSub(); if (sub) await chatApi('pushOff', { endpoint:sub.endpoint });
-}
-async function pushEnable(){
-  if (!pushSupported()) return toast(pushWhy(), true);
-  try{
-    const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
-    if (perm !== 'granted') return toast('Notifications are blocked. Allow them for this site in your browser / phone settings.', true);
-    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, no) => setTimeout(() => no(new Error('The app is still setting itself up. Close and reopen it, then try again.')), 8000))]);
-    const want = u8((await chatApi('pushKey')).key);
-    let sub = await reg.pushManager.getSubscription();
-    if (sub){                                  // made with another server key (keys were changed): start again
-      const have = sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
-      if (have && (have.length !== want.length || have.some((x, i) => x !== want[i]))){ await sub.unsubscribe(); sub = null; }
-    }
-    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:want });
-    await chatApi('pushSubscribe', { sub:sub.toJSON(), ua:navigator.userAgent.slice(0, 100) });
-    toast('🔔 Notifications are on for this phone');
-  }catch(e){ toast(e.message || 'Could not turn on notifications', true); }
-  pushDraw();
-}
-function pushCard(){
-  return `<div class="card" id="pushCard"><h3>🔔 Notifications</h3>
-    <p class="muted" style="margin-bottom:12px">Incoming calls, payment reminders and the 12 o’clock attendance reminder — delivered to this phone even when the app is closed.</p>
-    <div id="pushBody"><div class="empty-state">Loading…</div></div></div>`;
-}
-async function pushDraw(){
-  const el = document.querySelector('#pushBody'); if (!el) return;
-  if (!pushSupported()){ el.innerHTML = `<div class="muted">${esc(pushWhy())}</div>`; return; }
-  if (Notification.permission === 'denied'){ el.innerHTML = '<div class="muted">Notifications are blocked for this site. Open your browser / phone settings, allow notifications for this site, then come back here.</div>'; return; }
-  const sub = Notification.permission === 'granted' ? await pushSub() : null;
-  if (!sub){ el.innerHTML = '<button class="btn" id="pushOn" type="button">Turn on notifications</button>'; document.querySelector('#pushOn').onclick = pushEnable; return; }
-  let pr = { att:true, pay:true, devices:1 }; try { pr = await chatApi('pushPrefs'); } catch {}
-  if (!document.querySelector('#pushBody')) return;
-  el.innerHTML = `<div style="margin-bottom:10px">✅ <b>On for this phone</b>${pr.devices > 1 ? ` <span class="muted">(${pr.devices} devices)</span>` : ''}</div>
-    <label class="check" style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" id="pfAtt" ${pr.att !== false ? 'checked' : ''}> Attendance reminder at 12:00 PM (only if not marked)</label>
-    <label class="check" style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" id="pfPay" ${pr.pay !== false ? 'checked' : ''}> Payment reminders (access due date and LIC premiums)</label>
-    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost sm" id="pushTest" type="button">Send a test</button><button class="btn ghost sm" id="pushOff" type="button">Turn off on this phone</button></div>`;
-  const pref = async o => { try { await chatApi('pushPrefs', o); toast('Saved'); } catch(e){ toast(e.message, true); pushDraw(); } };
-  document.querySelector('#pfAtt').onchange = ev => pref({ att:ev.target.checked });
-  document.querySelector('#pfPay').onchange = ev => pref({ pay:ev.target.checked });
-  document.querySelector('#pushTest').onclick = async () => {
-    try { const r = await chatApi('pushTest'); toast(r.sent ? 'Test sent — it should appear in a moment' : 'No phone was reached. Turn notifications off and on again.', !r.sent); } catch(e){ toast(e.message, true); }
-  };
-  document.querySelector('#pushOff').onclick = async () => {
-    try { await chatApi('pushOff', { endpoint:sub.endpoint }); await sub.unsubscribe(); toast('Notifications are off for this phone'); } catch(e){ toast(e.message, true); }
-    pushDraw();
-  };
-}
-const bindPush = () => pushDraw();
-swRegister();
-
-/* =====================================================================
-   CHAT: ＋ menu  ->  photos / videos (saved in the admin's Google Drive) and live location
-   A message only carries a small marker:  [[KSMEDIA:{"k":"img|vid","id":"<Drive file id>",...}]]  or  [[KSLOC:lat,lng]]
-   ===================================================================== */
-const MEDIA_MAX_MB = 25;
-const chPrev = t => { t = String(t || ''); return t.startsWith('[[KSLOC:') ? '📍 Location' : t.startsWith('[[KSMEDIA:') ? (/"k":"vid"/.test(t) ? '🎥 Video' : '📷 Photo') : t; };
-const MEDIA = { pass:'', exp:0, loading:false };
-function mediaPassGet(){
-  if (MEDIA.pass && MEDIA.exp > Date.now() + 60000) return MEDIA.pass;
-  if (!MEDIA.loading && S.token){
-    MEDIA.loading = true;
-    chatApi('mediaPass').then(r => { MEDIA.pass = r.pass; MEDIA.exp = r.exp; }).catch(() => {}).finally(() => { MEDIA.loading = false; if (MEDIA.pass && S.view === 'chat'){ S.chat.sig = ''; chatRenderMsgs(); } });
-  }
-  return MEDIA.exp > Date.now() ? MEDIA.pass : '';
-}
-function chBody(t){
-  t = String(t || '');
-  let m = t.match(/^\[\[KSLOC:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\]\]$/);
-  if (m) return `<a class="ch-loc" href="https://www.google.com/maps?q=${m[1]},${m[2]}" target="_blank" rel="noopener"><span class="pin">📍</span><b>Location</b><small>Tap to open in Google Maps</small></a>`;
-  m = t.match(/^\[\[KSMEDIA:(\{.*\})\]\]$/);
-  if (m){
-    try{
-      const o = JSON.parse(m[1]); if (!/^[\w-]{10,90}$/.test(String(o.id))) throw 0;
-      const p = mediaPassGet(); if (!p) return '<div class="ch-med ph">⏳ Loading…</div>';
-      const src = API_URL + '/chat/media?id=' + encodeURIComponent(o.id) + '&p=' + encodeURIComponent(p);
-      return o.k === 'vid' ? `<video class="ch-med" controls playsinline preload="metadata" src="${esc(src)}"></video>`
-                           : `<img class="ch-med" loading="lazy" alt="Photo" src="${esc(src)}" onclick="mediaView(this.src)">`;
-    }catch(e){}
-  }
-  return esc(t);
-}
-function mediaView(src){
-  const d = document.createElement('div'); d.className = 'ch-view';
-  d.innerHTML = `<img src="${esc(src)}" alt=""><button type="button" aria-label="Close">✕</button><a href="${esc(src)}" target="_blank" rel="noopener">Open ↗</a>`;
-  d.onclick = e => { if (e.target.tagName !== 'IMG') d.remove(); };
-  document.body.appendChild(d);
-}
-function chatPlus(ev){ if (ev) ev.stopPropagation(); const m = $('#chMenu'); if (m) m.classList.toggle('hidden'); }
-document.addEventListener('click', e => { const m = $('#chMenu'); if (m && !m.classList.contains('hidden') && !e.target.closest('#chMenu')) m.classList.add('hidden'); });
-function chatPick(kind){
-  const m = $('#chMenu'); if (m) m.classList.add('hidden');
-  if (HAS_GAS) return toast('Photo / video sharing works only on the main website.', true);
-  const i = $('#chFile' + ({ gal:'Gal', cam:'Cam', rec:'Rec' })[kind]); if (i) i.click();
-}
-function chatFilePicked(inp){
-  const f = inp.files && inp.files[0], to = S.chat.with; inp.value = '';
-  if (f && to) chatUploadMedia(f, to);
-}
-function chatUpBar(pct, label){
-  let el = $('#chUp');
-  if (pct === null){ if (el) el.remove(); return; }
-  if (!el){ el = document.createElement('div'); el.id = 'chUp'; el.className = 'ch-up'; const c = document.querySelector('.ch-comp'); if (c && c.parentNode) c.parentNode.insertBefore(el, c); else return; }
-  el.innerHTML = `<div class="upbar"><i style="width:${pct}%"></i></div><span>${esc(label)}</span>`;
-}
-async function mediaPrep(file){
-  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return file;
-  try{
-    const bmp = await createImageBitmap(file), sc = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
-    const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * sc); cv.height = Math.round(bmp.height * sc);
-    cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
-    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', .82));
-    if (blob && blob.size < file.size) return new File([blob], (file.name || 'photo').replace(/\.\w+$/, '') + '.jpg', { type:'image/jpeg' });
-  }catch(e){}
-  return file;
-}
-async function chatSendText(to, text){
-  const c = S.chat, cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
-  const m = { id:cid, t:Date.now(), mine:true, text, state:'pending' };
-  (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
-  if (c.with === to) chatRenderMsgs(true);
-  await chatDeliver(to, m);
-}
-async function chatUploadMedia(file, to){
-  if (!/^(image|video)\//.test(file.type)) return toast('Please choose a photo or a video.', true);
-  if (!navigator.onLine) return toast('No internet — try again when you are online.', true);
-  const lim = MEDIA_MAX_MB * 1048576;
-  if (file.type.startsWith('video/') && file.size > lim) return toast('This video is too big (max ' + MEDIA_MAX_MB + ' MB). Record a shorter one.', true);
-  chatUpBar(0, 'Preparing…');
-  try{
-    const f = await mediaPrep(file); if (f.size > lim) throw new Error('This file is too big (max ' + MEDIA_MAX_MB + ' MB).');
-    const q = new URLSearchParams({ name:f.name || 'file', mime:f.type, to });
-    const r = await new Promise((resolve, reject) => {
-      const x = new XMLHttpRequest(); x.open('POST', API_URL + '/chat/media?' + q.toString());
-      x.setRequestHeader('Authorization', 'Bearer ' + S.token); x.setRequestHeader('Content-Type', 'application/octet-stream');
-      x.upload.onprogress = e => { if (e.lengthComputable) chatUpBar(Math.min(99, Math.round(e.loaded * 100 / e.total)), 'Uploading… ' + Math.round(e.loaded * 100 / e.total) + '%'); };
-      x.onload = () => { try { resolve(JSON.parse(x.responseText)); } catch { reject(new Error('Unexpected server response.')); } };
-      x.onerror = x.ontimeout = () => reject(new Error('Upload failed — check your internet connection and try again.'));
-      x.send(f);
-    });
-    if (!r.ok){ const e = new Error(r.error || 'Upload failed'); e.code = r.code; throw e; }
-    chatUpBar(100, 'Sending…');
-    await chatSendText(to, '[[KSMEDIA:' + JSON.stringify({ k:r.k, id:r.id, n:r.n, m:r.m, s:r.s }) + ']]');
-  }catch(e){ chatErr(e); toast(e.message || 'Upload failed', true); }
-  finally { chatUpBar(null); }
-}
-function chatLoc(){
-  const m = $('#chMenu'); if (m) m.classList.add('hidden');
-  const to = S.chat.with, u = chatPeer(to); if (!to || !u) return;
-  if (!navigator.geolocation) return toast('This phone / browser cannot share location.', true);
-  if (!confirm('Send your current location to ' + (u.name || u.username) + '?')) return;
-  toast('Getting your location…');
-  navigator.geolocation.getCurrentPosition(
-    p => chatSendText(to, '[[KSLOC:' + p.coords.latitude.toFixed(6) + ',' + p.coords.longitude.toFixed(6) + ']]'),
-    err => toast(err && err.code === 1 ? 'Location is blocked. Allow it for this site in your phone settings.' : 'Could not get your location. Turn on GPS and try again.', true),
-    { enableHighAccuracy:true, timeout:20000, maximumAge:15000 });
-}
-
-/* ---- Settings card (main admin): connect the Google Drive where chat media is saved ---- */
-function driveCard(){
-  return `<div class="card" id="drvCard"><h3>☁️ Google Drive (Chat photos & videos)</h3>
-    <p class="muted" style="margin-bottom:12px">Every photo / video sent in Chat is saved in the folder <b>KS Chat Media</b> in the Google Drive you connect here (max ${MEDIA_MAX_MB} MB each).</p>
-    <div id="drvBody"><div class="empty-state">Loading…</div></div></div>`;
-}
-async function drvDraw(){
-  const el = $('#drvBody'); if (!el) return;
-  try{
-    const r = await chatApi('driveStatus');
-    el.innerHTML = r.connected
-      ? `<div style="margin-bottom:10px">✅ <b>Connected</b>${r.email ? ' · ' + esc(r.email) : ''}</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost sm" id="drvOn" type="button">Reconnect</button><button class="btn ghost sm" id="drvOff" type="button">Disconnect</button></div>`
-      : (r.ready ? `<div class="muted" style="margin-bottom:10px">Not connected yet — chat photos / videos will not send until you connect.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="drvOn" type="button">Connect Google Drive</button><button class="btn ghost sm" id="drvChk" type="button">I connected — check</button></div>`
-                 : '<div class="muted">Google sign-in is not set up on the server yet (CAL_CLIENT_ID, CAL_CLIENT_SECRET, PUBLIC_URL on Render).</div>');
-    const on = $('#drvOn'), off = $('#drvOff'), chk = $('#drvChk');
-    if (on) on.onclick = async () => { try { const j = await chatApi('driveConnect'); window.open(j.url, '_blank'); toast('Finish in the Google page, then come back and tap “check”.'); } catch(e){ toast(e.message, true); } };
-    if (chk) chk.onclick = drvDraw;
-    if (off) off.onclick = async () => { if (!confirm('Disconnect Google Drive? New photos / videos cannot be sent until you connect again. Files already in Drive stay there.')) return; try { await chatApi('driveOff'); toast('Google Drive disconnected'); } catch(e){ toast(e.message, true); } drvDraw(); };
-  }catch(e){ el.innerHTML = `<div class="muted">${esc(e.message || 'Could not load')}</div>`; }
-}
-const bindDrive = () => { drvDraw(); };
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.view === 'settings') drvDraw(); });
-
-
 boot();
 
 /* =====================================================================
@@ -3317,7 +2954,7 @@ function chatRenderList(){
   if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No users to chat with yet. The main admin decides who you can see.'}</div>`; return; }
   el.innerHTML = list.map(u => {
     const st = chatStatus(u);
-    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : (u.lastFrom ? esc(u.lastFrom) + ': ' : '')}${esc(chPrev(u.lastText))}</div>` : '';
+    const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : (u.lastFrom ? esc(u.lastFrom) + ': ' : '')}${esc(u.lastText)}</div>` : '';
     return `<div class="ch-row ${S.chat.with === u.id ? 'sel' : ''}" onclick="chatOpen('${esc(u.id)}')">
       <div class="ch-av" style="background:${chColor(u.id)}">${chInit(u)}${u.isGroup ? '' : `<span class="dot ${st.cls}"></span>`}</div>
       <div class="ch-info">
@@ -3341,16 +2978,7 @@ function chatRenderPane(){
       <div class="ch-calls"><button class="ch-cbtn" onclick="ludoDial()" aria-label="Play Ludo">🎲</button>${u.isGroup ? `<button class="ch-cbtn" onclick="groupChatForm('${esc(u.id)}')" aria-label="Group info">ℹ️</button>` : `<button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button>`}</div>
     </div>
     <div class="ch-msgs" id="chMsgs"></div>
-    <div class="ch-menu hidden" id="chMenu">
-      <button type="button" onclick="chatPick('gal')"><span>🖼️</span>Photo / Video</button>
-      <button type="button" onclick="chatPick('cam')"><span>📷</span>Camera</button>
-      <button type="button" onclick="chatPick('rec')"><span>🎥</span>Record video</button>
-      <button type="button" onclick="chatLoc()"><span>📍</span>Location</button>
-    </div>
-    <input type="file" id="chFileGal" class="hidden" accept="image/*,video/*" onchange="chatFilePicked(this)">
-    <input type="file" id="chFileCam" class="hidden" accept="image/*" capture="environment" onchange="chatFilePicked(this)">
-    <input type="file" id="chFileRec" class="hidden" accept="video/*" capture="environment" onchange="chatFilePicked(this)">
-    <div class="ch-comp"><button class="ch-plus" id="chPlus" type="button" onclick="chatPlus(event)" aria-label="Attach">＋</button><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
+    <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
       <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
   const ta = $('#chInput');
   ta.value = S.chat.drafts[u.id] || '';
@@ -3387,7 +3015,7 @@ function chatRenderMsgs(toBottom){
       else if (m.state === 'failed') meta = 'Not sent · tap to retry';
       else meta += ` <span class="tick ${m.t <= pr ? 'read' : ''}">${m.t <= pr ? '✓✓' : '✓'}</span>`;
     }
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}<div class="tx">${chBody(m.text)}</div><div class="mt">${meta}</div></div>`;
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}<div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
   });
   box.innerHTML = html;
   if (toBottom || near) box.scrollTop = box.scrollHeight;
@@ -3415,7 +3043,7 @@ async function chatLoadUsers(){
     S.chat.users.concat(S.chat.groups).forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
     if (S.chat.with && !chatPeer(S.chat.with)){ S.chat.with = null; document.body.classList.remove('chat-conv'); if (S.view === 'chat') chatRenderPane(); }   // group deleted / permission removed
     S.chat.loaded = true; chatSumUnread();
-    if (incoming){ toast('💬 New message'); chatBuzz(); }
+    if (incoming) toast('💬 New message');
     S.chat.err = '';
     if (S.view === 'chat'){ chatRenderList(); chatHeader(); }
   }catch(e){ chatErr(e); S.chat.err = (e && e.message) || 'Request failed'; if (S.view === 'chat') chatRenderList(); }
@@ -3424,7 +3052,7 @@ async function chatLoadUsers(){
 async function chatPingNow(){
   try{
     const r = await chatApi('chatPing');
-    if (r.unread > S.chat.unread && S.view !== 'chat'){ toast('💬 New message'); chatBuzz(); }
+    if (r.unread > S.chat.unread && S.view !== 'chat') toast('💬 New message');
     S.chat.unread = r.unread; chatBadge();
   }catch(e){ chatErr(e); }
 }
@@ -3442,7 +3070,6 @@ async function chatFetchConv(first){
     if (u && u.isGroup && r.group){ u.name = r.group.name; u.members = r.group.members; }
     if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
     if (u && r.messages.some(m => !m.mine)){
-      if (!first && ch) chatBuzz();                              // a message arrived in the chat that is open right now
       u.unread = 0; chatSumUnread();
       const last = r.messages[r.messages.length - 1]; u.lastText = last.text.slice(0, 80); u.lastTime = last.t; u.lastMine = last.mine;
       chatRenderList();
@@ -3568,6 +3195,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S.
   src.after(b);
 })();
 
+boot();
 
 /* =====================================================================
    VOICE / VIDEO CALLS  (WebRTC — the audio/video goes phone-to-phone; the server only passes the offer/answer)
@@ -3586,15 +3214,10 @@ function vcBeep(freq, dur){
     o.connect(g); g.connect(vcActx.destination); o.start(t); o.stop(t + dur + 0.05);
   } catch {}
 }
-/* new chat message: 2 short buzzes + 2 soft beeps */
-function chatBuzz(){
-  try { vcBeep(990, .12); setTimeout(() => vcBeep(1320, .16), 170); } catch {}
-  try { navigator.vibrate && navigator.vibrate([220, 110, 220]); } catch {}
-}
 function vcRingStart(incoming){
   vcRingStop();
   const once = () => {
-    if (incoming){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); try { navigator.vibrate && navigator.vibrate([900, 400, 900]); } catch {} }
+    if (incoming){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); try { navigator.vibrate && navigator.vibrate([350, 150, 350]); } catch {} }
     else vcBeep(440, .7);
   };
   once(); VC.ring = setInterval(once, incoming ? 2200 : 3200);
@@ -3686,7 +3309,6 @@ function vcErrText(e){
   return (e && e.message) || 'Could not start the call.';
 }
 function vcCleanup(){
-  swCloseNotes('call');
   vcRingStop(); clearInterval(VC.tick); clearTimeout(VC.lost);
   try { VC.pc && VC.pc.close(); } catch {}
   try { VC.local && VC.local.getTracks().forEach(t => t.stop()); } catch {}
@@ -3727,7 +3349,6 @@ async function vcDial(kind){
 
 /* ---------- receiver ---------- */
 function vcShowIncoming(inc){
-  swCloseNotes('call');
   VC.incoming = inc; VC.kind = inc.kind; VC.peer = { id:inc.from, name:inc.fromName };
   vcOpen(inc.fromName, inc.from, 'Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call…'); vcBar('incoming'); vcRingStart(true);
 }
