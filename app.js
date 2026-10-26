@@ -166,7 +166,7 @@ function loginPhotoBanner(){
   let el = document.getElementById('loginPhotoBanner');
   if (!el){
     el = document.createElement('div'); el.id = 'loginPhotoBanner';
-    el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:9999;background:#111;color:#fff;padding:10px 18px;border-radius:999px;font-size:14px;box-shadow:0 4px 18px rgba(0,0,0,.3);display:none;max-width:92vw;text-align:center';
+    el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:9999;background:#111;color:#fff;padding:10px 18px;border-radius:999px;font-size:calc(14px*var(--fs));box-shadow:0 4px 18px rgba(0,0,0,.3);display:none;max-width:92vw;text-align:center';
     document.body.appendChild(el);
   }
   return {
@@ -241,7 +241,7 @@ function bioDraw(list){
   const here = (bioSaved() || {}).credId, el = document.querySelector('#bioList'); if (!el) return;
   const mine = list.find(x => here && here.slice(0,16) === x.id);
   el.innerHTML = list.length ? list.map(x => `<div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line)">
-      <div style="min-width:0"><b>${esc(x.label)}</b>${mine && mine.id === x.id ? ' <span class="muted">(this device)</span>' : ''}<div class="muted" style="font-size:12px">Added ${esc((x.at||'').slice(0,10))}${x.last ? ' · last used ' + esc(x.last.slice(0,10)) : ''}</div></div>
+      <div style="min-width:0"><b>${esc(x.label)}</b>${mine && mine.id === x.id ? ' <span class="muted">(this device)</span>' : ''}<div class="muted" style="font-size:calc(12px*var(--fs))">Added ${esc((x.at||'').slice(0,10))}${x.last ? ' · last used ' + esc(x.last.slice(0,10)) : ''}</div></div>
       <button class="btn ghost sm" type="button" data-bio-rm="${esc(x.id)}">Remove</button></div>`).join('')
     : '<div class="muted">Not enabled on any device yet.</div>';
   const add = document.querySelector('#bioAdd');
@@ -668,7 +668,7 @@ function seeBox(x){
   const boxes = others.map(o => `<label class="tog"><input type="checkbox" name="see" value="${esc(o.id)}" ${on(o) ? 'checked' : ''} ${auto(o) ? 'disabled' : ''}> ${esc(o.name || o.username)}${o.primary ? ' <span class="muted">(main admin)</span>' : ''} <span class="muted">@${esc(o.username)}${auto(o) ? ' · always (added by / added this user)' : ''}</span></label>`).join('');
   return `<fieldset style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
     <legend class="sec-title" style="padding:0 6px;margin:0">💬 Who can this user see in Chat?</legend>
-    <p class="muted" style="margin:0 0 6px;font-size:12.5px">Chat, calls, Ludo and group chats show <b>only</b> the people ticked here (plus whoever added this user / was added by them). Nobody sees anybody without your permission. It works both ways.</p>
+    <p class="muted" style="margin:0 0 6px;font-size:calc(12.5px*var(--fs))">Chat, calls, Ludo and group chats show <b>only</b> the people ticked here (plus whoever added this user / was added by them). Nobody sees anybody without your permission. It works both ways.</p>
     ${boxes || '<div class="muted">No other users yet.</div>'}</fieldset>`;
 }
 async function delUser(id){
@@ -699,7 +699,7 @@ function groupForm(id){
     return `<label class="tog"><input type="checkbox" name="m" value="${esc(u.id)}" ${x && x.members.includes(u.id) ? 'checked' : ''} ${o ? 'disabled' : ''}> ${esc(u.name || u.username)} <span class="muted">@${esc(u.username)}${o ? ' · already in “' + esc(o.name) + '”' : ''}</span></label>`; }).join('');
   const adopt = x ? '' : `<div class="field"><label>Start with existing data of <span class="muted">(optional)</span></label>
     <select class="select" name="adoptFrom"><option value="">Nobody — start with empty group data</option>${users.filter(u => !inOther(u.id)).map(u => `<option value="${esc(u.id)}">${esc(u.name || u.username)}</option>`).join('')}</select>
-    <p class="muted" style="margin-top:6px;font-size:12.5px">That person’s current data becomes the group’s data. The other members’ old data stays in the sheet but is hidden while they are in the group.</p></div>`;
+    <p class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">That person’s current data becomes the group’s data. The other members’ old data stays in the sheet but is hidden while they are in the group.</p></div>`;
   const w = openModal(`<h3>${x ? 'Edit group' : 'Add group'}</h3><p class="sub">Pick the users who should always see the same data.</p>
     <form id="gf" autocomplete="off">
       <div class="field"><label>Group name</label><input class="input" name="name" maxlength="40" value="${esc(x ? x.name : '')}" required></div>
@@ -872,7 +872,7 @@ function photoItem(p){
   return `<div class="log-item bad">
     <div class="l1"><b>@${esc(p.username)}</b><span class="muted">${esc(fmtLogTime(p.time))}</span></div>
     <div class="l2">${esc(p.reason || 'Wrong username/password')}</div>
-    <div class="l2" style="display:flex;gap:10px;margin-top:6px">${photoThumb(p.front, 'Front camera') || '<span class="muted" style="font-size:12px">no front photo</span>'}${photoThumb(p.back, 'Back camera') || '<span class="muted" style="font-size:12px">no back photo</span>'}</div>
+    <div class="l2" style="display:flex;gap:10px;margin-top:6px">${photoThumb(p.front, 'Front camera') || '<span class="muted" style="font-size:calc(12px*var(--fs))">no front photo</span>'}${photoThumb(p.back, 'Back camera') || '<span class="muted" style="font-size:calc(12px*var(--fs))">no back photo</span>'}</div>
   </div>`;
 }
 function photosCard(){
@@ -934,10 +934,10 @@ function depProgHtml(){
   }
   const col = { ok:'#16a34a', wait:'#f59e0b', bad:'#dc2626' }, ic = { ok:'✔', wait:'⏳', bad:'✖' };
   const head = p.state === 'success' ? `✅ Live — ${p.done}/${p.total}` : p.state === 'failure' ? `❌ Failed — ${p.done}/${p.total}` : `🟡 Going live… ${p.done}/${p.total}`;
-  return `<div style="font-weight:800;font-size:18px;margin-bottom:8px">${head}</div>
+  return `<div style="font-weight:800;font-size:calc(18px*var(--fs));margin-bottom:8px">${head}</div>
     <div style="display:flex;gap:4px;margin-bottom:10px">${p.items.map(x => `<div style="flex:1;height:8px;border-radius:4px;background:${col[x.state]}${x.state === 'wait' ? ';opacity:.55' : ''}"></div>`).join('')}</div>
     ${p.items.map(x => `<div class="l2">${ic[x.state]} ${esc(x.name)}</div>`).join('')}
-    <div class="muted" style="margin-top:8px;font-size:12.5px">${esc(p.msg || '')} · <code>${esc(p.short || '')}</code>${p.state === 'pending' ? ' · updates by itself every 5 seconds' : ''}</div>`;
+    <div class="muted" style="margin-top:8px;font-size:calc(12.5px*var(--fs))">${esc(p.msg || '')} · <code>${esc(p.short || '')}</code>${p.state === 'pending' ? ' · updates by itself every 5 seconds' : ''}</div>`;
 }
 function vDeploy(){
   if (!DEP.st) return '<div class="card"><div class="empty-state">Loading…</div></div>';
@@ -965,7 +965,7 @@ function vDeploy(){
       <div class="field"><label>Updated files <span class="muted">(app.js, style.css, index.html, server.js … you can pick several)</span></label>
         <input class="input" type="file" id="depFiles" multiple></div>
       <div class="actions"><button class="btn" onclick="depReview()">Review &amp; publish →</button></div>
-      <p class="muted" style="margin-top:10px;font-size:12.5px">Safety: a JS/JSON file with a mistake is refused before it reaches GitHub. Changing <code>server.js</code>, <code>package.json</code> or other server files asks for an extra confirmation. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
+      <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Safety: a JS/JSON file with a mistake is refused before it reaches GitHub. Changing <code>server.js</code>, <code>package.json</code> or other server files asks for an extra confirmation. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
     <div class="card" style="margin-bottom:16px"><h3>🕘 File history &amp; restore</h3>
       <div class="form-grid"><div class="field"><label>File</label><select class="select" id="depHSel"><option value="">Choose a file…</option>${fileOpts}</select></div></div>
       <div id="depHist">${DEP.hist ? (DEP.hist.map(c => commitRow(c, DEP.hpath)).join('') || '<div class="empty-state">No history for this file</div>') : '<div class="muted">Pick a file to see its older versions and bring one back.</div>'}</div></div>
@@ -1093,7 +1093,7 @@ async function updSubmit(){
   if (f.size > UPD.max) return toast('This file is too big (max ' + Math.round(UPD.max / 1048576) + ' MB)', true);
   const q = new URLSearchParams({ name:f.name, title:($('#updTitle').value || '').trim(), version:($('#updVer').value || '').trim(), notes:($('#updNotes').value || '').trim() });
   const btn = $('#updGo'), prog = $('#updProg'); btn.disabled = true; UPD.busy = true;
-  const bar = pct => { prog.innerHTML = `<div class="upbar"><i style="width:${pct}%"></i></div><div class="muted" style="font-size:12.5px">${pct < 100 ? 'Uploading… ' + pct + '%' : 'Saving to GitHub… please wait'}</div>`; };
+  const bar = pct => { prog.innerHTML = `<div class="upbar"><i style="width:${pct}%"></i></div><div class="muted" style="font-size:calc(12.5px*var(--fs))">${pct < 100 ? 'Uploading… ' + pct + '%' : 'Saving to GitHub… please wait'}</div>`; };
   bar(0); busy(true);
   try {
     const r = await new Promise((resolve, reject) => {
@@ -1147,8 +1147,267 @@ const TITLES = {
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
-  settings:['Settings','Profile, security and preferences']
+  settings:['Settings','Profile, security, appearance and preferences']
 };
+
+/* =====================================================================
+   APPEARANCE & LAYOUT  (Settings > Appearance & layout)
+   Colours, dark mode, text size, spacing, sidebar side/style, menu order,
+   dashboard blocks … saved on THIS device (localStorage), applied at once.
+   ===================================================================== */
+const TH_KEY = 'ks_theme_v1';
+const TH_MODES = {
+  light:{ bg:'#f3f5fa', card:'#ffffff', ink:'#1e293b', muted:'#64748b', line:'#e5e9f2', line2:'#e2e8f0', soft:'#f8fafc', soft2:'#f1f5f9', inputline:'#d5dbe8', label:'#475569',
+          side:'#0f172a', 'chat-bg':'#efeae2', 'chat-me':'#d9fdd3', good:'#15803d', 'good-soft':'#dcfce7', bad:'#dc2626', 'bad-soft':'#fee2e2', warn:'#b45309', 'warn-soft':'#fef3c7',
+          shadow:'0 1px 2px rgba(15,23,42,.05),0 8px 24px rgba(15,23,42,.06)' },
+  dark: { bg:'#0b1020', card:'#151b2e', ink:'#e5e7eb', muted:'#94a3b8', line:'#263049', line2:'#2b3552', soft:'#1b2339', soft2:'#222b45', inputline:'#34405f', label:'#cbd5e1',
+          side:'#070b17', 'chat-bg':'#0e1522', 'chat-me':'#1f4d3a', good:'#4ade80', 'good-soft':'#12301f', bad:'#f87171', 'bad-soft':'#3b1717', warn:'#fbbf24', 'warn-soft':'#3a2a0b',
+          shadow:'0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35)' }
+};
+const TH_PRESETS = [
+  { id:'indigo',  n:'Indigo',  b:'#4f46e5', b2:'#7c3aed', s:'' },
+  { id:'ocean',   n:'Ocean',   b:'#0284c7', b2:'#2563eb', s:'#0b2236' },
+  { id:'teal',    n:'Teal',    b:'#0d9488', b2:'#0891b2', s:'#0a2527' },
+  { id:'emerald', n:'Emerald', b:'#059669', b2:'#16a34a', s:'#0b2a22' },
+  { id:'rose',    n:'Rose',    b:'#e11d48', b2:'#f43f5e', s:'#2a0f18' },
+  { id:'sunset',  n:'Sunset',  b:'#ea580c', b2:'#dc2626', s:'#2a1408' },
+  { id:'gold',    n:'Gold',    b:'#d97706', b2:'#f59e0b', s:'#2b1d08' },
+  { id:'violet',  n:'Violet',  b:'#7c3aed', b2:'#c026d3', s:'#1e1033' },
+  { id:'slate',   n:'Slate',   b:'#334155', b2:'#64748b', s:'#0f172a' },
+  { id:'mono',    n:'Black',   b:'#111827', b2:'#374151', s:'#000000' }
+];
+const TH_FONTS = {
+  sans:'', serif:'Georgia,"Noto Serif Devanagari","Times New Roman",serif',
+  round:'ui-rounded,"SF Pro Rounded",Nunito,"Segoe UI",system-ui,"Noto Sans Devanagari",sans-serif',
+  mono:'ui-monospace,"SF Mono",Consolas,Menlo,monospace'
+};
+const TH_ENUM = {
+  mode:['light','dark','auto'], sbPos:['left','right'], nav:['full','icons'], maxw:['0','1400','1200','1000','800'], cols:['auto','1','2','3'],
+  card:['shadow','border','flat'], bg:['solid','soft'], ctl:['s','m','l'], density:['compact','normal','comfy'], font:['sans','serif','round','mono'],
+  kpi:['130','170','220'], motion:['on','off']
+};
+const TH_NUM = { fs:[80,140], radius:[0,30], gap:[6,30], pad:[8,34], sbw:[180,340] };
+const TH_DEF = {
+  mode:'light', brand:'#4f46e5', brand2:'#7c3aed', side:'', cust:{ light:{}, dark:{} },
+  fs:100, radius:16, gap:16, pad:20, sbw:240, maxw:'0', cols:'auto', card:'shadow', bg:'solid', ctl:'m', density:'normal', font:'sans', kpi:'170', motion:'on', sbPos:'left', nav:'full',
+  dash:{ hello:1, today:1, kpi:1, chart:1, table:1 }, menu:{ order:[], hide:[], label:{}, icon:{} }
+};
+const TH_T0 = {}; Object.keys(TITLES).forEach(k => { TH_T0[k] = TITLES[k][0]; });
+
+const thRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const thHex = a => '#' + a.map(x => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0')).join('');
+const thMix = (a, b, t) => { const x = thRgb(a), y = thRgb(b); return thHex(x.map((v, i) => v + (y[i] - v) * t)); };      // t = share of b
+const thLum = h => { const [r, g, b] = thRgb(h).map(v => { v /= 255; return v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); }); return .2126 * r + .7152 * g + .0722 * b; };
+
+function thNorm(j){
+  const o = JSON.parse(JSON.stringify(TH_DEF)); if (!j || typeof j !== 'object') return o;
+  const hex = v => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : null;
+  ['brand', 'brand2', 'side'].forEach(k => { const c = hex(j[k]); if (c) o[k] = c; });
+  Object.keys(TH_ENUM).forEach(k => { if (j[k] !== undefined && TH_ENUM[k].includes(String(j[k]))) o[k] = String(j[k]); });
+  Object.keys(TH_NUM).forEach(k => { const n = +j[k]; if (j[k] !== undefined && isFinite(n)) o[k] = Math.min(TH_NUM[k][1], Math.max(TH_NUM[k][0], Math.round(n))); });
+  ['light', 'dark'].forEach(m => ['bg', 'card', 'ink'].forEach(k => { const c = hex(j.cust && j.cust[m] && j.cust[m][k]); if (c) o.cust[m][k] = c; }));
+  if (j.dash && typeof j.dash === 'object') Object.keys(o.dash).forEach(k => { if (j.dash[k] !== undefined) o.dash[k] = j.dash[k] ? 1 : 0; });
+  if (j.menu && typeof j.menu === 'object'){
+    const ok = v => typeof v === 'string' && /^[a-z]{2,20}$/.test(v);
+    if (Array.isArray(j.menu.order)) o.menu.order = j.menu.order.filter(ok).slice(0, 30);
+    if (Array.isArray(j.menu.hide)) o.menu.hide = j.menu.hide.filter(ok).slice(0, 30);
+    ['label', 'icon'].forEach(k => { const m = j.menu[k]; if (m && typeof m === 'object') Object.keys(m).forEach(v => { if (ok(v) && typeof m[v] === 'string') o.menu[k][v] = m[v].slice(0, k === 'icon' ? 4 : 24); }); });
+  }
+  return o;
+}
+let T = (() => { try { return thNorm(JSON.parse(store.get(TH_KEY) || 'null')); } catch(e){ return thNorm(null); } })();
+const thSave = () => store.set(TH_KEY, JSON.stringify(T), true);
+const thDark = () => T.mode === 'dark' || (T.mode === 'auto' && !!window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+
+function thVars(dark){
+  const M = Object.assign({}, TH_MODES[dark ? 'dark' : 'light']), cu = T.cust[dark ? 'dark' : 'light'] || {};
+  if (cu.card || cu.ink){
+    const card = cu.card || M.card, ink = cu.ink || M.ink;
+    Object.assign(M, { card, ink, soft:thMix(card, ink, .04), soft2:thMix(card, ink, .08), line:thMix(card, ink, .12), line2:thMix(card, ink, .16), inputline:thMix(card, ink, .24), muted:thMix(ink, card, .42), label:thMix(ink, card, .25) });
+  }
+  if (cu.bg) M.bg = cu.bg;
+  const side = T.side || M.side, sDark = thLum(side) < .4;
+  const V = Object.assign({}, M, {
+    side, 'side-hover':thMix(side, sDark ? '#ffffff' : '#000000', .12), 'side-ink':sDark ? '#cbd5e1' : '#334155', 'side-hi':sDark ? '#ffffff' : '#0f172a', 'side-mut':sDark ? '#94a3b8' : '#64748b',
+    brand:T.brand, 'brand-2':T.brand2, 'brand-soft':thMix(M.card, T.brand, dark ? .22 : .10), 'brand-ink':dark ? thMix(T.brand, '#ffffff', .4) : T.brand,
+    'on-brand':thLum(T.brand) > .38 ? '#111827' : '#ffffff',
+    'login-a':thMix(M.bg, T.brand, dark ? .28 : .3), 'login-b':thMix(M.bg, T.brand2, dark ? .22 : .28),
+    radius:T.radius + 'px', 'rad-s':Math.round(T.radius * .7) + 'px', fs:String(T.fs / 100), pad:T.pad + 'px', gap:T.gap + 'px', sbw:T.sbw + 'px',
+    maxw:T.maxw === '0' ? 'none' : T.maxw + 'px', kpimin:T.kpi + 'px',
+    'btn-py':({ s:'7px', m:'10px', l:'13px' })[T.ctl], 'btn-px':({ s:'12px', m:'16px', l:'20px' })[T.ctl], 'in-py':({ s:'8px', m:'11px', l:'14px' })[T.ctl],
+    cellp:({ compact:'6px 10px', normal:'10px 12px', comfy:'15px 14px' })[T.density]
+  });
+  return V;
+}
+const TH_ORIG = new WeakMap();
+function thOrig(b){
+  if (!TH_ORIG.has(b)){ const ic = b.querySelector('.ico'); TH_ORIG.set(b, { l:ic ? (ic.nextSibling && ic.nextSibling.nodeValue || '').trim() : '', i:ic ? ic.textContent : '' }); }
+  return TH_ORIG.get(b);
+}
+function thMenu(){
+  const nav = document.getElementById('nav'); if (!nav) return;
+  [...nav.children].forEach(thOrig);
+  const all = [...nav.children].map(b => b.dataset.v), final = T.menu.order.filter(v => all.includes(v));
+  all.forEach((v, i) => { if (!final.includes(v)){ const k = i ? final.indexOf(all[i - 1]) : -1; final.splice(k + 1, 0, v); } });   // new tabs stay next to their neighbour
+  final.forEach(v => nav.appendChild(nav.querySelector(`[data-v="${v}"]`)));
+  [...nav.children].forEach(b => {
+    const v = b.dataset.v, ic = b.querySelector('.ico'); if (!ic) return;
+    const o = thOrig(b), lab = (T.menu.label[v] || '').trim() || o.l;
+    if (ic.nextSibling && ic.nextSibling.nodeType === 3) ic.nextSibling.nodeValue = lab;
+    ic.textContent = T.menu.icon[v] || o.i;
+    b.classList.toggle('th-off', v !== 'settings' && T.menu.hide.includes(v));
+    if (TITLES[v]) TITLES[v][0] = (T.menu.label[v] || '').trim() || TH_T0[v];
+  });
+  const pt = document.getElementById('pageTitle'); if (pt && TITLES[S.view]) pt.textContent = TITLES[S.view][0];
+}
+function thApply(){
+  const root = document.documentElement, bd = document.body, dark = thDark(), V = thVars(dark);
+  Object.keys(V).forEach(k => root.style.setProperty('--' + k, V[k]));
+  if (TH_FONTS[T.font]) root.style.setProperty('--font', TH_FONTS[T.font]); else root.style.removeProperty('--font');
+  root.dataset.mode = dark ? 'dark' : 'light';
+  bd.dataset.sb = T.sbPos; bd.dataset.nav = T.nav; bd.dataset.cols = T.cols; bd.dataset.card = T.card; bd.dataset.bg = T.bg; bd.dataset.motion = T.motion;
+  Object.keys(T.dash).forEach(k => bd.classList.toggle('th-no-' + k, !T.dash[k]));
+  const mt = document.querySelector('meta[name="theme-color"]'); if (mt) mt.setAttribute('content', T.brand);
+  const tg = document.getElementById('menuToggle'); if (tg) tg.textContent = T.sbPos === 'right' ? '‹' : '›';
+  thMenu();
+}
+thApply();
+if (window.matchMedia) { try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (T.mode === 'auto') thApply(); }); } catch(e){} }
+
+/* ---------- the Settings card ---------- */
+function thColor(id){
+  const dark = thDark(), M = thVars(dark);
+  return ({ brand:T.brand, brand2:T.brand2, side:M.side, bg:M.bg, card:M.card, ink:M.ink })[id];
+}
+function thMenuRows(){
+  const nav = document.getElementById('nav');
+  return [...nav.children].filter(b => !b.classList.contains('hidden')).map(b => {
+    const v = b.dataset.v, off = v !== 'settings' && T.menu.hide.includes(v);
+    return `<div class="th-mi ${off ? 'off' : ''}">
+      <button type="button" class="btn ghost sm" data-mv="${esc(v)}" data-d="-1" title="Move up">↑</button>
+      <button type="button" class="btn ghost sm" data-mv="${esc(v)}" data-d="1" title="Move down">↓</button>
+      <input class="input ic" data-mi="${esc(v)}" maxlength="4" value="${esc(T.menu.icon[v] || thOrig(b).i || '')}" aria-label="Icon">
+      <input class="input" data-ml="${esc(v)}" maxlength="24" value="${esc(T.menu.label[v] || thOrig(b).l || '')}" aria-label="Name">
+      <label class="eye" title="${v === 'settings' ? 'Settings always stays visible' : 'Show / hide'}"><input type="checkbox" data-mh="${esc(v)}" ${off ? '' : 'checked'} ${v === 'settings' ? 'disabled' : ''}></label></div>`;
+  }).join('');
+}
+function themeCard(){
+  const seg = (k, opts) => `<div class="seg" data-k="${k}">${opts.map(([v, l]) => `<button type="button" data-val="${v}" class="${String(T[k]) === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const rng = (k, label, unit) => `<div class="th-row"><div class="th-lbl"><span>${label}</span><b id="thv_${k}">${T[k]}${unit}</b></div><input type="range" data-k="${k}" min="${TH_NUM[k][0]}" max="${TH_NUM[k][1]}" step="1" value="${T[k]}"></div>`;
+  const blk = (label, inner, note) => `<div class="th-row"><div class="th-lbl"><span>${label}</span></div>${inner}${note ? `<div class="th-note" style="margin:6px 0 0">${note}</div>` : ''}</div>`;
+  const col = (id, label) => `<label class="th-col"><input type="color" data-c="${id}" value="${thColor(id)}"><span>${label}</span></label>`;
+  const dash = [['hello', 'Greeting'], ['today', 'Today quick-mark'], ['kpi', 'Number cards'], ['chart', 'Charts'], ['table', 'Tables']];
+  const pres = TH_PRESETS.map(p => `<button type="button" class="th-pre ${T.brand === p.b && T.brand2 === p.b2 ? 'on' : ''}" data-pre="${p.id}" style="background:linear-gradient(135deg,${p.b},${p.b2})">${p.n}</button>`).join('');
+  return `<div class="card" id="thCard" style="grid-column:1/-1"><h3>🎨 Appearance & layout <button type="button" class="btn ghost sm" data-act="reset">↺ Reset all</button></h3>
+  <p class="th-note">Colours, text size, spacing, menu and layout — changes apply instantly and are saved on this device.</p>
+
+  <details class="regbox th-grp" open><summary>🌗 Theme & colours</summary>
+    ${blk('Mode', seg('mode', [['light', '☀️ Light'], ['dark', '🌙 Dark'], ['auto', '📱 Auto (phone)']]))}
+    <div class="th-lbl"><span>Colour theme</span></div><div class="th-pres">${pres}</div>
+    <div class="th-lbl"><span>Custom colours</span><button type="button" class="linkbtn" data-act="resetcol">Reset colours</button></div>
+    <div class="th-cols">${col('brand', 'Main')}${col('brand2', 'Second')}${col('side', 'Menu bar')}${col('bg', 'Page')}${col('card', 'Cards')}${col('ink', 'Text')}</div>
+    <div class="th-note">Page / Cards / Text are remembered separately for Light and Dark.</div>
+    <div class="th-two">
+      ${blk('Page background', seg('bg', [['solid', 'Plain'], ['soft', 'Soft glow']]))}
+      ${blk('Card style', seg('card', [['shadow', 'Shadow'], ['border', 'Outline'], ['flat', 'Flat']]))}
+    </div>
+  </details>
+
+  <details class="regbox th-grp"><summary>🔤 Size & spacing</summary>
+    <div class="th-two">
+      ${rng('fs', 'Text size', '%')}${rng('radius', 'Rounded corners', 'px')}${rng('pad', 'Card padding', 'px')}${rng('gap', 'Space between cards', 'px')}
+    </div>
+    <div class="th-two">
+      ${blk('Font style', seg('font', [['sans', 'Default'], ['serif', 'Serif'], ['round', 'Rounded'], ['mono', 'Mono']]))}
+      ${blk('Buttons & fields', seg('ctl', [['s', 'Small'], ['m', 'Normal'], ['l', 'Large']]))}
+      ${blk('Table rows', seg('density', [['compact', 'Compact'], ['normal', 'Normal'], ['comfy', 'Roomy']]))}
+      ${blk('Number cards', seg('kpi', [['130', 'Small'], ['170', 'Normal'], ['220', 'Large']]))}
+    </div>
+  </details>
+
+  <details class="regbox th-grp"><summary>🧩 Layout</summary>
+    <div class="th-two">
+      ${blk('Menu position', seg('sbPos', [['left', '⬅ Left'], ['right', 'Right ➡']]))}
+      ${blk('Menu style (computer)', seg('nav', [['full', 'Icons + names'], ['icons', 'Icons only']]))}
+      ${rng('sbw', 'Menu width (computer)', 'px')}
+      ${blk('Page width (computer)', seg('maxw', [['0', 'Full'], ['1400', '1400'], ['1200', '1200'], ['1000', '1000'], ['800', '800']]))}
+      ${blk('Settings / card columns (computer)', seg('cols', [['auto', 'Auto'], ['1', '1'], ['2', '2'], ['3', '3']]))}
+      ${blk('Animations', seg('motion', [['on', 'On'], ['off', 'Off']]))}
+    </div>
+    <div class="th-lbl"><span>Dashboard — show</span></div>
+    <div class="chips" style="gap:4px 16px;margin-bottom:6px">${dash.map(([k, l]) => `<label class="tog"><input type="checkbox" data-dash="${k}" ${T.dash[k] ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+  </details>
+
+  <details class="regbox th-grp"><summary>📋 Menu items — order, name, icon, show / hide</summary>
+    <p class="th-note">↑ ↓ moves an item. Change the icon or name, or untick to hide it from the menu.</p>
+    <div class="th-menu" id="thMenuList">${thMenuRows()}</div>
+    <div class="th-actions"><button type="button" class="btn ghost sm" data-act="resetmenu">↺ Reset menu</button></div>
+  </details>
+
+  <details class="regbox th-grp"><summary>💾 Backup & share</summary>
+    <p class="th-note">Copy your design as text and paste it on another phone or computer.</p>
+    <div class="th-actions"><button type="button" class="btn soft sm" data-act="export">⬆ Export design</button><button type="button" class="btn soft sm" data-act="import">⬇ Import design</button></div>
+  </details></div>`;
+}
+function thRerenderMenuList(){ const l = document.getElementById('thMenuList'); if (l) l.innerHTML = thMenuRows(); }
+function thMove(v, d){
+  const nav = document.getElementById('nav'), all = [...nav.children].map(b => b.dataset.v);
+  const vis = all.filter(x => !nav.querySelector(`[data-v="${x}"]`).classList.contains('hidden')), i = vis.indexOf(v), j = i + d;
+  if (i < 0 || j < 0 || j >= vis.length) return;
+  const a = all.indexOf(vis[i]), b = all.indexOf(vis[j]); [all[a], all[b]] = [all[b], all[a]];
+  T.menu.order = all; thSave(); thMenu(); thRerenderMenuList();
+}
+function bindTheme(){
+  const c = document.getElementById('thCard'); if (!c) return;
+  const done = (redraw) => { thSave(); thApply(); if (redraw) { c.querySelectorAll('.th-pre').forEach(b => { const p = TH_PRESETS.find(x => x.id === b.dataset.pre); b.classList.toggle('on', T.brand === p.b && T.brand2 === p.b2); }); } };
+  const syncColors = () => c.querySelectorAll('input[data-c]').forEach(i => { i.value = thColor(i.dataset.c); });
+  c.addEventListener('click', e => {
+    const t = e.target.closest('button'); if (!t) return;
+    const sg = t.closest('.seg');
+    if (sg && t.dataset.val !== undefined){
+      T[sg.dataset.k] = t.dataset.val; sg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === t));
+      done(); if (sg.dataset.k === 'mode') syncColors(); return;
+    }
+    if (t.dataset.pre){ const p = TH_PRESETS.find(x => x.id === t.dataset.pre); T.brand = p.b; T.brand2 = p.b2; T.side = p.s; done(true); syncColors(); return; }
+    if (t.dataset.mv){ thMove(t.dataset.mv, +t.dataset.d); return; }
+    const a = t.dataset.act; if (!a) return;
+    if (a === 'resetcol'){ T.brand = TH_DEF.brand; T.brand2 = TH_DEF.brand2; T.side = ''; T.cust = { light:{}, dark:{} }; done(true); syncColors(); toast('Colours reset'); }
+    else if (a === 'resetmenu'){ T.menu = JSON.parse(JSON.stringify(TH_DEF.menu)); thSave(); thApply(); thRerenderMenuList(); toast('Menu reset'); }
+    else if (a === 'reset'){ confirmBox('Reset appearance?', 'All colours, sizes, layout and menu changes on this device go back to the original design.', 'Reset', true).then(ok => { if (ok){ T = thNorm(null); thSave(); thApply(); render(); toast('Original design restored'); } }); }
+    else if (a === 'export'){
+      const w = openModal(`<h3>Export design</h3><p class="sub">Copy this text. On another device open Settings › Appearance › Import.</p><textarea class="input th-code" readonly>${esc(JSON.stringify(T))}</textarea>
+        <div class="foot"><button class="btn ghost" data-x>Close</button><button class="btn" data-cp>Copy</button></div>`, 'wide');
+      const ta = w.querySelector('textarea'); ta.onfocus = () => ta.select();
+      w.querySelector('[data-x]').onclick = () => w.remove();
+      w.querySelector('[data-cp]').onclick = async () => { try { await navigator.clipboard.writeText(ta.value); toast('Copied'); } catch(e){ ta.select(); document.execCommand('copy'); toast('Copied'); } };
+    } else if (a === 'import'){
+      const w = openModal(`<h3>Import design</h3><p class="sub">Paste the design text you exported earlier.</p><textarea class="input th-code" placeholder='{"mode":"dark",…}'></textarea>
+        <div class="foot"><button class="btn ghost" data-x>Cancel</button><button class="btn" data-ok>Apply</button></div>`, 'wide');
+      w.querySelector('[data-x]').onclick = () => w.remove();
+      w.querySelector('[data-ok]').onclick = () => {
+        try { const j = JSON.parse(w.querySelector('textarea').value); if (!j || typeof j !== 'object') throw 0; T = thNorm(j); thSave(); thApply(); w.remove(); render(); toast('Design applied'); }
+        catch(err){ toast('That is not a valid design text', true); }
+      };
+    }
+  });
+  c.addEventListener('input', e => {
+    const t = e.target;
+    if (t.matches('input[type=range][data-k]')){ T[t.dataset.k] = +t.value; const u = { fs:'%' }[t.dataset.k] || 'px', l = document.getElementById('thv_' + t.dataset.k); if (l) l.textContent = t.value + u; thApply(); thSave(); }
+    else if (t.matches('input[data-c]')){
+      const id = t.dataset.c, v = t.value.toLowerCase();
+      if (id === 'brand') T.brand = v; else if (id === 'brand2') T.brand2 = v; else if (id === 'side') T.side = v;
+      else T.cust[thDark() ? 'dark' : 'light'][id] = v;
+      thApply(); thSave(); c.querySelectorAll('.th-pre').forEach(b => b.classList.remove('on'));
+    }
+  });
+  c.addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.dash){ T.dash[t.dataset.dash] = t.checked ? 1 : 0; thSave(); thApply(); }
+    else if (t.dataset.mh){ const v = t.dataset.mh; T.menu.hide = T.menu.hide.filter(x => x !== v); if (!t.checked) T.menu.hide.push(v); thSave(); thApply(); t.closest('.th-mi').classList.toggle('off', !t.checked); }
+    else if (t.dataset.ml){ const v = t.dataset.ml, b = document.querySelector(`#nav [data-v="${v}"]`); T.menu.label[v] = t.value.trim() === (b && thOrig(b).l) ? '' : t.value.trim().slice(0, 24); if (!T.menu.label[v]) delete T.menu.label[v]; thSave(); thApply(); }
+    else if (t.dataset.mi){ const v = t.dataset.mi, b = document.querySelector(`#nav [data-v="${v}"]`); T.menu.icon[v] = t.value.trim() === (b && thOrig(b).i) ? '' : t.value.trim().slice(0, 4); if (!T.menu.icon[v]) delete T.menu.icon[v]; thSave(); thApply(); }
+  });
+}
 function setMenu(on){ document.body.classList.toggle('menu-open', !!on); const t = $('#menuToggle'); if (t) t.setAttribute('aria-expanded', on ? 'true' : 'false'); }
 $('#menuToggle').onclick = () => setMenu(true);
 $('#scrim').onclick = () => setMenu(false);
@@ -1160,8 +1419,9 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(fals
     if (x0 === null) return;
     const t = e.changedTouches[0], dx = t.clientX - x0, dy = Math.abs(t.clientY - y0), open = document.body.classList.contains('menu-open');
     if (window.innerWidth <= 860 && dy < 50){
-      if (!open && x0 < 24 && dx > 60 && !$('#app').classList.contains('hidden')) setMenu(true);
-      else if (open && dx < -60) setMenu(false);
+      const R = document.body.dataset.sb === 'right', edge = R ? x0 > window.innerWidth - 24 : x0 < 24, toward = R ? -dx : dx;
+      if (!open && edge && toward > 60 && !$('#app').classList.contains('hidden')) setMenu(true);
+      else if (open && toward < -60) setMenu(false);
     }
     x0 = null;
   }, { passive:true });
@@ -1170,7 +1430,7 @@ function go(v){
   setMenu(false);
   if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
   if (v !== 'chat') document.body.classList.remove('chat-conv');
-  S.view = v; applyAccess(); v = S.view;
+  S.view = v; applyAccess(); v = S.view; document.body.dataset.view = v;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.v === v));
   $('#pageTitle').textContent = TITLES[v][0];
   $('#pageSub').textContent = TITLES[v][1];
@@ -1188,10 +1448,10 @@ const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date
 function payCountdownHtml(){
   if (!S.me || !S.me.payDueMs) return '';
   return `<div id="payCd" class="card" style="margin-bottom:16px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;border-left:5px solid var(--good,#16a34a)">
-    <div style="font-size:26px">⏳</div>
+    <div style="font-size:calc(26px*var(--fs))">⏳</div>
     <div style="flex:1;min-width:200px"><div style="font-weight:700">Your access expires on <span id="payCdDate"></span></div>
-      <div class="muted" style="font-size:13px">Please make the payment before then to keep using this account.</div></div>
-    <div id="payCdTxt" style="font-weight:800;font-size:20px;font-variant-numeric:tabular-nums"></div></div>`;
+      <div class="muted" style="font-size:calc(13px*var(--fs))">Please make the payment before then to keep using this account.</div></div>
+    <div id="payCdTxt" style="font-weight:800;font-size:calc(20px*var(--fs));font-variant-numeric:tabular-nums"></div></div>`;
 }
 function tickPay(){
   const box = document.getElementById('payCd');
@@ -1225,7 +1485,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -1322,12 +1582,12 @@ function vDashboard(){
     <div class="card kpi p"><div class="lbl">Total Present</div><div class="val">${y.P}</div><div class="hint">days</div></div>
     <div class="card kpi a"><div class="lbl">Total Absent</div><div class="val">${y.A}</div><div class="hint">days</div></div>
     <div class="card kpi w"><div class="lbl">Total Week Off</div><div class="val">${y.W}</div><div class="hint">paid</div></div>
-    <div class="card kpi s"><div class="lbl">Salary Earned So Far</div><div class="val" style="font-size:22px">${esc(fm(y.earned))}</div><div class="hint">of ${esc(fm((+emp().salary||0)*12))} per year</div></div>
+    <div class="card kpi s"><div class="lbl">Salary Earned So Far</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(y.earned))}</div><div class="hint">of ${esc(fm((+emp().salary||0)*12))} per year</div></div>
     <div class="card kpi m"><div class="lbl">Present %</div><div class="val">${pct}</div><div class="hint">Present vs Absent</div></div>
     <div class="card kpi s"><div class="lbl">Days Marked</div><div class="val">${y.marked}</div><div class="hint">${y.paid} paid days</div></div>
   </div>
   <div class="grid two">
-    <div class="card"><h3>Monthly breakdown <span class="muted" style="font-weight:500;font-size:12.5px">${esc(s.year)}</span></h3>
+    <div class="card"><h3>Monthly breakdown <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">${esc(s.year)}</span></h3>
       <div class="tbl-wrap"><table class="mon"><thead><tr><th>Month</th><th class="n">Present</th><th class="n">Absent</th><th class="n">Week Off</th><th class="n hide-m">Paid Days</th><th class="n">Salary Earned</th></tr></thead>
       <tbody>${rows}<tr class="tot"><td>TOTAL</td><td class="n">${y.P}</td><td class="n">${y.A}</td><td class="n">${y.W}</td><td class="n hide-m">${y.paid}</td><td class="n">${fm(y.earned)}</td></tr></tbody></table></div></div>
     <div class="grid" style="align-content:start">
@@ -1362,12 +1622,12 @@ function dashExtra(){
   const recentEx = [...ex].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
   const exRows = recentEx.map(x => { const t = catType(x.category);
     return `<tr><td data-l="Date">${esc(fmtDateNice(x.date))}</td><td data-l="Category"><span class="pill ${t==='Income'?'inc':'exp'}">${esc(x.category)}</span></td><td data-l="Note" style="white-space:normal">${esc(x.note)}</td><td data-l="Amount" class="n ${t==='Income'?'amt-inc':'amt-exp'}">${t==='Income'?'+':'−'}${esc(fm(x.amount))}</td></tr>`; }).join('');
-  const expHtml = `<div class="dsec"><span>💸 Expenses <span class="muted" style="font-weight:500;font-size:13px">${y}</span></span><button class="btn soft sm" onclick="go('expenses')">Open</button></div>
+  const expHtml = `<div class="dsec"><span>💸 Expenses <span class="muted" style="font-weight:500;font-size:calc(13px*var(--fs))">${y}</span></span><button class="btn soft sm" onclick="go('expenses')">Open</button></div>
   <div class="grid kpis">
-    <div class="card kpi p"><div class="lbl">Income</div><div class="val" style="font-size:22px">${esc(fm(inc))}</div></div>
-    <div class="card kpi a"><div class="lbl">Expenses</div><div class="val" style="font-size:22px">${esc(fm(exp))}</div></div>
-    <div class="card kpi s"><div class="lbl">Balance</div><div class="val" style="font-size:22px;color:${inc-exp<0?'var(--bad)':'var(--good)'}">${esc(fm(inc-exp))}</div></div>
-    <div class="card kpi m"><div class="lbl">This month spent</div><div class="val" style="font-size:22px">${esc(fm(curM >= 0 ? mExp[curM] : 0))}</div><div class="hint">${ex.length} entries this year</div></div>
+    <div class="card kpi p"><div class="lbl">Income</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(inc))}</div></div>
+    <div class="card kpi a"><div class="lbl">Expenses</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(exp))}</div></div>
+    <div class="card kpi s"><div class="lbl">Balance</div><div class="val" style="font-size:calc(22px*var(--fs));color:${inc-exp<0?'var(--bad)':'var(--good)'}">${esc(fm(inc-exp))}</div></div>
+    <div class="card kpi m"><div class="lbl">This month spent</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(curM >= 0 ? mExp[curM] : 0))}</div><div class="hint">${ex.length} entries this year</div></div>
   </div>
   <div class="grid two-eq" style="margin-bottom:16px">
     <div class="card"><h3>Spending by month</h3>${bars(mExp, v => fm(v), 'red')}</div>
@@ -1382,7 +1642,7 @@ function dashExtra(){
   const topProd = Object.entries(prod).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const recentW = [...wk].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
   const wRows = recentW.map(x => `<tr><td data-l="Date">${esc(fmtDateNice(x.date))}</td><td data-l="Name">${esc(x.name)}</td><td data-l="Product">${esc(x.product)}</td><td data-l="Product no.">${esc(x.number)}</td><td data-l="Sticker">${esc(x.sticker)}</td><td data-l="Description" style="white-space:normal;min-width:160px">${esc(x.desc)}</td></tr>`).join('');
-  const workHtml = `<div class="dsec"><span>🛠️ Work <span class="muted" style="font-weight:500;font-size:13px">${y}</span></span><button class="btn soft sm" onclick="go('work')">Open</button></div>
+  const workHtml = `<div class="dsec"><span>🛠️ Work <span class="muted" style="font-weight:500;font-size:calc(13px*var(--fs))">${y}</span></span><button class="btn soft sm" onclick="go('work')">Open</button></div>
   <div class="grid kpis">
     <div class="card kpi s"><div class="lbl">Work entries</div><div class="val">${wk.length}</div><div class="hint">this year</div></div>
     <div class="card kpi p"><div class="lbl">Days with work</div><div class="val">${days.size}</div><div class="hint">of the year</div></div>
@@ -1436,7 +1696,7 @@ function vAttendance(){
     </div>
     <div class="chips" style="margin-bottom:16px">${chips}</div>
     <div class="cal">${cells}</div>
-    <p class="muted" style="margin-top:12px;font-size:13px">Tap a date to mark Present / Absent / Week Off. Changes are saved to your Google Sheet instantly.</p>
+    <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">Tap a date to mark Present / Absent / Week Off. Changes are saved to your Google Sheet instantly.</p>
   </div>
   <div class="card" style="margin-bottom:16px"><h3>Quick actions for ${MONTHS[m-1]}</h3>
     <div class="actions">
@@ -1493,9 +1753,9 @@ function vExpenses(){
   const monthOpts = '<option value="all">All months</option>' + MONTHS.map((n, i) => `<option value="${i+1}" ${S.exp.month==i+1?'selected':''}>${n}</option>`).join('');
   const catOpts = '<option value="all">All categories</option>' + S.d.categories.map(c => `<option ${S.exp.cat===c.name?'selected':''}>${esc(c.name)}</option>`).join('');
   return `<div class="grid kpis">
-    <div class="card kpi p"><div class="lbl">Income</div><div class="val" style="font-size:22px">${esc(fm(inc))}</div></div>
-    <div class="card kpi a"><div class="lbl">Expenses</div><div class="val" style="font-size:22px">${esc(fm(exp))}</div></div>
-    <div class="card kpi s"><div class="lbl">Balance</div><div class="val" style="font-size:22px;color:${inc-exp<0?'var(--bad)':'var(--good)'}">${esc(fm(inc-exp))}</div></div>
+    <div class="card kpi p"><div class="lbl">Income</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(inc))}</div></div>
+    <div class="card kpi a"><div class="lbl">Expenses</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(exp))}</div></div>
+    <div class="card kpi s"><div class="lbl">Balance</div><div class="val" style="font-size:calc(22px*var(--fs));color:${inc-exp<0?'var(--bad)':'var(--good)'}">${esc(fm(inc-exp))}</div></div>
     <div class="card kpi m"><div class="lbl">Entries</div><div class="val">${list.length}</div></div></div>
   <div class="card" style="margin-bottom:16px"><div class="actions">
       <select class="select" style="width:auto" onchange="S.exp.month=this.value;render()">${monthOpts}</select>
@@ -1607,7 +1867,7 @@ function wCalendar(byDate){
   }
   return `<div class="mini-head"><button class="btn ghost sm" onclick="wCalNav(-1)">‹</button><span>${MONTHS[m-1]} ${y}</span><button class="btn ghost sm" onclick="wCalNav(1)">›</button></div>
     <div class="mc">${c}</div>
-    <p class="muted" style="font-size:12px;margin-top:8px">Tap a date to add or see its entries. Green dot = work recorded. Tap again to clear.</p>`;
+    <p class="muted" style="font-size:calc(12px*var(--fs));margin-top:8px">Tap a date to add or see its entries. Green dot = work recorded. Tap again to clear.</p>`;
 }
 function wCalNav(n){ S.wcm += n; if (S.wcm > 12){ S.wcm = 1; S.wy++; } if (S.wcm < 1){ S.wcm = 12; S.wy--; } render(); }
 function wPick(iso){
@@ -1677,7 +1937,7 @@ function vWork(){
         mr += `<tr class="${cls}">${dc}${ln.body}<td class="ac">${ln.act}</td></tr>`;
       });
     }
-    if (mr) rows += `<tr class="mh"><td colspan="7">${MONTHS[m-1]} ${y} <span style="font-weight:500;color:var(--muted);font-size:12.5px">· ${perMonth[m]} entries</span></td></tr>` + mr;
+    if (mr) rows += `<tr class="mh"><td colspan="7">${MONTHS[m-1]} ${y} <span style="font-weight:500;color:var(--muted);font-size:calc(12.5px*var(--fs))">· ${perMonth[m]} entries</span></td></tr>` + mr;
   }
 
   const yrs = []; for (let i = new Date().getFullYear() - 3; i <= new Date().getFullYear() + 1; i++) yrs.push(i);
@@ -1708,7 +1968,7 @@ function vWork(){
   <div class="card" id="wTable"><h3>Work record — ${y}${f.date ? ' · ' + esc(fmtDateNice(f.date)) : ''}</h3>
     ${rows ? `<div class="tbl-wrap"><table class="wk"><thead><tr><th class="d">Date</th><th>Name</th><th>Product name</th><th>Product no.</th><th>Sticker</th><th>Description</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`
            : '<div class="empty-state">No entries match these filters.</div>'}
-    <p class="muted" style="margin-top:12px;font-size:13px">Type in the boxes of a date and press <b>Save</b> (or Enter). Use <b>＋</b> next to a date for more than one entry. Use <b>Edit</b> / <b>Delete</b> to fix mistakes. Saved to the “Work” tab of your Google Sheet.</p>
+    <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">Type in the boxes of a date and press <b>Save</b> (or Enter). Use <b>＋</b> next to a date for more than one entry. Use <b>Edit</b> / <b>Delete</b> to fix mistakes. Saved to the “Work” tab of your Google Sheet.</p>
   </div>`;
 }
 function wDraft(el){ const k = el.dataset.k; (S.wDraft[k] = S.wDraft[k] || {})[el.dataset.f] = el.value; }
@@ -1774,10 +2034,10 @@ function vPasswords(){
       <span style="flex:1"></span>
       <button class="btn soft" onclick="pwExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="pwExport('pdf')">⬇ PDF</button>
       <button class="btn" onclick="pwForm()">＋ Add login</button></div></div>
-    <div class="card"><h3>Saved logins <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
+    <div class="card"><h3>Saved logins <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
       ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Website URL</th><th>User ID</th><th>Password</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No logins match your search.' : 'No logins saved yet. Tap “Add login” to start.'}</div>`}
-      <p class="muted" style="margin-top:12px;font-size:13px">📋 next to a field copies just that field. <b>Copy all</b> copies website, user ID and password together. Saved in the “Password Manager” tab of your Google Sheet.</p>
+      <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 next to a field copies just that field. <b>Copy all</b> copies website, user ID and password together. Saved in the “Password Manager” tab of your Google Sheet.</p>
     </div>`;
 }
 function pwSearch(v){
@@ -1867,10 +2127,10 @@ function vLinks(){
       <select class="select" style="width:auto" onchange="S.link.type=this.value;render()">${opts}</select>
       <span style="flex:1"></span>
       <button class="btn" onclick="linkForm()">＋ Add link</button></div></div>
-    <div class="card"><h3>Saved links <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
+    <div class="card"><h3>Saved links <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
       ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Name</th><th>Type</th><th>Link</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No links match your search.' : 'No links saved yet. Tap “Add link” to start.'}</div>`}
-      <p class="muted" style="margin-top:12px;font-size:13px">📋 next to a link copies just the link. <b>Copy all</b> copies name, type and link together. Saved in the “Links” tab of your Google Sheet.</p>
+      <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 next to a link copies just the link. <b>Copy all</b> copies name, type and link together. Saved in the “Links” tab of your Google Sheet.</p>
     </div>`;
 }
 function linkSearch(v){
@@ -2025,13 +2285,13 @@ function vLic(){
       <td class="n nowrap"><button class="btn soft sm" onclick="licCopy('${esc(x.id)}')" title="Copy all of this customer's data">📋 Copy</button>
         <button class="btn ghost sm" onclick="licForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="licDel('${esc(x.id)}')">🗑</button></td></tr>`;
   }).join('');
-  const remindCard = remind.length ? `<div class="card lic-remind" style="margin-bottom:16px"><h3>🔔 Renewal reminders <span class="muted" style="font-weight:500;font-size:12.5px">· due within 30 days</span></h3>
+  const remindCard = remind.length ? `<div class="card lic-remind" style="margin-bottom:16px"><h3>🔔 Renewal reminders <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· due within 30 days</span></h3>
       ${remind.map(({ x, rn }) => `<div class="lic-ri"><div class="lic-ri-main"><b>${esc(x.name || x.policyNo || 'Policy')}</b>${x.name && x.policyNo ? ` <span class="muted">· ${esc(x.policyNo)}</span>` : ''}
-        <div class="muted" style="font-size:12.5px">${esc(LIC_FREQ[x.freq] || 'One-time')} premium${x.amount ? ' · ₹' + Number(x.amount).toLocaleString('en-IN') : ''} · ${licDateFmt(rn.due)}</div></div>
+        <div class="muted" style="font-size:calc(12.5px*var(--fs))">${esc(LIC_FREQ[x.freq] || 'One-time')} premium${x.amount ? ' · ₹' + Number(x.amount).toLocaleString('en-IN') : ''} · ${licDateFmt(rn.due)}</div></div>
         <span class="lic-rn lic-pill ${rn.cls}" data-lic-id="${esc(x.id)}">${esc(rn.text)}</span></div>`).join('')}</div>` : '';
   return `${remindCard}<div class="grid kpis" style="margin-bottom:16px">
       <div class="card kpi s"><div class="lbl">Total Policies</div><div class="val">${total}</div><div class="hint">customers</div></div>
-      <div class="card kpi p"><div class="lbl">Total Amount</div><div class="val" style="font-size:20px">${esc(licAmt(totalAmt))}</div></div>
+      <div class="card kpi p"><div class="lbl">Total Amount</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(totalAmt))}</div></div>
       <div class="card kpi m"><div class="lbl">Renewal due ≤ 7 days</div><div class="val">${renew7}</div><div class="hint">pay soon</div></div>
       <div class="card kpi w"><div class="lbl">Renewal due ≤ 30 days</div><div class="val">${renew30}</div><div class="hint">upcoming</div></div>
       <div class="card kpi w"><div class="lbl">Maturing ≤ 30 days</div><div class="val">${maturing}</div></div>
@@ -2042,10 +2302,10 @@ function vLic(){
       <span style="flex:1"></span>
       <button class="btn soft" onclick="licExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="licExport('pdf')">⬇ PDF</button>
       <button class="btn" onclick="licForm()">＋ Add policy</button></div></div>
-    <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:12.5px">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
+    <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
       ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Amount</th><th>Premium Mode</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
-      <p class="muted" style="margin-top:12px;font-size:13px">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
+      <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;
 }
 function licSearch(v){
@@ -2084,7 +2344,7 @@ function licForm(id){ if (!can('lic')) return deny();
       </div>
       <div class="field"><label>Renewal / Premium Due Date</label><input class="input" type="date" name="dueDate" value="${esc(x ? x.dueDate : '')}"></div>
       <div id="licPrev" class="lic-prev"></div>
-      <p class="muted" style="font-size:12.5px;margin-top:-2px">Enter the due date once. For Monthly / Quarterly / Half-Yearly / Yearly it then repeats by itself and shows how many days / months / years are left. If left empty, the starting date is used.</p>
+      <p class="muted" style="font-size:calc(12.5px*var(--fs));margin-top:-2px">Enter the due date once. For Monthly / Quarterly / Half-Yearly / Yearly it then repeats by itself and shows how many days / months / years are left. If left empty, the starting date is used.</p>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
   const prev = () => {                       // live "next due" line under the form
@@ -2172,10 +2432,10 @@ function vTimetable(){
     <div class="sec-title" style="margin:0 0 8px">${WD[dt.getDay()]}, ${esc(fmtDateNice(date))}${isT ? ' · Today' : ''}</div>
     <div class="chips"><span class="chip" style="background:var(--good-soft)">Planned ${hrs(filled)} of 20 h</span>${chips}</div>
   </div>
-  <div class="card"><h3>Time table <span class="muted" style="font-weight:500;font-size:12.5px">5:00 AM – 1:00 AM · 30-minute slots</span></h3>
+  <div class="card"><h3>Time table <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">5:00 AM – 1:00 AM · 30-minute slots</span></h3>
     ${cats.length ? '' : '<div class="viewas">💡 No categories yet — choose “＋ Add new category…” in any dropdown, or tap ⚙ Categories to add them.</div>'}
     <div class="tbl-wrap"><table class="tt"><thead><tr><th>Time</th><th>Category</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="muted" style="margin-top:12px;font-size:13px">Pick a category for each slot — it saves instantly to the “Timetable” tab of your Google Sheet. Need a new one? Choose <b>＋ Add new category…</b> in the dropdown.</p>
+    <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">Pick a category for each slot — it saves instantly to the “Timetable” tab of your Google Sheet. Need a new one? Choose <b>＋ Add new category…</b> in the dropdown.</p>
   </div>`;
 }
 function ttSetDate(v){ S.tt.date = v || ''; render(); }
@@ -2343,6 +2603,7 @@ function vSettings(){
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
   if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
+  grid.insertAdjacentHTML('afterbegin', themeCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
@@ -2865,6 +3126,7 @@ async function doExport(kind, fmt){
   src.after(b);     // right after "Updates" = right above "Settings"
 })();
 
+thApply();        // the Passwords / Links / LIC tabs now exist: put them in the saved order / names
 boot();
 
 /* =====================================================================
@@ -3195,6 +3457,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S.
   src.after(b);
 })();
 
+thApply();        // the Passwords / Links / LIC tabs now exist: put them in the saved order / names
 boot();
 
 /* =====================================================================
@@ -3420,10 +3683,10 @@ function luXY(ci, pos, ti){
   const st = document.createElement('style'); st.id = 'ludoCss';
   st.textContent = `
 .lu{position:fixed;inset:0;z-index:9998;background:#0f172a;color:#fff;display:flex;flex-direction:column;align-items:center;padding:calc(10px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));overflow:auto}
-.lu-top{width:100%;max-width:460px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:800;font-size:18px}
-.lu-top button{background:rgba(255,255,255,.12);color:#fff;border:0;border-radius:10px;padding:8px 12px;font-weight:700;font-size:14px}
+.lu-top{width:100%;max-width:460px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:800;font-size:calc(18px*var(--fs))}
+.lu-top button{background:rgba(255,255,255,.12);color:#fff;border:0;border-radius:10px;padding:8px 12px;font-weight:700;font-size:calc(14px*var(--fs))}
 .lu-pl{width:100%;max-width:460px;display:flex;gap:8px;margin:10px 0}
-.lu-p{flex:1;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.08);border:2px solid transparent;min-width:0;font-weight:700;font-size:14px}
+.lu-p{flex:1;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.08);border:2px solid transparent;min-width:0;font-weight:700;font-size:calc(14px*var(--fs))}
 .lu-p.on{border-color:#fff;background:rgba(255,255,255,.18)}
 .lu-p i{width:14px;height:14px;border-radius:50%;flex:none;border:2px solid #fff}
 .lu-p span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -3433,17 +3696,17 @@ function luXY(ci, pos, ti){
 .lt.go circle.r{fill:none;stroke:#fff;stroke-width:.12;animation:luP 0.8s infinite}
 .lt.go{cursor:pointer}
 @keyframes luP{0%,100%{opacity:1;r:.5}50%{opacity:.25;r:.62}}
-.lu-msg{margin:12px 0 6px;font-size:15px;font-weight:600;text-align:center;min-height:22px}
+.lu-msg{margin:12px 0 6px;font-size:calc(15px*var(--fs));font-weight:600;text-align:center;min-height:22px}
 .lu-dice{display:flex;align-items:center;gap:16px;justify-content:center}
-.lu-die{font-size:64px;line-height:1;width:76px;height:76px;display:grid;place-items:center;background:#fff;color:#0f172a;border-radius:16px}
+.lu-die{font-size:calc(64px*var(--fs));line-height:1;width:76px;height:76px;display:grid;place-items:center;background:#fff;color:#0f172a;border-radius:16px}
 .lu-die.sh{animation:luS .45s}
 @keyframes luS{0%{transform:rotate(0)}25%{transform:rotate(-25deg)}50%{transform:rotate(22deg)}75%{transform:rotate(-12deg)}100%{transform:rotate(0)}}
-.lu-roll{background:#22c55e;color:#fff;border:0;border-radius:14px;padding:16px 26px;font-size:18px;font-weight:800}
+.lu-roll{background:#22c55e;color:#fff;border:0;border-radius:14px;padding:16px 26px;font-size:calc(18px*var(--fs));font-weight:800}
 .lu-roll:disabled{opacity:.4}
 .lu-card{margin:auto;text-align:center;display:flex;flex-direction:column;gap:14px;align-items:center;padding:20px}
-.lu-card .big{font-size:56px}.lu-card h2{margin:0;font-size:22px}.lu-card p{margin:0;opacity:.8}
+.lu-card .big{font-size:calc(56px*var(--fs))}.lu-card h2{margin:0;font-size:calc(22px*var(--fs))}.lu-card p{margin:0;opacity:.8}
 .lu-card .row{display:flex;gap:12px}
-.lu-card button{border:0;border-radius:12px;padding:13px 22px;font-weight:800;font-size:16px;color:#fff;background:#22c55e}
+.lu-card button{border:0;border-radius:12px;padding:13px 22px;font-weight:800;font-size:calc(16px*var(--fs));color:#fff;background:#22c55e}
 .lu-card button.x{background:#ef4444}.lu-card button.g{background:rgba(255,255,255,.18)}`;
   document.head.appendChild(st);
 })();
