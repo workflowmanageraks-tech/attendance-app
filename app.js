@@ -2250,17 +2250,22 @@ async function vcsUpdate(id){ if (!can('vcs')) return deny();
    VIEW: RACK MAPPING  (racks 1–100, rows a b c d — customisable — note which item is kept where, then search to find it)
    Location code = rack number + row, e.g. "12b" = Rack 12, row b.  Every item has a category (Carton / Inner … add your own).
    ===================================================================== */
-const RACK_MAX = 100, RACK_UNITS = ['Pcs','Boxes','Cartons','Sets','Packs'], RACK_DEF_ROWS = ['a','b','c','d'], RACK_DEF_CATS = ['Carton','Inner'];
+const RACK_MAX = 100, RACK_DEF_ROWS = ['a','b','c','d'], RACK_DEF_CATS = ['Carton','Inner'];
 function rackState(){ return S.rackUi = S.rackUi || { sel:'', q:'', cat:'all', show:'all' }; }
 function rackCfg(){ const c = S.d.rackCfg || {}; return { rows:c.rows || { '*':RACK_DEF_ROWS }, cats:(c.cats && c.cats.length) ? c.cats : RACK_DEF_CATS }; }
 function rackRowsOf(n){ const c = rackCfg(); return c.rows[String(n)] || c.rows['*'] || RACK_DEF_ROWS; }
 function rackLoc(x){ return x.rack + x.row; }
-function rackQty(x){ return x.qty === '' || x.qty === undefined ? '' : Number(x.qty).toLocaleString('en-IN') + ' ' + (x.unit || 'Pcs'); }
+function rackNumsHtml(x){
+  const names = [...rackCfg().cats]; if (!names.includes(x.cat)) names.push(x.cat);
+  const nums = x.nums || {};
+  return `<div class="rk-nums">${names.map(c => { const v = nums[c]; return `<div class="rk-num ${c === x.cat ? 'on' : ''}"><span>${esc(c)}</span><b>${v === '' || v === undefined ? '—' : esc(Number(v).toLocaleString('en-IN'))}</b></div>`; }).join('')}</div>`;
+}
 function rackItemHtml(x, showLoc){
   return `<div class="rk-item">
     <div class="rk-main">
       <div class="rk-name">${showLoc ? `<span class="rk-loc">${esc(rackLoc(x))}</span>` : ''}${esc(x.name)}</div>
-      <div class="rk-meta"><span class="tag rk-cat" style="margin-left:0">${esc(x.cat)}</span>${x.code ? `<span class="tag" style="margin-left:0">${esc(x.code)}</span>` : ''}${x.qty !== '' ? `<span class="rk-qty">× ${esc(rackQty(x))}</span>` : ''}</div>
+      <div class="rk-meta"><span class="tag rk-cat" style="margin-left:0">${esc(x.cat)}</span>${x.code ? `<span class="tag" style="margin-left:0">${esc(x.code)}</span>` : ''}</div>
+      ${rackNumsHtml(x)}
       ${x.note ? `<div class="rk-note">${esc(x.note)}</div>` : ''}
     </div>
     <div class="rk-acts">${showLoc ? `<button class="btn soft sm" onclick="rackPick('${esc(x.rack)}',true)">Open rack</button>` : ''}
@@ -2277,7 +2282,7 @@ function vRack(){
   const stats = `<div class="rk-stats"><div><b>${all.length}</b><span>Items noted</span></div><div><b>${usedNums.length}</b><span>Racks in use</span></div><div><b>${RACK_MAX - usedNums.length}</b><span>Racks empty</span></div></div>`;
   const catOpts = ['all', ...cfg.cats].map(c => `<option value="${esc(c)}" ${R.cat === c ? 'selected' : ''}>${c === 'all' ? 'All categories' : esc(c)}</option>`).join('');
   const search = `<div class="card" style="margin-bottom:16px"><div class="actions">
-      <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Find an item — name, code, note or location (e.g. 12b)" value="${esc(R.q)}" oninput="rackSearch(this.value)">
+      <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Find an item — name, INS number, note or location (e.g. 12b)" value="${esc(R.q)}" oninput="rackSearch(this.value)">
       <select class="select" style="width:auto" onchange="rackState().cat=this.value;render()" aria-label="Category">${catOpts}</select>
       <button class="btn ghost" onclick="rackCatsEdit()" title="Add / remove categories">🏷️ Categories</button>
       <button class="btn" onclick="rackForm(null,'${R.sel}')">＋ Add item</button></div></div>`;
@@ -2306,7 +2311,7 @@ function vRack(){
         <button class="btn ghost sm" onclick="rackRowsEdit()">✏️ Customize rows</button></div>
         <div class="rk-rack">${sh.join('')}</div></div>`;
   }
-  return stats + search + body + `<p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Location code = rack number + row, e.g. <b>12b</b> = Rack 12, row b. Saved in the “Rack Mapping” tab of your Google Sheet (rows and categories in “Rack Config”).</p>`;
+  return stats + search + body + `<p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Location code = rack number + row, e.g. <b>12b</b> = Rack 12, row b. Saved in the “Rack Mapping” tab of your Google Sheet — each category has its own number column there (rows and category list in “Rack Config”).</p>`;
 }
 function rackPick(n, clear){
   const R = rackState(); R.sel = String(n); if (clear) R.q = '';
@@ -2337,18 +2342,18 @@ function rackForm(id, rack, row){ if (!can('rack')) return deny();
         <div class="field"><label>Rack</label><select class="select" name="rack">${rackOpts}</select></div>
         <div class="field"><label>Row</label><select class="select" name="row">${rackRowOpts(R0, W0)}</select></div>
       </div>
-      <div class="field"><label>Category <a href="#" class="linkbtn" data-cats style="float:right;font-weight:600">＋ Add / manage</a></label><select class="select" name="cat">${cats.map(c => `<option value="${esc(c)}" ${c === C0 ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
       <div class="field"><label>Item name</label><input class="input" name="name" maxlength="200" required placeholder="e.g. Matte Lipstick — Shade B14" value="${esc(x ? x.name : '')}"></div>
-      <div class="field"><label>Item code <span class="muted">(optional)</span></label><input class="input" name="code" maxlength="60" placeholder="e.g. INS-09" autocapitalize="characters" value="${esc(x ? x.code : '')}"></div>
+      <div class="field"><label>INS number <span class="muted">(optional)</span></label><input class="input" name="code" maxlength="60" placeholder="e.g. INS-09" autocapitalize="characters" value="${esc(x ? x.code : '')}"></div>
       <div class="row2">
-        <div class="field"><label>Quantity <span class="muted">(optional)</span></label><input class="input" name="qty" type="number" inputmode="decimal" min="0" step="any" placeholder="e.g. 144" value="${x && x.qty !== '' ? esc(x.qty) : ''}"></div>
-        <div class="field"><label>Unit</label><select class="select" name="unit">${RACK_UNITS.map(u => `<option ${(x ? x.unit : 'Pcs') === u ? 'selected' : ''}>${u}</option>`).join('')}</select></div>
+        <div class="field"><label>Category <a href="#" class="linkbtn" data-cats style="float:right;font-weight:600">＋ Add</a></label><select class="select" name="cat">${cats.map(c => `<option value="${esc(c)}" ${c === C0 ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+        <div class="field"><label id="rkTotL">${esc(C0)} total</label><input class="input" name="total" type="number" inputmode="numeric" min="0" step="any" placeholder="number" value="${x && x.nums && x.nums[x.cat] !== '' && x.nums[x.cat] !== undefined ? esc(x.nums[x.cat]) : ''}"></div>
       </div>
       <div class="field"><label>Note <span class="muted">(optional)</span></label><textarea class="input" name="note" rows="2" maxlength="500" placeholder="e.g. left side, behind the white boxes">${esc(x ? x.note : '')}</textarea></div>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button>${x ? '' : '<button class="btn soft" type="submit" data-more="1">Save &amp; add another</button>'}<button class="btn" type="submit">Save</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
   const rk = w.querySelector('[name=rack]'), rw = w.querySelector('[name=row]');
   rk.onchange = () => { rw.innerHTML = rackRowOpts(rk.value, ''); };
+  w.querySelector('[name=cat]').onchange = e => { w.querySelector('#rkTotL').textContent = e.target.value + ' total'; };
   w.querySelector('[data-cats]').onclick = ev => { ev.preventDefault(); w.remove(); rackCatsEdit(() => rackForm(id, rk.value, rw.value)); };
   w.querySelector('#rkf').onsubmit = async ev => {
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter, more = !!(btn && btn.dataset.more); btn.disabled = true;
@@ -2395,7 +2400,7 @@ function rackRowsEdit(){ if (!can('rack')) return deny();
 /* ---- add / remove categories (Carton, Inner, …) ---- */
 function rackCatsEdit(done){ if (!can('rack')) return deny();
   let cats = [...rackCfg().cats];
-  const w = openModal(`<h3>Categories</h3><p class="sub">Add your own categories next to Carton and Inner. Removing a category does not delete items — they keep their old label.</p>
+  const w = openModal(`<h3>Categories</h3><p class="sub">Add your own categories next to Carton and Inner. Every category gets its own number column — in the sheet and on every item. Removing a category does not delete items or their numbers.</p>
     <div id="rkCats"></div>
     <div class="actions" style="flex-wrap:nowrap;margin:10px 0 4px"><input class="input" id="rkNew" maxlength="40" placeholder="New category name" autocomplete="off"><button class="btn soft" type="button" data-add>＋ Add</button></div>
     <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="button" data-save>Save categories</button></div>`);

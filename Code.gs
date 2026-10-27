@@ -1165,9 +1165,10 @@ function createSheet_(k) {
     sh.getRange('A:L').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'RACK') {
-    sh.getRange(1, 1, 1, 11).setValues([['Rack (1-100)', 'Row (a, b, c...)', 'Item Name', 'Item Code', 'Qty', 'Unit', 'Note', 'Updated', 'ID', 'Owner', 'Category']]);
+    sh.getRange(1, 1, 1, 11).setValues([['Rack (1-100)', 'Row (a, b, c...)', 'Item Name', 'INS Number', 'Qty (old)', 'Unit (old)', 'Note', 'Updated', 'ID', 'Owner', 'Category']]);
     sh.getRange('A:K').setNumberFormat('@');
     sh.setFrozenRows(1);
+    sh.hideColumns(5, 2);                       // the number now lives in one column per category (from column L on)
   } else if (k === 'RACKCFG') {
     sh.getRange(1, 1, 1, 4).setValues([['Type (Rows / Cats)', 'Key (rack number or *)', 'Value (JSON list)', 'Owner']]);
     sh.getRange('A:D').setNumberFormat('@');
@@ -2037,29 +2038,58 @@ function updateVcs_(req) {
 // ---------- RACK MAPPING ----------
 // Racks numbered 1-100. Every rack has rows named a, b, c, d by default (customisable per rack), e.g. location "12b".
 // Every item also has a Category (Carton / Inner by default - the list can be extended).
-// Rack | Row | Item Name | Item Code | Qty | Unit | Note | Updated | ID | Owner | Category   (like Links: each user / group sees only its own rows)
+// Rack | Row | Item Name | INS Number | (old Qty) | (old Unit) | Note | Updated | ID | Owner | Category | <one number column per category: Carton, Inner, ...>   (like Links: each user / group sees only its own rows)
 // Settings live in the "Rack Config" sheet:  Type | Key | Value (JSON) | Owner   ->  Rows / <rack no. or *> / ["a","b"]   and   Cats / * / ["Carton","Inner"]
 var RACK_MAX = 100;
 var RACK_DEF_ROWS = ['a', 'b', 'c', 'd'], RACK_DEF_CATS = ['Carton', 'Inner'];
-var RACK_UNITS = { Pcs: 1, Boxes: 1, Cartons: 1, Sets: 1, Packs: 1 };
 var RACK_ROW_RE = /^[A-Za-z0-9 _.\-]{1,12}$/;
+// Every category has its OWN number column in this sheet (from column L on, header = category name),
+// e.g. "Carton" | "Inner" | ...  An item stores its number in the column of the category chosen for it.
+function rackCatCols_(sh, cats) {                     // -> { 'inner': 13, ... }; creates the column of every category that has none yet
+  var lc = Math.max(sh.getLastColumn(), 11), map = {};
+  if (lc > 11) sh.getRange(1, 12, 1, lc - 11).getValues()[0].forEach(function (h, i) {
+    var k = String(h).trim().toLowerCase();
+    if (k && map[k] === undefined) map[k] = 12 + i;
+  });
+  (cats || []).forEach(function (c) {
+    var name = String(c).trim(), k = name.toLowerCase();
+    if (!k || map[k] !== undefined) return;
+    lc += 1;
+    if (sh.getMaxColumns() < lc) sh.insertColumnsAfter(sh.getMaxColumns(), lc - sh.getMaxColumns());
+    var h = sh.getRange(1, lc); h.setNumberFormat('@'); h.setValue(name); h.setFontWeight('bold');
+    sh.getRange(2, lc, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('@');
+    map[k] = lc;
+  });
+  return map;
+}
 function rackSheet_() {
   var sh = ownedSheet_('RACK', 10);
   if (sh.getMaxColumns() < 11) sh.insertColumnsAfter(sh.getMaxColumns(), 11 - sh.getMaxColumns());
   var h = sh.getRange(1, 11);
   if (String(h.getValue()) !== 'Category') { h.setNumberFormat('@'); h.setValue('Category'); h.setFontWeight('bold'); sh.getRange('K:K').setNumberFormat('@'); }
+  var h4 = sh.getRange(1, 4);
+  if (String(h4.getValue()) === 'Item Code') { h4.setNumberFormat('@'); h4.setValue('INS Number'); }
   return sh;
 }
-function rackOut_(r, id) {
-  var q = String(r[4] === undefined || r[4] === null ? '' : r[4]).trim();
-  return { id: id, rack: String(r[0]).trim(), row: String(r[1]).trim(), name: String(r[2]), code: String(r[3]),
-    qty: q === '' || isNaN(Number(q)) ? '' : Number(q), unit: RACK_UNITS[String(r[5])] ? String(r[5]) : 'Pcs', note: String(r[6]), at: String(r[7]),
-    cat: String(r[10] || '').trim() || RACK_DEF_CATS[0] };
+function rackNum_(v) { var q = String(v === undefined || v === null ? '' : v).trim(); return (q === '' || isNaN(Number(q))) ? '' : Number(q); }
+function rackCanonCat_(cat, cats) {
+  for (var i = 0; i < cats.length; i++) if (String(cats[i]).toLowerCase() === cat.toLowerCase()) return String(cats[i]);
+  return cat;
 }
-function readRack_() {
-  var sh = rackSheet_(), last = sh.getLastRow();
+function rackOut_(r, id, cats, map) {
+  var names = (cats || []).slice(), cat = String(r[10] || '').trim() || RACK_DEF_CATS[0];
+  cat = rackCanonCat_(cat, names);
+  if (names.indexOf(cat) < 0) names.push(cat);
+  var nums = {};
+  names.forEach(function (c) { var col = map[String(c).trim().toLowerCase()]; nums[c] = col ? rackNum_(r[col - 1]) : ''; });
+  if (nums[cat] === '') nums[cat] = rackNum_(r[4]);          // rows saved by the first version kept their number in the old "Qty" column
+  return { id: id, rack: String(r[0]).trim(), row: String(r[1]).trim(), name: String(r[2]), code: String(r[3]), note: String(r[6]), at: String(r[7]), cat: cat, nums: nums };
+}
+function readRack_(cats) {
+  cats = cats || RACK_DEF_CATS;
+  var sh = rackSheet_(), map = rackCatCols_(sh, cats), last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 11).getValues();
+  var vals = sh.getRange(2, 1, last - 1, Math.max(sh.getLastColumn(), 11)).getValues();
   var out = [], dirty = false, dirtyId = false;
   vals.forEach(function (r) {
     if (!has_(r[0]) && !has_(r[2])) return;
@@ -2073,7 +2103,7 @@ function readRack_() {
     var id = String(r[8] || '').trim();
     if (!id) { id = Utilities.getUuid().slice(0, 8); r[8] = id; dirtyId = true; }
     if (ownerOf_(r[9]) !== CTX.owner) return;
-    out.push(rackOut_(r, id));
+    out.push(rackOut_(r, id, cats, map));
   });
   if (dirty) sh.getRange(2, 1, vals.length, 2).setValues(vals.map(function (r) { return [r[0], r[1]]; }));
   if (dirtyId) sh.getRange(2, 9, vals.length, 1).setValues(vals.map(function (r) { return [r[8]]; }));
@@ -2086,11 +2116,10 @@ function validRack_(req) {
   if (!RACK_ROW_RE.test(row)) fail_('Choose the row (letters / numbers only, up to 12 characters).');
   var name = String(req.name || '').trim().slice(0, 200);
   if (!name) fail_('Write the item name.');
-  var q = String(req.qty === undefined || req.qty === null ? '' : req.qty).trim(), qty = '';
-  if (q !== '') { qty = Number(q); if (isNaN(qty) || qty < 0 || qty > 100000000) fail_('Quantity must be a number (0 or more).'); }
-  var unit = RACK_UNITS[String(req.unit)] ? String(req.unit) : 'Pcs';
+  var t = String(req.total === undefined || req.total === null ? '' : req.total).trim(), total = '';
+  if (t !== '') { total = Number(t); if (isNaN(total) || total < 0 || total > 100000000) fail_('The total must be a number (0 or more).'); }
   var cat = String(req.cat || '').trim().slice(0, 40) || RACK_DEF_CATS[0];
-  return { rack: String(n), row: row, name: name, code: String(req.code || '').trim().slice(0, 60), qty: qty, unit: unit, note: String(req.note || '').trim().slice(0, 500), cat: cat };
+  return { rack: String(n), row: row, name: name, code: String(req.code || '').trim().slice(0, 60), note: String(req.note || '').trim().slice(0, 500), cat: cat, total: total };
 }
 function findRackRow_(sh, id) {
   var last = sh.getLastRow();
@@ -2099,24 +2128,40 @@ function findRackRow_(sh, id) {
   for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id) && ownerOf_(v[i][1]) === CTX.owner) return i + 2;
   return -1;
 }
+function rackSetNum_(sh, row, map, cat, total) {
+  var col = map[String(cat).trim().toLowerCase()];
+  if (!col) return;
+  var c = sh.getRange(row, col); c.setNumberFormat('@'); c.setValue(total === '' ? '' : String(total));
+}
+// the category list the sheet needs columns for: the saved categories (+ this item's own, if it was removed from the list)
+function rackNeedCats_(p) {
+  var cats = readRackCfg_().cats.slice();
+  p.cat = rackCanonCat_(p.cat, cats);
+  if (cats.indexOf(p.cat) < 0) cats.push(p.cat);
+  return cats;
+}
 function addRack_(req) {
-  var p = validRack_(req), sh = rackSheet_();
+  var p = validRack_(req), sh = rackSheet_(), cats = rackNeedCats_(p), map = rackCatCols_(sh, cats);
   var row = sh.getLastRow() + 1, id = Utilities.getUuid().slice(0, 8), now = nowStr_();
   var rng = sh.getRange(row, 1, 1, 11);
   rng.setNumberFormat('@');
-  rng.setValues([[p.rack, p.row, p.name, p.code, String(p.qty), p.unit, p.note, now, id, CTX.owner, p.cat]]);
-  return { ok: true, rack: rackOut_([p.rack, p.row, p.name, p.code, p.qty, p.unit, p.note, now, id, CTX.owner, p.cat], id) };
+  rng.setValues([[p.rack, p.row, p.name, p.code, '', '', p.note, now, id, CTX.owner, p.cat]]);
+  rackSetNum_(sh, row, map, p.cat, p.total);
+  return { ok: true, rack: rackOut_(sh.getRange(row, 1, 1, Math.max(sh.getLastColumn(), 11)).getValues()[0], id, cats, map) };
 }
 function updateRack_(req) {
   var p = validRack_(req), sh = rackSheet_();
   var row = findRackRow_(sh, req.id);
   if (row < 0) fail_('Item not found. Please refresh.');
-  var now = nowStr_();
+  var cats = rackNeedCats_(p), map = rackCatCols_(sh, cats), now = nowStr_();
+  var old = String(sh.getRange(row, 11).getValue() || '').trim();
   var rng = sh.getRange(row, 1, 1, 8);
   rng.setNumberFormat('@');
-  rng.setValues([[p.rack, p.row, p.name, p.code, String(p.qty), p.unit, p.note, now]]);
+  rng.setValues([[p.rack, p.row, p.name, p.code, '', '', p.note, now]]);
   var c = sh.getRange(row, 11); c.setNumberFormat('@'); c.setValue(p.cat);
-  return { ok: true, rack: rackOut_([p.rack, p.row, p.name, p.code, p.qty, p.unit, p.note, now, String(req.id), CTX.owner, p.cat], String(req.id)) };
+  if (old && old.toLowerCase() !== p.cat.toLowerCase()) rackSetNum_(sh, row, map, old, '');     // category changed: the number moves to the new column
+  rackSetNum_(sh, row, map, p.cat, p.total);
+  return { ok: true, rack: rackOut_(sh.getRange(row, 1, 1, Math.max(sh.getLastColumn(), 11)).getValues()[0], String(req.id), cats, map) };
 }
 function deleteRack_(req) {
   var sh = rackSheet_();
@@ -2191,6 +2236,7 @@ function saveRackRows_(req) {
 function saveRackCats_(req) {
   var cats = cleanList_(req.cats, 30, 40, null, 'category');
   rackCfgSet_('Cats', '*', cats);
+  rackCatCols_(rackSheet_(), cats);                    // one number column per category, right in the sheet
   return { ok: true, cfg: readRackCfg_() };
 }
 
@@ -2575,6 +2621,7 @@ function attAll_() {
 function getAll_() {
   var s = readSettings_(), p = CTX.perms;
   var T = p.tt === 'none' ? { cats: [], days: {} } : readTT_();
+  var RC = p.rack === 'none' ? readRackCfgDefault_() : readRackCfg_();
   return {
     me: meOf_(s.values),
     settings: settingsView_(s),
@@ -2589,8 +2636,8 @@ function getAll_() {
     lic: p.lic === 'none' ? [] : readLic_(),
     vcs: p.vcs === 'none' ? [] : readVcs_(),
     vcsUsers: p.vcs === 'none' ? [] : vcsUsers_(),
-    rack: p.rack === 'none' ? [] : readRack_(),
-    rackCfg: p.rack === 'none' ? readRackCfgDefault_() : readRackCfg_(),
+    rack: p.rack === 'none' ? [] : readRack_(RC.cats),
+    rackCfg: RC,
     ttCats: T.cats.map(function (c) { return c.name; }),
     timetable: ttDaysOut_(T)
   };

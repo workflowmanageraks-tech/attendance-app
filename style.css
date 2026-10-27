@@ -711,3 +711,11 @@ html[data-mode="dark"] .rk-shelf{border-bottom-color:#475569}
 .rk-catrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
 html[data-mode="dark"] .rk-cat{background:var(--soft2);color:var(--brand-ink)}
 @media (max-width:640px){.rk-shelf{grid-template-columns:1fr}}
+
+/* rack mapping v3: one number cell per category */
+.rk-nums{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.rk-num{min-width:68px;border:1px solid var(--line);border-radius:10px;background:var(--soft);padding:3px 10px 4px;display:flex;flex-direction:column;line-height:1.2}
+.rk-num span{font-size:calc(10.5px*var(--fs));font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+.rk-num b{font-size:calc(15px*var(--fs));color:var(--muted)}
+.rk-num.on{border-color:var(--brand);background:var(--brand-soft)}
+.rk-num.on b{color:var(--brand-ink)}
