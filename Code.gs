@@ -51,9 +51,10 @@ const SHEET_KEYS = {
   LPH: ['login security photos', 'security photos', 'login photos'],
   LIC: ['lic', 'lic policies', 'policies'],
   VCS: ['vcs complaints', 'vcs complaint'],
-  RACK: ['rack mapping']
+  RACK: ['rack mapping'],
+  RACKCFG: ['rack config']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -160,7 +161,7 @@ var WRITE_ACTIONS = {
   addPw: 1, updatePw: 1, deletePw: 1,
   addLink: 1, updateLink: 1, deleteLink: 1,
   addVcs: 1, updateVcs: 1,
-  addRack: 1, updateRack: 1, deleteRack: 1,
+  addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, setActivityAccess: 1, calDisconnect: 1
@@ -175,7 +176,7 @@ var NEED = {
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
   addLic: 'lic', updateLic: 'lic', deleteLic: 'lic',
   addVcs: 'vcs', updateVcs: 'vcs',
-  addRack: 'rack', updateRack: 'rack', deleteRack: 'rack',
+  addRack: 'rack', updateRack: 'rack', deleteRack: 'rack', saveRackRows: 'rack', saveRackCats: 'rack',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
   changeCredentials: 'creds',
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
@@ -299,6 +300,8 @@ function route_(req) {
       case 'addRack':           out = addRack_(req); break;
       case 'updateRack':        out = updateRack_(req); break;
       case 'deleteRack':        out = deleteRack_(req); break;
+      case 'saveRackRows':      out = saveRackRows_(req); break;
+      case 'saveRackCats':      out = saveRackCats_(req); break;
       case 'setTimetable':      out = setTimetable_(req); break;
       case 'calAuthUrl':        return calAuthUrl_();
       case 'calStatus':         return calStatus_();
@@ -627,6 +630,7 @@ var ACTIVITY_LABEL_ = {
   addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link',
   addVcs: 'Logged a VCS complaint', updateVcs: 'Updated a VCS complaint',
   addRack: 'Added a rack item', updateRack: 'Updated a rack item', deleteRack: 'Deleted a rack item',
+  saveRackRows: 'Customised rack rows', saveRackCats: 'Changed rack categories',
   setTimetable: 'Edited Time Table', addTtCat: 'Added a Time Table category', updateTtCat: 'Renamed a Time Table category', deleteTtCat: 'Deleted a Time Table category',
   saveUser: 'Added/edited a user', deleteUser: 'Deleted a user', kickUser: 'Signed a user out everywhere',
   saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group', setActivityAccess: 'Changed who can see the Activity log',
@@ -646,7 +650,7 @@ function activityDetail_(a, req) {
     if (a === 'addLink' || a === 'updateLink') return req.name || '';
     if (a === 'addVcs') return String(req.title || '').slice(0, 60);
     if (a === 'updateVcs') return [req.status, req.toId].filter(has_).join(' · ');
-    if (a === 'addRack' || a === 'updateRack') return [String(req.rack || '').toUpperCase() + String(req.row || ''), req.name].filter(has_).join(' · ');
+    if (a === 'addRack' || a === 'updateRack') return [String(req.rack || '') + String(req.row || ''), req.name].filter(has_).join(' · ');
     if (a === 'saveGroup') return req.name || '';
     if (a === 'deployUpload' || a === 'deployRestore') return req.path || '';
   } catch (e) {}
@@ -1002,7 +1006,7 @@ function listGroups_() {
 }
 // moves every row owned by `fromId` to the group, so the group starts with that person's existing data
 function adoptData_(fromId, toOwner) {
-  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 8], ['RACK', 10], ['CAT', 3], ['TT', 4]].forEach(function (p) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 8], ['RACK', 10], ['RACKCFG', 4], ['CAT', 3], ['TT', 4]].forEach(function (p) {
     var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
     if (last < 2) return;
     var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
@@ -1161,8 +1165,12 @@ function createSheet_(k) {
     sh.getRange('A:L').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'RACK') {
-    sh.getRange(1, 1, 1, 10).setValues([['Rack (A-Z)', 'Row (1-4, 1 = top)', 'Item Name', 'Item Code', 'Qty', 'Unit', 'Note', 'Updated', 'ID', 'Owner']]);
-    sh.getRange('A:J').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 11).setValues([['Rack (1-100)', 'Row (a, b, c...)', 'Item Name', 'Item Code', 'Qty', 'Unit', 'Note', 'Updated', 'ID', 'Owner', 'Category']]);
+    sh.getRange('A:K').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'RACKCFG') {
+    sh.getRange(1, 1, 1, 4).setValues([['Type (Rows / Cats)', 'Key (rack number or *)', 'Value (JSON list)', 'Owner']]);
+    sh.getRange('A:D').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LIC') {
     sh.getRange(1, 1, 1, 9).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'Premium Frequency', 'ID', 'Owner', 'Renewal Due Date']]);
@@ -2027,42 +2035,62 @@ function updateVcs_(req) {
 }
 
 // ---------- RACK MAPPING ----------
-// Where is each item kept?  Racks A-Z, every rack has 4 rows (1 = top shelf). Location code = rack letter + row, e.g. "B3".
-// Rack | Row | Item Name | Item Code | Qty | Unit | Note | Updated | ID | Owner   (like Links: every user / group sees only its own rows)
-var RACK_ROWS = 4;
+// Racks numbered 1-100. Every rack has rows named a, b, c, d by default (customisable per rack), e.g. location "12b".
+// Every item also has a Category (Carton / Inner by default - the list can be extended).
+// Rack | Row | Item Name | Item Code | Qty | Unit | Note | Updated | ID | Owner | Category   (like Links: each user / group sees only its own rows)
+// Settings live in the "Rack Config" sheet:  Type | Key | Value (JSON) | Owner   ->  Rows / <rack no. or *> / ["a","b"]   and   Cats / * / ["Carton","Inner"]
+var RACK_MAX = 100;
+var RACK_DEF_ROWS = ['a', 'b', 'c', 'd'], RACK_DEF_CATS = ['Carton', 'Inner'];
 var RACK_UNITS = { Pcs: 1, Boxes: 1, Cartons: 1, Sets: 1, Packs: 1 };
-function rackSheet_() { return ownedSheet_('RACK', 10); }
+var RACK_ROW_RE = /^[A-Za-z0-9 _.\-]{1,12}$/;
+function rackSheet_() {
+  var sh = ownedSheet_('RACK', 10);
+  if (sh.getMaxColumns() < 11) sh.insertColumnsAfter(sh.getMaxColumns(), 11 - sh.getMaxColumns());
+  var h = sh.getRange(1, 11);
+  if (String(h.getValue()) !== 'Category') { h.setNumberFormat('@'); h.setValue('Category'); h.setFontWeight('bold'); sh.getRange('K:K').setNumberFormat('@'); }
+  return sh;
+}
 function rackOut_(r, id) {
   var q = String(r[4] === undefined || r[4] === null ? '' : r[4]).trim();
-  return { id: id, rack: String(r[0]).trim().toUpperCase(), row: Number(r[1]) || 1, name: String(r[2]), code: String(r[3]),
-    qty: q === '' || isNaN(Number(q)) ? '' : Number(q), unit: RACK_UNITS[String(r[5])] ? String(r[5]) : 'Pcs', note: String(r[6]), at: String(r[7]) };
+  return { id: id, rack: String(r[0]).trim(), row: String(r[1]).trim(), name: String(r[2]), code: String(r[3]),
+    qty: q === '' || isNaN(Number(q)) ? '' : Number(q), unit: RACK_UNITS[String(r[5])] ? String(r[5]) : 'Pcs', note: String(r[6]), at: String(r[7]),
+    cat: String(r[10] || '').trim() || RACK_DEF_CATS[0] };
 }
 function readRack_() {
   var sh = rackSheet_(), last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 10).getValues();
-  var out = [], dirty = false;
+  var vals = sh.getRange(2, 1, last - 1, 11).getValues();
+  var out = [], dirty = false, dirtyId = false;
   vals.forEach(function (r) {
     if (!has_(r[0]) && !has_(r[2])) return;
+    var rk = String(r[0]).trim();
+    if (/^[A-Za-z]$/.test(rk)) {                      // first version used racks A-Z and rows 1-4: A -> 1 ... Z -> 26, row 1 -> a ...
+      r[0] = String(rk.toUpperCase().charCodeAt(0) - 64);
+      var n = parseInt(r[1], 10);
+      if (n >= 1 && n <= 26) r[1] = String.fromCharCode(96 + n);
+      dirty = true;
+    }
     var id = String(r[8] || '').trim();
-    if (!id) { id = Utilities.getUuid().slice(0, 8); r[8] = id; dirty = true; }
+    if (!id) { id = Utilities.getUuid().slice(0, 8); r[8] = id; dirtyId = true; }
     if (ownerOf_(r[9]) !== CTX.owner) return;
     out.push(rackOut_(r, id));
   });
-  if (dirty) sh.getRange(2, 9, vals.length, 1).setValues(vals.map(function (r) { return [r[8]]; }));
+  if (dirty) sh.getRange(2, 1, vals.length, 2).setValues(vals.map(function (r) { return [r[0], r[1]]; }));
+  if (dirtyId) sh.getRange(2, 9, vals.length, 1).setValues(vals.map(function (r) { return [r[8]]; }));
   return out;
 }
 function validRack_(req) {
-  var rack = String(req.rack || '').trim().toUpperCase();
-  if (!/^[A-Z]$/.test(rack)) fail_('Choose a rack from A to Z.');
-  var row = parseInt(req.row, 10);
-  if (!(row >= 1 && row <= RACK_ROWS)) fail_('Choose a row from 1 to ' + RACK_ROWS + '.');
+  var rk = String(req.rack === undefined || req.rack === null ? '' : req.rack).trim(), n = parseInt(rk, 10);
+  if (!/^\d{1,3}$/.test(rk) || !(n >= 1 && n <= RACK_MAX)) fail_('Choose a rack from 1 to ' + RACK_MAX + '.');
+  var row = String(req.row === undefined || req.row === null ? '' : req.row).trim();
+  if (!RACK_ROW_RE.test(row)) fail_('Choose the row (letters / numbers only, up to 12 characters).');
   var name = String(req.name || '').trim().slice(0, 200);
   if (!name) fail_('Write the item name.');
   var q = String(req.qty === undefined || req.qty === null ? '' : req.qty).trim(), qty = '';
   if (q !== '') { qty = Number(q); if (isNaN(qty) || qty < 0 || qty > 100000000) fail_('Quantity must be a number (0 or more).'); }
   var unit = RACK_UNITS[String(req.unit)] ? String(req.unit) : 'Pcs';
-  return { rack: rack, row: row, name: name, code: String(req.code || '').trim().slice(0, 60), qty: qty, unit: unit, note: String(req.note || '').trim().slice(0, 500) };
+  var cat = String(req.cat || '').trim().slice(0, 40) || RACK_DEF_CATS[0];
+  return { rack: String(n), row: row, name: name, code: String(req.code || '').trim().slice(0, 60), qty: qty, unit: unit, note: String(req.note || '').trim().slice(0, 500), cat: cat };
 }
 function findRackRow_(sh, id) {
   var last = sh.getLastRow();
@@ -2074,10 +2102,10 @@ function findRackRow_(sh, id) {
 function addRack_(req) {
   var p = validRack_(req), sh = rackSheet_();
   var row = sh.getLastRow() + 1, id = Utilities.getUuid().slice(0, 8), now = nowStr_();
-  var rng = sh.getRange(row, 1, 1, 10);
+  var rng = sh.getRange(row, 1, 1, 11);
   rng.setNumberFormat('@');
-  rng.setValues([[p.rack, String(p.row), p.name, p.code, String(p.qty), p.unit, p.note, now, id, CTX.owner]]);
-  return { ok: true, rack: rackOut_([p.rack, p.row, p.name, p.code, p.qty, p.unit, p.note, now], id) };
+  rng.setValues([[p.rack, p.row, p.name, p.code, String(p.qty), p.unit, p.note, now, id, CTX.owner, p.cat]]);
+  return { ok: true, rack: rackOut_([p.rack, p.row, p.name, p.code, p.qty, p.unit, p.note, now, id, CTX.owner, p.cat], id) };
 }
 function updateRack_(req) {
   var p = validRack_(req), sh = rackSheet_();
@@ -2086,8 +2114,9 @@ function updateRack_(req) {
   var now = nowStr_();
   var rng = sh.getRange(row, 1, 1, 8);
   rng.setNumberFormat('@');
-  rng.setValues([[p.rack, String(p.row), p.name, p.code, String(p.qty), p.unit, p.note, now]]);
-  return { ok: true, rack: rackOut_([p.rack, p.row, p.name, p.code, p.qty, p.unit, p.note, now], String(req.id)) };
+  rng.setValues([[p.rack, p.row, p.name, p.code, String(p.qty), p.unit, p.note, now]]);
+  var c = sh.getRange(row, 11); c.setNumberFormat('@'); c.setValue(p.cat);
+  return { ok: true, rack: rackOut_([p.rack, p.row, p.name, p.code, p.qty, p.unit, p.note, now, String(req.id), CTX.owner, p.cat], String(req.id)) };
 }
 function deleteRack_(req) {
   var sh = rackSheet_();
@@ -2095,6 +2124,74 @@ function deleteRack_(req) {
   if (row < 0) fail_('Item not found. Please refresh.');
   sh.deleteRow(row);
   return { ok: true };
+}
+// ----- rack settings: custom rows per rack + category list -----
+function readRackCfgDefault_() { return { rows: { '*': RACK_DEF_ROWS.slice() }, cats: RACK_DEF_CATS.slice() }; }
+function rackCfgSheet_() { return ownedSheet_('RACKCFG', 4); }
+function readRackCfg_() {
+  var cfg = readRackCfgDefault_(), sh = rackCfgSheet_(), last = sh.getLastRow();
+  if (last < 2) return cfg;
+  sh.getRange(2, 1, last - 1, 4).getValues().forEach(function (r) {
+    if (ownerOf_(r[3]) !== CTX.owner) return;
+    var v; try { v = JSON.parse(String(r[2])); } catch (e) { return; }
+    if (!Array.isArray(v) || !v.length) return;
+    v = v.map(String);
+    if (String(r[0]) === 'Rows') cfg.rows[String(r[1])] = v;
+    else if (String(r[0]) === 'Cats') cfg.cats = v;
+  });
+  return cfg;
+}
+// type, key, value (array)  -> writes / replaces that row.  value === null -> removes it
+function rackCfgSet_(type, key, val) {
+  var sh = rackCfgSheet_(), last = sh.getLastRow(), row = -1;
+  if (last >= 2) {
+    var v = sh.getRange(2, 1, last - 1, 4).getValues();
+    for (var i = 0; i < v.length; i++) if (String(v[i][0]) === type && String(v[i][1]) === key && ownerOf_(v[i][3]) === CTX.owner) { row = i + 2; break; }
+  }
+  if (val === null) { if (row > 0) sh.deleteRow(row); return; }
+  if (row < 0) row = sh.getLastRow() + 1;
+  var rng = sh.getRange(row, 1, 1, 4);
+  rng.setNumberFormat('@');
+  rng.setValues([[type, key, JSON.stringify(val), CTX.owner]]);
+}
+function rackCfgClearOverrides_() {
+  var sh = rackCfgSheet_(), last = sh.getLastRow();
+  if (last < 2) return;
+  var v = sh.getRange(2, 1, last - 1, 4).getValues();
+  for (var i = v.length - 1; i >= 0; i--) if (String(v[i][0]) === 'Rows' && String(v[i][1]) !== '*' && ownerOf_(v[i][3]) === CTX.owner) sh.deleteRow(i + 2);
+}
+function cleanList_(arr, max, len, re, what) {
+  if (!Array.isArray(arr)) fail_('Invalid list.');
+  var out = [], seen = {};
+  arr.forEach(function (x) {
+    x = String(x === undefined || x === null ? '' : x).trim().slice(0, len);
+    if (!x) return;
+    if (re && !re.test(x)) fail_(what + ' “' + x + '” has characters that are not allowed.');
+    var k = x.toLowerCase();
+    if (seen[k]) return;
+    seen[k] = 1; out.push(x);
+  });
+  if (!out.length) fail_('Keep at least one ' + what + '.');
+  if (out.length > max) fail_('At most ' + max + ' ' + what + 's are allowed.');
+  return out;
+}
+function saveRackRows_(req) {
+  var rows = cleanList_(req.rows, 12, 12, RACK_ROW_RE, 'row');
+  var target = String(req.rack === undefined || req.rack === null ? '*' : req.rack).trim();
+  if (req.all || target === '*') {
+    rackCfgClearOverrides_();
+    rackCfgSet_('Rows', '*', rows);
+  } else {
+    var n = parseInt(target, 10);
+    if (!/^\d{1,3}$/.test(target) || !(n >= 1 && n <= RACK_MAX)) fail_('Choose a rack from 1 to ' + RACK_MAX + '.');
+    rackCfgSet_('Rows', String(n), rows);
+  }
+  return { ok: true, cfg: readRackCfg_() };
+}
+function saveRackCats_(req) {
+  var cats = cleanList_(req.cats, 30, 40, null, 'category');
+  rackCfgSet_('Cats', '*', cats);
+  return { ok: true, cfg: readRackCfg_() };
 }
 
 // ---------- TIME TABLE ----------
@@ -2493,6 +2590,7 @@ function getAll_() {
     vcs: p.vcs === 'none' ? [] : readVcs_(),
     vcsUsers: p.vcs === 'none' ? [] : vcsUsers_(),
     rack: p.rack === 'none' ? [] : readRack_(),
+    rackCfg: p.rack === 'none' ? readRackCfgDefault_() : readRackCfg_(),
     ttCats: T.cats.map(function (c) { return c.name; }),
     timetable: ttDaysOut_(T)
   };

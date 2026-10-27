@@ -329,7 +329,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || [];
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.rackCfg = S.d.rackCfg || { rows:{ '*':['a','b','c','d'] }, cats:['Carton','Inner'] };
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -431,7 +431,7 @@ function applyRO(v){
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
   if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"]');
   if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"],[onclick*="vcsReopen"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
-  if (!can('rack')) kill('[onclick*="rackForm"],[onclick*="rackDel"]');
+  if (!can('rack')) kill('[onclick*="rackForm"],[onclick*="rackDel"],[onclick*="rackRowsEdit"],[onclick*="rackCatsEdit"]');
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
     v.querySelectorAll('tr').forEach(tr => { if (tr.querySelector('input.in')) tr.remove(); });
@@ -1149,7 +1149,7 @@ const TITLES = {
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   lic:['LIC','Customer policies — amount, dates and how long each one runs'],
   vcs:['VCS Complaint Manage','Log complaints, assign them to a user and track Open / Pending / Closed'],
-  rack:['Rack Mapping','Racks A–Z, 4 rows each — note what is kept where and find it in seconds'],
+  rack:['Rack Mapping','Racks 1–100 with rows a, b, c, d — note what is kept where and find it in seconds'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
@@ -2247,73 +2247,97 @@ async function vcsUpdate(id){ if (!can('vcs')) return deny();
 }
 
 /* =====================================================================
-   VIEW: RACK MAPPING  (racks A–Z, 4 rows each — note which item is kept where, then search to find it)
-   Location code = rack letter + row number, e.g. "B3" = Rack B, Row 3 (Row 1 = top shelf).
+   VIEW: RACK MAPPING  (racks 1–100, rows a b c d — customisable — note which item is kept where, then search to find it)
+   Location code = rack number + row, e.g. "12b" = Rack 12, row b.  Every item has a category (Carton / Inner … add your own).
    ===================================================================== */
-const RACK_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''), RACK_ROWS = 4, RACK_UNITS = ['Pcs','Boxes','Cartons','Sets','Packs'];
-const RACK_ROW_NAME = { 1:'Top', 2:'Upper-middle', 3:'Lower-middle', 4:'Bottom' };
-function rackState(){ return S.rackUi = S.rackUi || { sel:'', q:'' }; }
+const RACK_MAX = 100, RACK_UNITS = ['Pcs','Boxes','Cartons','Sets','Packs'], RACK_DEF_ROWS = ['a','b','c','d'], RACK_DEF_CATS = ['Carton','Inner'];
+function rackState(){ return S.rackUi = S.rackUi || { sel:'', q:'', cat:'all', show:'all' }; }
+function rackCfg(){ const c = S.d.rackCfg || {}; return { rows:c.rows || { '*':RACK_DEF_ROWS }, cats:(c.cats && c.cats.length) ? c.cats : RACK_DEF_CATS }; }
+function rackRowsOf(n){ const c = rackCfg(); return c.rows[String(n)] || c.rows['*'] || RACK_DEF_ROWS; }
 function rackLoc(x){ return x.rack + x.row; }
 function rackQty(x){ return x.qty === '' || x.qty === undefined ? '' : Number(x.qty).toLocaleString('en-IN') + ' ' + (x.unit || 'Pcs'); }
 function rackItemHtml(x, showLoc){
   return `<div class="rk-item">
     <div class="rk-main">
       <div class="rk-name">${showLoc ? `<span class="rk-loc">${esc(rackLoc(x))}</span>` : ''}${esc(x.name)}</div>
-      <div class="rk-meta">${x.code ? `<span class="tag" style="margin-left:0">${esc(x.code)}</span>` : ''}${x.qty !== '' ? `<span class="rk-qty">× ${esc(rackQty(x))}</span>` : ''}</div>
+      <div class="rk-meta"><span class="tag rk-cat" style="margin-left:0">${esc(x.cat)}</span>${x.code ? `<span class="tag" style="margin-left:0">${esc(x.code)}</span>` : ''}${x.qty !== '' ? `<span class="rk-qty">× ${esc(rackQty(x))}</span>` : ''}</div>
       ${x.note ? `<div class="rk-note">${esc(x.note)}</div>` : ''}
     </div>
-    <div class="rk-acts">${showLoc ? `<button class="btn soft sm" onclick="rackPick('${x.rack}',true)">Open rack</button>` : ''}
+    <div class="rk-acts">${showLoc ? `<button class="btn soft sm" onclick="rackPick('${esc(x.rack)}',true)">Open rack</button>` : ''}
       <button class="btn ghost sm" onclick="rackForm('${esc(x.id)}')">Edit</button><button class="btn ghost sm" onclick="rackDel('${esc(x.id)}')" aria-label="Delete">🗑</button></div>
   </div>`;
 }
 function vRack(){
-  const R = rackState(), all = S.d.rack || [], ro = !can('rack');
+  const R = rackState(), all = S.d.rack || [], cfg = rackCfg(), ro = !can('rack');
   const by = {}; all.forEach(x => { (by[x.rack] = by[x.rack] || []).push(x); });
-  if (!R.sel || !RACK_LETTERS.includes(R.sel)) R.sel = RACK_LETTERS.find(l => by[l]) || 'A';
-  const used = RACK_LETTERS.filter(l => by[l]).length, q = (R.q || '').trim().toLowerCase();
-  const stats = `<div class="rk-stats"><div><b>${all.length}</b><span>Items noted</span></div><div><b>${used}</b><span>Racks in use</span></div><div><b>${RACK_LETTERS.length - used}</b><span>Racks empty</span></div></div>`;
+  const usedNums = Object.keys(by).map(Number).filter(n => n >= 1 && n <= RACK_MAX).sort((a, b) => a - b);
+  if (!(+R.sel >= 1 && +R.sel <= RACK_MAX)) R.sel = String(usedNums[0] || 1);
+  if (R.cat !== 'all' && !cfg.cats.includes(R.cat)) R.cat = 'all';
+  const inCat = x => R.cat === 'all' || x.cat === R.cat, q = (R.q || '').trim().toLowerCase();
+  const stats = `<div class="rk-stats"><div><b>${all.length}</b><span>Items noted</span></div><div><b>${usedNums.length}</b><span>Racks in use</span></div><div><b>${RACK_MAX - usedNums.length}</b><span>Racks empty</span></div></div>`;
+  const catOpts = ['all', ...cfg.cats].map(c => `<option value="${esc(c)}" ${R.cat === c ? 'selected' : ''}>${c === 'all' ? 'All categories' : esc(c)}</option>`).join('');
   const search = `<div class="card" style="margin-bottom:16px"><div class="actions">
-      <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Find an item — name, code, note or location (e.g. B3)" value="${esc(R.q)}" oninput="rackSearch(this.value)">
+      <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Find an item — name, code, note or location (e.g. 12b)" value="${esc(R.q)}" oninput="rackSearch(this.value)">
+      <select class="select" style="width:auto" onchange="rackState().cat=this.value;render()" aria-label="Category">${catOpts}</select>
+      <button class="btn ghost" onclick="rackCatsEdit()" title="Add / remove categories">🏷️ Categories</button>
       <button class="btn" onclick="rackForm(null,'${R.sel}')">＋ Add item</button></div></div>`;
   let body;
   if (q){
-    const hits = all.filter(x => (x.name + ' ' + x.code + ' ' + x.note + ' ' + rackLoc(x)).toLowerCase().includes(q))
-      .sort((a, b) => a.rack.localeCompare(b.rack) || a.row - b.row || a.name.localeCompare(b.name));
+    const hits = all.filter(x => inCat(x) && (x.name + ' ' + x.code + ' ' + x.note + ' ' + x.cat + ' ' + rackLoc(x)).toLowerCase().includes(q))
+      .sort((a, b) => (+a.rack) - (+b.rack) || String(a.row).localeCompare(String(b.row)) || a.name.localeCompare(b.name));
     body = `<div class="card"><h3>Search results <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${hits.length}</span></h3>
-      ${hits.length ? hits.map(x => rackItemHtml(x, true)).join('') : '<div class="empty-state">Nothing found. Check the spelling or try the item code.</div>'}</div>`;
+      ${hits.length ? hits.map(x => rackItemHtml(x, true)).join('') : '<div class="empty-state">Nothing found. Check the spelling, the code or the category filter.</div>'}</div>`;
   } else {
-    const chips = RACK_LETTERS.map(l => `<button class="rk-chip ${l === R.sel ? 'on' : ''} ${by[l] ? 'has' : ''}" onclick="rackPick('${l}')" aria-label="Rack ${l}">${l}${by[l] ? `<small>${by[l].length}</small>` : ''}</button>`).join('');
-    const rows = [];
-    for (let r = 1; r <= RACK_ROWS; r++){
-      const it = (by[R.sel] || []).filter(x => x.row === r).sort((a, b) => a.name.localeCompare(b.name));
-      rows.push(`<div class="rk-shelf"><div class="rk-lab"><b>${R.sel}${r}</b><span>Row ${r}<br>${RACK_ROW_NAME[r]}</span></div>
-        <div class="rk-items">${it.length ? it.map(x => rackItemHtml(x, false)).join('') : '<div class="rk-empty">Empty</div>'}
-          ${ro ? '' : `<button class="rk-add" onclick="rackForm(null,'${R.sel}',${r})">＋ Add item to ${R.sel}${r}</button>`}</div></div>`);
-    }
-    body = `<div class="card" style="margin-bottom:16px"><h3>Racks</h3><div class="rk-chips">${chips}</div>
-        <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">The number on a rack shows how many items are noted in it.</p></div>
-      <div class="card"><h3>Rack ${R.sel} <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${(by[R.sel] || []).length} item${(by[R.sel] || []).length === 1 ? '' : 's'}</span></h3>
-        <div class="rk-rack">${rows.join('')}</div></div>`;
+    let nums = []; for (let n = 1; n <= RACK_MAX; n++) if (R.show !== 'used' || by[n] || String(n) === R.sel) nums.push(n);
+    const chips = nums.map(n => `<button class="rk-chip ${String(n) === R.sel ? 'on' : ''} ${by[n] ? 'has' : ''}" onclick="rackPick('${n}')" aria-label="Rack ${n}">${n}${by[n] ? `<small>${by[n].length}</small>` : ''}</button>`).join('');
+    const rows = rackRowsOf(R.sel), mine = (by[R.sel] || []), shown = mine.filter(inCat);
+    const shelf = (row, items, label) => `<div class="rk-shelf"><div class="rk-lab"><b>${esc(R.sel)}${esc(label || row)}</b><span>Row ${esc(label || row)}</span></div>
+        <div class="rk-items">${items.length ? items.sort((a, b) => a.name.localeCompare(b.name)).map(x => rackItemHtml(x, false)).join('') : '<div class="rk-empty">Empty</div>'}
+          ${ro || label ? '' : `<button class="rk-add" onclick="rackForm(null,'${R.sel}','${esc(row)}')">＋ Add item to ${esc(R.sel)}${esc(row)}</button>`}</div></div>`;
+    const sh = rows.map(r => shelf(r, shown.filter(x => x.row === r)));
+    const other = shown.filter(x => !rows.includes(x.row));
+    if (other.length) sh.push(shelf('', other, 'other'));
+    body = `<div class="card" style="margin-bottom:16px"><div class="actions" style="margin-bottom:10px"><h3 style="margin:0;flex:1">Racks</h3>
+        <input class="input" type="number" inputmode="numeric" min="1" max="${RACK_MAX}" style="width:120px" placeholder="Go to no." onchange="rackJump(this.value)" aria-label="Go to rack number">
+        <select class="select" style="width:auto" onchange="rackState().show=this.value;render()" aria-label="Which racks to show"><option value="all" ${R.show === 'all' ? 'selected' : ''}>All 1–${RACK_MAX}</option><option value="used" ${R.show === 'used' ? 'selected' : ''}>Only racks with items</option></select></div>
+        <div class="rk-chips">${chips || '<div class="empty-state">No racks have items yet.</div>'}</div>
+        <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">The small number on a rack shows how many items are noted in it.</p></div>
+      <div class="card"><div class="actions" style="margin-bottom:10px"><h3 style="margin:0;flex:1">Rack ${esc(R.sel)} <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${mine.length} item${mine.length === 1 ? '' : 's'}${R.cat !== 'all' ? ' · showing ' + esc(R.cat) : ''}</span></h3>
+        <button class="btn ghost sm" onclick="rackRowsEdit()">✏️ Customize rows</button></div>
+        <div class="rk-rack">${sh.join('')}</div></div>`;
   }
-  return stats + search + body + `<p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Location code = rack letter + row, e.g. <b>B3</b> = Rack B, Row 3 (Row 1 is the top shelf). Saved in the “Rack Mapping” tab of your Google Sheet.</p>`;
+  return stats + search + body + `<p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Location code = rack number + row, e.g. <b>12b</b> = Rack 12, row b. Saved in the “Rack Mapping” tab of your Google Sheet (rows and categories in “Rack Config”).</p>`;
 }
-function rackPick(l, clear){
-  const R = rackState(); R.sel = l; if (clear) R.q = '';
+function rackPick(n, clear){
+  const R = rackState(); R.sel = String(n); if (clear) R.q = '';
   render(); window.scrollTo({ top:0, behavior:'smooth' });
+}
+function rackJump(v){
+  const n = parseInt(v, 10);
+  if (!(n >= 1 && n <= RACK_MAX)) return toast('Enter a rack number from 1 to ' + RACK_MAX, true);
+  rackState().q = ''; rackPick(n);
 }
 function rackSearch(v){
   rackState().q = v; clearTimeout(window._rkt);
   window._rkt = setTimeout(() => { render(); const i = $('#rkq'); if (i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
 }
+function rackRowOpts(rack, cur){
+  const rows = [...rackRowsOf(rack)]; if (cur && !rows.includes(cur)) rows.push(cur);
+  return rows.map(r => `<option value="${esc(r)}" ${r === cur ? 'selected' : ''}>Row ${esc(r)}</option>`).join('');
+}
 function rackForm(id, rack, row){ if (!can('rack')) return deny();
-  const x = id ? (S.d.rack || []).find(e => e.id === id) : null;
-  const R0 = x ? x.rack : (rack || rackState().sel || 'A'), W0 = x ? x.row : (row || 1);
+  const x = id ? (S.d.rack || []).find(e => e.id === id) : null, cfg = rackCfg();
+  const R0 = x ? x.rack : String(rack || rackState().sel || 1), W0 = x ? x.row : (row || rackRowsOf(R0)[0]);
+  const cats = [...cfg.cats]; if (x && !cats.includes(x.cat)) cats.push(x.cat);
+  const C0 = x ? x.cat : (rackState().cat !== 'all' ? rackState().cat : cats[0]);
+  const rackOpts = Array.from({ length:RACK_MAX }, (_, i) => `<option value="${i + 1}" ${String(i + 1) === R0 ? 'selected' : ''}>Rack ${i + 1}</option>`).join('');
   const w = openModal(`<h3>${x ? 'Edit item' : 'Add item'}</h3><p class="sub">Choose where it is kept, then write the item details.</p>
     <form id="rkf" autocomplete="off">
       <div class="row2">
-        <div class="field"><label>Rack</label><select class="select" name="rack">${RACK_LETTERS.map(l => `<option value="${l}" ${l === R0 ? 'selected' : ''}>Rack ${l}</option>`).join('')}</select></div>
-        <div class="field"><label>Row</label><select class="select" name="row">${[1,2,3,4].map(r => `<option value="${r}" ${r === W0 ? 'selected' : ''}>Row ${r} — ${RACK_ROW_NAME[r]}</option>`).join('')}</select></div>
+        <div class="field"><label>Rack</label><select class="select" name="rack">${rackOpts}</select></div>
+        <div class="field"><label>Row</label><select class="select" name="row">${rackRowOpts(R0, W0)}</select></div>
       </div>
+      <div class="field"><label>Category <a href="#" class="linkbtn" data-cats style="float:right;font-weight:600">＋ Add / manage</a></label><select class="select" name="cat">${cats.map(c => `<option value="${esc(c)}" ${c === C0 ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
       <div class="field"><label>Item name</label><input class="input" name="name" maxlength="200" required placeholder="e.g. Matte Lipstick — Shade B14" value="${esc(x ? x.name : '')}"></div>
       <div class="field"><label>Item code <span class="muted">(optional)</span></label><input class="input" name="code" maxlength="60" placeholder="e.g. INS-09" autocapitalize="characters" value="${esc(x ? x.code : '')}"></div>
       <div class="row2">
@@ -2323,14 +2347,17 @@ function rackForm(id, rack, row){ if (!can('rack')) return deny();
       <div class="field"><label>Note <span class="muted">(optional)</span></label><textarea class="input" name="note" rows="2" maxlength="500" placeholder="e.g. left side, behind the white boxes">${esc(x ? x.note : '')}</textarea></div>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button>${x ? '' : '<button class="btn soft" type="submit" data-more="1">Save &amp; add another</button>'}<button class="btn" type="submit">Save</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
+  const rk = w.querySelector('[name=rack]'), rw = w.querySelector('[name=row]');
+  rk.onchange = () => { rw.innerHTML = rackRowOpts(rk.value, ''); };
+  w.querySelector('[data-cats]').onclick = ev => { ev.preventDefault(); w.remove(); rackCatsEdit(() => rackForm(id, rk.value, rw.value)); };
   w.querySelector('#rkf').onsubmit = async ev => {
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter, more = !!(btn && btn.dataset.more); btn.disabled = true;
     try{
       if (x){ const r = await api('updateRack', { id:x.id, ...f }); Object.assign(x, r.rack); }
       else { const r = await api('addRack', f); S.d.rack.push(r.rack); }
-      rackState().sel = f.rack; rackState().q = '';
+      rackState().sel = String(f.rack); rackState().q = '';
       w.remove(); render(); toast('Saved ' + f.rack + f.row);
-      if (more) rackForm(null, f.rack, Number(f.row));
+      if (more) rackForm(null, f.rack, f.row);
     }catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
@@ -2338,6 +2365,62 @@ async function rackDel(id){ if (!can('rack')) return deny();
   const x = (S.d.rack || []).find(e => e.id === id); if (!x) return;
   if (!await confirmBox('Delete this item?', `${x.name} (${rackLoc(x)}) will be removed from your sheet.`, 'Delete', true)) return;
   try { await api('deleteRack', { id }); S.d.rack = S.d.rack.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+/* ---- customise the rows (a, b, c, d …) of one rack, or of all racks ---- */
+function rackRowsEdit(){ if (!can('rack')) return deny();
+  const sel = rackState().sel; let rows = [...rackRowsOf(sel)];
+  const w = openModal(`<h3>Customize rows — Rack ${esc(sel)}</h3><p class="sub">Rename, add or remove the rows of this rack (up to 12). Items in a removed row are not deleted — they move to “other”.</p>
+    <div id="rkRows"></div>
+    <div class="actions" style="margin:10px 0 14px"><button class="btn soft sm" type="button" data-add>＋ Add row</button><button class="btn ghost sm" type="button" data-reset>↺ Reset to a, b, c, d</button></div>
+    <label class="tog"><input type="checkbox" id="rkAll"> Use these rows for <b>all ${RACK_MAX} racks</b> <span class="muted">(replaces any custom rows of other racks)</span></label>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="button" data-save>Save rows</button></div>`);
+  const draw = () => {
+    w.querySelector('#rkRows').innerHTML = rows.map((r, i) => `<div class="actions" style="margin-bottom:8px;flex-wrap:nowrap"><span class="rk-loc" style="margin:0;min-width:44px;text-align:center">${esc(sel)}${esc(r)}</span>
+      <input class="input" data-i="${i}" maxlength="12" value="${esc(r)}" placeholder="row name" autocapitalize="off" autocomplete="off"><button class="btn ghost sm" type="button" data-del="${i}" aria-label="Remove row">✕</button></div>`).join('');
+  };
+  draw();
+  const box = w.querySelector('#rkRows');
+  box.oninput = e => { if (e.target.dataset.i !== undefined) rows[+e.target.dataset.i] = e.target.value; };
+  box.onclick = e => { const b = e.target.closest('[data-del]'); if (b){ rows.splice(+b.dataset.del, 1); draw(); } };
+  w.querySelector('[data-add]').onclick = () => { if (rows.length >= 12) return toast('Up to 12 rows only', true); rows.push(''); draw(); const ins = box.querySelectorAll('input'); ins[ins.length - 1].focus(); };
+  w.querySelector('[data-reset]').onclick = () => { rows = [...RACK_DEF_ROWS]; draw(); };
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-save]').onclick = async ev => {
+    const clean = rows.map(r => r.trim()).filter(Boolean); if (!clean.length) return toast('Keep at least one row', true);
+    const b = ev.currentTarget; b.disabled = true;
+    try{ const r = await api('saveRackRows', { rack:sel, rows:clean, all:w.querySelector('#rkAll').checked }); S.d.rackCfg = r.cfg; w.remove(); render(); toast('Rows saved'); }
+    catch(e){ b.disabled = false; handleErr(e); }
+  };
+}
+/* ---- add / remove categories (Carton, Inner, …) ---- */
+function rackCatsEdit(done){ if (!can('rack')) return deny();
+  let cats = [...rackCfg().cats];
+  const w = openModal(`<h3>Categories</h3><p class="sub">Add your own categories next to Carton and Inner. Removing a category does not delete items — they keep their old label.</p>
+    <div id="rkCats"></div>
+    <div class="actions" style="flex-wrap:nowrap;margin:10px 0 4px"><input class="input" id="rkNew" maxlength="40" placeholder="New category name" autocomplete="off"><button class="btn soft" type="button" data-add>＋ Add</button></div>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="button" data-save>Save categories</button></div>`);
+  const count = c => (S.d.rack || []).filter(x => x.cat === c).length;
+  const draw = () => {
+    w.querySelector('#rkCats').innerHTML = cats.map((c, i) => `<div class="rk-catrow"><span class="tag rk-cat" style="margin:0;font-size:calc(13px*var(--fs));padding:3px 12px">${esc(c)}</span><span class="muted" style="flex:1;font-size:calc(12px*var(--fs))">${count(c)} item${count(c) === 1 ? '' : 's'}</span>
+      <button class="btn ghost sm" type="button" data-del="${i}" aria-label="Remove category">✕</button></div>`).join('') || '<div class="empty-state">No categories</div>';
+  };
+  draw();
+  const add = () => {
+    const inp = w.querySelector('#rkNew'), v = inp.value.trim(); if (!v) return;
+    if (cats.some(c => c.toLowerCase() === v.toLowerCase())) return toast('That category already exists', true);
+    if (cats.length >= 30) return toast('Up to 30 categories', true);
+    cats.push(v); inp.value = ''; draw(); inp.focus();
+  };
+  w.querySelector('[data-add]').onclick = add;
+  w.querySelector('#rkNew').onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); add(); } };
+  w.querySelector('#rkCats').onclick = e => { const b = e.target.closest('[data-del]'); if (b){ if (cats.length <= 1) return toast('Keep at least one category', true); cats.splice(+b.dataset.del, 1); draw(); } };
+  w.querySelector('[data-x]').onclick = () => { w.remove(); if (done) done(); };
+  w.querySelector('[data-save]').onclick = async ev => {
+    const pending = w.querySelector('#rkNew').value.trim(); if (pending && !cats.some(c => c.toLowerCase() === pending.toLowerCase())) cats.push(pending);
+    const b = ev.currentTarget; b.disabled = true;
+    try{ const r = await api('saveRackCats', { cats }); S.d.rackCfg = r.cfg; w.remove(); render(); toast('Categories saved'); if (done) done(); }
+    catch(e){ b.disabled = false; handleErr(e); }
+  };
 }
 
 /* =====================================================================
