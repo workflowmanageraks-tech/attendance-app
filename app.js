@@ -2185,6 +2185,7 @@ function vVcs(){
   const head = x => `<div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
         <b style="word-break:break-word;white-space:normal">${esc(x.title)}</b><span class="tag">${VCS_ICON[x.status] || ''} ${esc(x.status)}</span></div>
       ${x.details ? `<div style="margin-top:6px;white-space:pre-wrap;word-break:break-word">${esc(x.details)}</div>` : ''}
+      ${x.log ? `<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--line2);white-space:pre-wrap;word-break:break-word;font-size:calc(13px*var(--fs))"><b>📝 Updates</b>\n${esc(x.log)}</div>` : ''}
       <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">${meta(x)}</div>`;
   const doneCards = done.map(x => `<div class="card" style="margin-bottom:12px">${head(x)}
       <div class="actions" style="margin-top:12px"><button class="btn soft sm" onclick="vcsReopen('${esc(x.id)}')">↻ Reopen</button></div></div>`).join('');
@@ -2199,6 +2200,7 @@ function vVcs(){
         <div class="field" style="margin:0"><label>Assign to (forward to user)</label><select class="select" data-vcs="to" data-id="${esc(x.id)}" onchange="vcsDraft('${esc(x.id)}','to',this.value)">${toOpts}</select></div>
         <div class="field" style="margin:0"><label>Status</label><select class="select" data-vcs="st" data-id="${esc(x.id)}" onchange="vcsDraft('${esc(x.id)}','st',this.value)">${stOpts}</select></div>
       </div>
+      <div class="field" style="margin:12px 0 0"><label>What is the update? <span class="muted">(optional — saved with the complaint)</span></label><textarea class="input" rows="2" maxlength="1000" data-vcs="note" data-id="${esc(x.id)}" placeholder="Write the update / progress here" oninput="vcsDraft('${esc(x.id)}','note',this.value)">${esc(d.note || '')}</textarea></div>
       <div class="actions" style="margin-top:12px"><button class="btn sm" onclick="vcsUpdate('${esc(x.id)}')">✔ Update</button></div>
     </div>`;
   }).join('');
@@ -2236,8 +2238,8 @@ async function vcsUpdate(id){ if (!can('vcs')) return deny();
   const x = (S.d.vcs || []).find(e => e.id === id); if (!x) return;
   const q = k => document.querySelector(`[data-vcs="${k}"][data-id="${id}"]`);
   const d = vcsState().draft[id] || {};
-  const to = q('to') ? q('to').value : (d.to !== undefined ? d.to : x.toId), st = q('st') ? q('st').value : (d.st || x.status);
-  try { const r = await api('updateVcs', { id, toId:to, status:st }); Object.assign(x, r.vcs); delete vcsState().draft[id]; render(); toast('Complaint updated'); }
+  const to = q('to') ? q('to').value : (d.to !== undefined ? d.to : x.toId), st = q('st') ? q('st').value : (d.st || x.status), note = q('note') ? q('note').value : (d.note || '');
+  try { const r = await api('updateVcs', { id, toId:to, status:st, note }); Object.assign(x, r.vcs); delete vcsState().draft[id]; render(); toast('Complaint updated'); }
   catch(e){ handleErr(e); }
 }
 
@@ -3371,13 +3373,13 @@ async function chatLoadUsers(){
   S.chat.loadingUsers = true;
   try{
     const r = await chatApi('chatUsers'), at = Date.now();
-    const incoming = r.unread > S.chat.unread && S.view !== 'chat' && S.chat.loaded;
+    const incoming = r.unread > S.chat.unread && (S.view !== 'chat' || document.hidden) && S.chat.loaded;
     S.chat.users = r.users.map(u => ({ ...u, at }));
     S.chat.groups = (r.groups || []).map(g => ({ ...g, at }));
     S.chat.users.concat(S.chat.groups).forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
     if (S.chat.with && !chatPeer(S.chat.with)){ S.chat.with = null; document.body.classList.remove('chat-conv'); if (S.view === 'chat') chatRenderPane(); }   // group deleted / permission removed
     S.chat.loaded = true; chatSumUnread();
-    if (incoming) toast('💬 New message');
+    if (incoming){ toast('💬 New message'); chatAlert(); }
     S.chat.err = '';
     if (S.view === 'chat'){ chatRenderList(); chatHeader(); }
   }catch(e){ chatErr(e); S.chat.err = (e && e.message) || 'Request failed'; if (S.view === 'chat') chatRenderList(); }
@@ -3386,7 +3388,7 @@ async function chatLoadUsers(){
 async function chatPingNow(){
   try{
     const r = await chatApi('chatPing');
-    if (r.unread > S.chat.unread && S.view !== 'chat') toast('💬 New message');
+    if (r.unread > S.chat.unread && (S.view !== 'chat' || document.hidden)){ toast('💬 New message'); chatAlert(); }
     S.chat.unread = r.unread; chatBadge();
   }catch(e){ chatErr(e); }
 }
@@ -3398,6 +3400,7 @@ async function chatFetchConv(first){
     const r = await chatApi('chatFetch', { with:id, after:chatAfter(id) });
     if (c.with !== id) return;                                  // the user opened another chat meanwhile
     let ch = chatMerge(id, r.messages);
+    if (first !== true && c.histLoaded[id] && r.messages.some(m => !m.mine && !m.state)) chatAlert();   // a new message in the chat I have open
     if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
     if (r.peerRead !== c.peerRead[id]){ c.peerRead[id] = r.peerRead; ch = true; }
     const u = chatPeer(id);
@@ -3535,6 +3538,33 @@ boot();
 /* =====================================================================
    VOICE / VIDEO CALLS  (WebRTC — the audio/video goes phone-to-phone; the server only passes the offer/answer)
    ===================================================================== */
+
+/* =====================================================================
+   ALERTS: message = notification + one tone + 2 vibrations ; call = ringing + continuous vibration
+   ===================================================================== */
+const ksVib = p => { try { navigator.vibrate && navigator.vibrate(p); } catch {} };
+async function ksNotify(title, body, tag, extra){
+  try {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const o = Object.assign({ body, tag, renotify:true, silent:false, icon:'icon-192.png' }, extra || {});
+    const reg = navigator.serviceWorker && (await navigator.serviceWorker.getRegistration());
+    if (reg && reg.showNotification) await reg.showNotification(title, o); else new Notification(title, o);
+  } catch {}
+}
+function chatAlert(){
+  vcBeep(988, .18); setTimeout(() => vcBeep(1319, .28), 190);   // one short notification tone
+  ksVib([250, 150, 250]);                                        // two vibrations
+  if (document.hidden) ksNotify('💬 New message', 'You have a new message', 'ks-msg', { vibrate:[250, 150, 250] });
+}
+/* ask once (on the first tap) so notifications can show; also lets the browser play sounds */
+(function(){
+  try { if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {}); } catch {}
+  const ask = () => {
+    document.removeEventListener('pointerdown', ask, true);
+    try { if ('Notification' in window && Notification.permission === 'default' && S.token) Notification.requestPermission(); } catch {}
+  };
+  document.addEventListener('pointerdown', ask, true);
+})();
 const VC = { timer:null, polling:false, busy:false, cid:null, pc:null, local:null, role:'', kind:'audio', peer:null, incoming:null,
   started:0, tick:null, ring:null, ice:null, muted:false, camOff:false, ending:false, lost:null, answered:false };
 let vcActx = null;
@@ -3552,10 +3582,10 @@ function vcBeep(freq, dur){
 function vcRingStart(incoming){
   vcRingStop();
   const once = () => {
-    if (incoming){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); try { navigator.vibrate && navigator.vibrate([350, 150, 350]); } catch {} }
+    if (incoming){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); setTimeout(() => vcBeep(880, .3), 800); setTimeout(() => vcBeep(660, .3), 1180); ksVib([1900]); }   // rings and buzzes non-stop
     else vcBeep(440, .7);
   };
-  once(); VC.ring = setInterval(once, incoming ? 2200 : 3200);
+  once(); VC.ring = setInterval(once, incoming ? 2000 : 3200);
 }
 function vcRingStop(){ clearInterval(VC.ring); VC.ring = null; try { navigator.vibrate && navigator.vibrate(0); } catch {} }
 
@@ -3686,6 +3716,7 @@ async function vcDial(kind){
 function vcShowIncoming(inc){
   VC.incoming = inc; VC.kind = inc.kind; VC.peer = { id:inc.from, name:inc.fromName };
   vcOpen(inc.fromName, inc.from, 'Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call…'); vcBar('incoming'); vcRingStart(true);
+  if (document.hidden) ksNotify('📞 Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call', (inc.fromName || 'Someone') + ' is calling you', 'ks-call', { requireInteraction:true, vibrate:[1000, 300, 1000, 300, 1000, 300, 1000] });
 }
 async function vcAccept(){
   const inc = VC.incoming; if (!inc || VC.busy) return;

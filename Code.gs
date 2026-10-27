@@ -1149,8 +1149,8 @@ function createSheet_(k) {
     sh.getRange('A:C').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'VCS') {
-    sh.getRange(1, 1, 1, 11).setValues([['ID', 'Complaint', 'Details', 'Logged By ID', 'Logged By', 'Logged At', 'Assigned To ID', 'Assigned To', 'Status', 'Updated At', 'Updated By']]);
-    sh.getRange('A:K').setNumberFormat('@');
+    sh.getRange(1, 1, 1, 12).setValues([['ID', 'Complaint', 'Details', 'Logged By ID', 'Logged By', 'Logged At', 'Assigned To ID', 'Assigned To', 'Status', 'Updated At', 'Updated By', 'Updates']]);
+    sh.getRange('A:L').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LIC') {
     sh.getRange(1, 1, 1, 9).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'Premium Frequency', 'ID', 'Owner', 'Renewal Due Date']]);
@@ -1922,7 +1922,7 @@ function deleteLic_(req) {
 // ---------- VCS complaints ----------
 // ONE shared sheet (not per-owner): a complaint is visible to the person who logged it, the person it is assigned to,
 // and every admin. Columns: ID | Complaint | Details | Logged By ID | Logged By | Logged At | Assigned To ID |
-// Assigned To | Status | Updated At | Updated By
+// Assigned To | Status | Updated At | Updated By | Updates (running note log, one line per update)
 var VCS_STATUSES = { Open: 1, Pending: 1, Closed: 1 };
 // people a complaint can be assigned to: active accounts that can open the VCS tab (admins always can)
 function vcsUsers_() {
@@ -1941,19 +1941,27 @@ function vcsWho_() {
   var a = getAccount_(CTX.uid, readSettings_().values);
   return (a && (a.name || a.username)) || 'User';
 }
+// the VCS sheet with its "Updates" column (older sheets get it added automatically)
+function vcsSheet_() {
+  var sh = getSheet_('VCS');
+  if (sh.getMaxColumns() < 12) sh.insertColumnsAfter(sh.getMaxColumns(), 12 - sh.getMaxColumns());
+  var h = sh.getRange(1, 12);
+  if (String(h.getValue()) !== 'Updates') { h.setNumberFormat('@'); h.setValue('Updates'); h.setFontWeight('bold'); sh.getRange('L:L').setNumberFormat('@'); }
+  return sh;
+}
 function vcsSeen_(r) {
   return CTX.role === 'admin' || String(r[3]) === CTX.uid || String(r[6]) === CTX.uid;
 }
 function vcsOut_(r) {
   var st = String(r[8]);
   return { id: String(r[0]), title: String(r[1]), details: String(r[2]), byId: String(r[3]), byName: String(r[4]), at: tsStr_(r[5]),
-    toId: String(r[6]), toName: String(r[7]), status: VCS_STATUSES[st] ? st : 'Open', updAt: tsStr_(r[9]), updBy: String(r[10]) };
+    toId: String(r[6]), toName: String(r[7]), status: VCS_STATUSES[st] ? st : 'Open', updAt: tsStr_(r[9]), updBy: String(r[10]), log: String(r[11] || '') };
 }
 function readVcs_() {
-  var sh = getSheet_('VCS'), last = sh.getLastRow();
+  var sh = vcsSheet_(), last = sh.getLastRow();
   if (last < 2) return [];
   var out = [];
-  sh.getRange(2, 1, last - 1, 11).getValues().forEach(function (r) {
+  sh.getRange(2, 1, last - 1, 12).getValues().forEach(function (r) {
     if (!has_(r[0]) || (!has_(r[1]) && !has_(r[2]))) return;
     if (!vcsSeen_(r)) return;
     out.push(vcsOut_(r));
@@ -1963,7 +1971,7 @@ function readVcs_() {
 function findVcsRow_(sh, id) {
   var last = sh.getLastRow();
   if (last < 2) return -1;
-  var v = sh.getRange(2, 1, last - 1, 11).getValues();
+  var v = sh.getRange(2, 1, last - 1, 12).getValues();
   for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id)) return vcsSeen_(v[i]) ? i + 2 : -1;
   return -1;
 }
@@ -1979,25 +1987,31 @@ function addVcs_(req) {
   if (!title) fail_('Write the complaint first.');
   var details = String(req.details || '').trim().slice(0, 3000);
   var to = vcsAssignee_(req.toId);
-  var sh = getSheet_('VCS');
+  var sh = vcsSheet_();
   var row = sh.getLastRow() + 1, id = Utilities.getUuid().slice(0, 8), now = nowStr_(), who = vcsWho_();
-  var rec = [id, title, details, CTX.uid, who, now, to.id, to.name, 'Open', now, who];
-  var rng = sh.getRange(row, 1, 1, 11);
+  var rec = [id, title, details, CTX.uid, who, now, to.id, to.name, 'Open', now, who, ''];
+  var rng = sh.getRange(row, 1, 1, 12);
   rng.setNumberFormat('@');
   rng.setValues([rec]);
   return { ok: true, vcs: vcsOut_(rec) };
 }
 function updateVcs_(req) {
-  var sh = getSheet_('VCS');
+  var sh = vcsSheet_();
   var row = findVcsRow_(sh, req.id);
   if (row < 0) fail_('Complaint not found. Please refresh.');
   var st = String(req.status || '').trim();
   if (!VCS_STATUSES[st]) fail_('Status must be Open, Pending or Closed.');
   var to = vcsAssignee_(req.toId);
+  var note = String(req.note || '').trim().slice(0, 1000), now = nowStr_(), who = vcsWho_();
   var rng = sh.getRange(row, 7, 1, 5);
   rng.setNumberFormat('@');
-  rng.setValues([[to.id, to.name, st, nowStr_(), vcsWho_()]]);
-  return { ok: true, vcs: vcsOut_(sh.getRange(row, 1, 1, 11).getValues()[0]) };
+  rng.setValues([[to.id, to.name, st, now, who]]);
+  if (note) {                                          // add to the running update log (newest at the bottom)
+    var lc = sh.getRange(row, 12), cur = String(lc.getValue() || '');
+    lc.setNumberFormat('@');
+    lc.setValue((cur ? cur + '\n' : '') + '[' + now.slice(0, 16) + '] ' + who + ': ' + note);
+  }
+  return { ok: true, vcs: vcsOut_(sh.getRange(row, 1, 1, 12).getValues()[0]) };
 }
 
 // ---------- TIME TABLE ----------
