@@ -329,7 +329,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || [];
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || [];
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -402,19 +402,19 @@ async function boot(){
    ===================================================================== */
 const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
-const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', lic:'edit', vcs:'edit', tt:'edit', emp:true, creds:true };
+const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', lic:'edit', vcs:'edit', rack:'edit', tt:'edit', emp:true, creds:true };
 const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
 const canAddUsers = () => isAdmin() || !!perms().addUser;   // admin, or a user the admin allowed to add users
 function deny(){ toast('You have view-only access to this section', true); }
-const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link', lic:'lic', vcs:'vcs' };
-const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links', lic:'LIC', vcs:'VCS Complaints' };
+const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link', lic:'lic', vcs:'vcs', rack:'rack' };
+const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links', lic:'LIC', vcs:'VCS Complaints', rack:'Rack Mapping' };
 
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
-  const chatOnly = ['att','exp','work','pw','link','lic','vcs','tt'].every(k => p[k] === 'none') && !isAdmin();
+  const chatOnly = ['att','exp','work','pw','link','lic','vcs','rack','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary));
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', p.rack === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary));
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
@@ -431,6 +431,7 @@ function applyRO(v){
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
   if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"]');
   if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"],[onclick*="vcsReopen"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
+  if (!can('rack')) kill('[onclick*="rackForm"],[onclick*="rackDel"]');
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
     v.querySelectorAll('tr').forEach(tr => { if (tr.querySelector('input.in')) tr.remove(); });
@@ -587,7 +588,7 @@ async function collectClient(){
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
   const p = u.perms || {}, L = { none:'no access', view:'view only', edit:'can edit' };
-  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · LIC: ${L[p.lic || 'edit']} · Time Table: ${L[p.tt || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}${p.addUser ? ' · Can add users' : ''}`;
+  return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · LIC: ${L[p.lic || 'edit']} · Rack Mapping: ${L[p.rack || 'edit']} · Time Table: ${L[p.tt || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}${p.addUser ? ' · Can add users' : ''}`;
 }
 function usersCard(){
   const list = S.users || [];
@@ -613,7 +614,7 @@ function usersCard(){
 }
 function userForm(id){
   const x = id ? (S.users || []).find(u => u.id === id) : null;
-  const p = (x && x.perms) || { att:'none', exp:'none', work:'none', pw:'none', link:'none', lic:'none', vcs:'none', tt:'none', emp:false, creds:true };   // new user = Chat only
+  const p = (x && x.perms) || { att:'none', exp:'none', work:'none', pw:'none', link:'none', lic:'none', vcs:'none', rack:'none', tt:'none', emp:false, creds:true };   // new user = Chat only
   const RK = { none:0, view:1, edit:2 }, mine = perms();   // a user who adds users can't give more access than he has
   const sel = (n, v) => { const mx = isAdmin() ? 2 : (RK[mine[n.slice(2)]] ?? 0), o = (k, t) => RK[k] <= mx ? `<option value="${k}" ${v===k?'selected':''}>${t}</option>` : '';
     return `<select class="select" name="${n}">${o('none','No access (hidden)')}${o('view','View only')}${o('edit','Can add / edit / delete')}</select>`; };
@@ -635,6 +636,7 @@ function userForm(id){
           <div class="field"><label>🔗 Links</label>${sel('p_link', p.link || 'edit')}</div>
           <div class="field"><label>📄 LIC</label>${sel('p_lic', p.lic || 'edit')}</div>
           <div class="field"><label>📋 VCS Complaints</label>${sel('p_vcs', p.vcs || 'edit')}</div>
+          <div class="field"><label>📦 Rack Mapping</label>${sel('p_rack', p.rack || 'edit')}</div>
           <div class="field"><label>⏱️ Time Table</label>${sel('p_tt', p.tt || 'edit')}</div>
         </div>
         <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''} ${(isAdmin() || can('emp')) ? '' : 'disabled'}> Can add / edit / delete employees</label>
@@ -656,7 +658,7 @@ function userForm(id){
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
         ...(S.me.primary ? { see:f.getAll('see') } : {}),
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), vcs:f.get('p_vcs'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
+        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), vcs:f.get('p_vcs'), rack:f.get('p_rack'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
       S.users = r.users; w.remove(); if (!isAdmin()) await loadAll();   // a new user may have created / joined my group
       render(); toast(x ? 'User updated' : 'User added'); chatLoadUsers();
     } catch(e){ btn.disabled = false; handleErr(e); }
@@ -1147,6 +1149,7 @@ const TITLES = {
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   lic:['LIC','Customer policies — amount, dates and how long each one runs'],
   vcs:['VCS Complaint Manage','Log complaints, assign them to a user and track Open / Pending / Closed'],
+  rack:['Rack Mapping','Racks A–Z, 4 rows each — note what is kept where and find it in seconds'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
@@ -1483,7 +1486,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, logins:vLogins, deploy:vDeploy, updates:vUpdates, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
@@ -2241,6 +2244,100 @@ async function vcsUpdate(id){ if (!can('vcs')) return deny();
   const to = q('to') ? q('to').value : (d.to !== undefined ? d.to : x.toId), st = q('st') ? q('st').value : (d.st || x.status), note = q('note') ? q('note').value : (d.note || '');
   try { const r = await api('updateVcs', { id, toId:to, status:st, note }); Object.assign(x, r.vcs); delete vcsState().draft[id]; render(); toast('Complaint updated'); }
   catch(e){ handleErr(e); }
+}
+
+/* =====================================================================
+   VIEW: RACK MAPPING  (racks A–Z, 4 rows each — note which item is kept where, then search to find it)
+   Location code = rack letter + row number, e.g. "B3" = Rack B, Row 3 (Row 1 = top shelf).
+   ===================================================================== */
+const RACK_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''), RACK_ROWS = 4, RACK_UNITS = ['Pcs','Boxes','Cartons','Sets','Packs'];
+const RACK_ROW_NAME = { 1:'Top', 2:'Upper-middle', 3:'Lower-middle', 4:'Bottom' };
+function rackState(){ return S.rackUi = S.rackUi || { sel:'', q:'' }; }
+function rackLoc(x){ return x.rack + x.row; }
+function rackQty(x){ return x.qty === '' || x.qty === undefined ? '' : Number(x.qty).toLocaleString('en-IN') + ' ' + (x.unit || 'Pcs'); }
+function rackItemHtml(x, showLoc){
+  return `<div class="rk-item">
+    <div class="rk-main">
+      <div class="rk-name">${showLoc ? `<span class="rk-loc">${esc(rackLoc(x))}</span>` : ''}${esc(x.name)}</div>
+      <div class="rk-meta">${x.code ? `<span class="tag" style="margin-left:0">${esc(x.code)}</span>` : ''}${x.qty !== '' ? `<span class="rk-qty">× ${esc(rackQty(x))}</span>` : ''}</div>
+      ${x.note ? `<div class="rk-note">${esc(x.note)}</div>` : ''}
+    </div>
+    <div class="rk-acts">${showLoc ? `<button class="btn soft sm" onclick="rackPick('${x.rack}',true)">Open rack</button>` : ''}
+      <button class="btn ghost sm" onclick="rackForm('${esc(x.id)}')">Edit</button><button class="btn ghost sm" onclick="rackDel('${esc(x.id)}')" aria-label="Delete">🗑</button></div>
+  </div>`;
+}
+function vRack(){
+  const R = rackState(), all = S.d.rack || [], ro = !can('rack');
+  const by = {}; all.forEach(x => { (by[x.rack] = by[x.rack] || []).push(x); });
+  if (!R.sel || !RACK_LETTERS.includes(R.sel)) R.sel = RACK_LETTERS.find(l => by[l]) || 'A';
+  const used = RACK_LETTERS.filter(l => by[l]).length, q = (R.q || '').trim().toLowerCase();
+  const stats = `<div class="rk-stats"><div><b>${all.length}</b><span>Items noted</span></div><div><b>${used}</b><span>Racks in use</span></div><div><b>${RACK_LETTERS.length - used}</b><span>Racks empty</span></div></div>`;
+  const search = `<div class="card" style="margin-bottom:16px"><div class="actions">
+      <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Find an item — name, code, note or location (e.g. B3)" value="${esc(R.q)}" oninput="rackSearch(this.value)">
+      <button class="btn" onclick="rackForm(null,'${R.sel}')">＋ Add item</button></div></div>`;
+  let body;
+  if (q){
+    const hits = all.filter(x => (x.name + ' ' + x.code + ' ' + x.note + ' ' + rackLoc(x)).toLowerCase().includes(q))
+      .sort((a, b) => a.rack.localeCompare(b.rack) || a.row - b.row || a.name.localeCompare(b.name));
+    body = `<div class="card"><h3>Search results <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${hits.length}</span></h3>
+      ${hits.length ? hits.map(x => rackItemHtml(x, true)).join('') : '<div class="empty-state">Nothing found. Check the spelling or try the item code.</div>'}</div>`;
+  } else {
+    const chips = RACK_LETTERS.map(l => `<button class="rk-chip ${l === R.sel ? 'on' : ''} ${by[l] ? 'has' : ''}" onclick="rackPick('${l}')" aria-label="Rack ${l}">${l}${by[l] ? `<small>${by[l].length}</small>` : ''}</button>`).join('');
+    const rows = [];
+    for (let r = 1; r <= RACK_ROWS; r++){
+      const it = (by[R.sel] || []).filter(x => x.row === r).sort((a, b) => a.name.localeCompare(b.name));
+      rows.push(`<div class="rk-shelf"><div class="rk-lab"><b>${R.sel}${r}</b><span>Row ${r}<br>${RACK_ROW_NAME[r]}</span></div>
+        <div class="rk-items">${it.length ? it.map(x => rackItemHtml(x, false)).join('') : '<div class="rk-empty">Empty</div>'}
+          ${ro ? '' : `<button class="rk-add" onclick="rackForm(null,'${R.sel}',${r})">＋ Add item to ${R.sel}${r}</button>`}</div></div>`);
+    }
+    body = `<div class="card" style="margin-bottom:16px"><h3>Racks</h3><div class="rk-chips">${chips}</div>
+        <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">The number on a rack shows how many items are noted in it.</p></div>
+      <div class="card"><h3>Rack ${R.sel} <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${(by[R.sel] || []).length} item${(by[R.sel] || []).length === 1 ? '' : 's'}</span></h3>
+        <div class="rk-rack">${rows.join('')}</div></div>`;
+  }
+  return stats + search + body + `<p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Location code = rack letter + row, e.g. <b>B3</b> = Rack B, Row 3 (Row 1 is the top shelf). Saved in the “Rack Mapping” tab of your Google Sheet.</p>`;
+}
+function rackPick(l, clear){
+  const R = rackState(); R.sel = l; if (clear) R.q = '';
+  render(); window.scrollTo({ top:0, behavior:'smooth' });
+}
+function rackSearch(v){
+  rackState().q = v; clearTimeout(window._rkt);
+  window._rkt = setTimeout(() => { render(); const i = $('#rkq'); if (i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
+}
+function rackForm(id, rack, row){ if (!can('rack')) return deny();
+  const x = id ? (S.d.rack || []).find(e => e.id === id) : null;
+  const R0 = x ? x.rack : (rack || rackState().sel || 'A'), W0 = x ? x.row : (row || 1);
+  const w = openModal(`<h3>${x ? 'Edit item' : 'Add item'}</h3><p class="sub">Choose where it is kept, then write the item details.</p>
+    <form id="rkf" autocomplete="off">
+      <div class="row2">
+        <div class="field"><label>Rack</label><select class="select" name="rack">${RACK_LETTERS.map(l => `<option value="${l}" ${l === R0 ? 'selected' : ''}>Rack ${l}</option>`).join('')}</select></div>
+        <div class="field"><label>Row</label><select class="select" name="row">${[1,2,3,4].map(r => `<option value="${r}" ${r === W0 ? 'selected' : ''}>Row ${r} — ${RACK_ROW_NAME[r]}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>Item name</label><input class="input" name="name" maxlength="200" required placeholder="e.g. Matte Lipstick — Shade B14" value="${esc(x ? x.name : '')}"></div>
+      <div class="field"><label>Item code <span class="muted">(optional)</span></label><input class="input" name="code" maxlength="60" placeholder="e.g. INS-09" autocapitalize="characters" value="${esc(x ? x.code : '')}"></div>
+      <div class="row2">
+        <div class="field"><label>Quantity <span class="muted">(optional)</span></label><input class="input" name="qty" type="number" inputmode="decimal" min="0" step="any" placeholder="e.g. 144" value="${x && x.qty !== '' ? esc(x.qty) : ''}"></div>
+        <div class="field"><label>Unit</label><select class="select" name="unit">${RACK_UNITS.map(u => `<option ${(x ? x.unit : 'Pcs') === u ? 'selected' : ''}>${u}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>Note <span class="muted">(optional)</span></label><textarea class="input" name="note" rows="2" maxlength="500" placeholder="e.g. left side, behind the white boxes">${esc(x ? x.note : '')}</textarea></div>
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button>${x ? '' : '<button class="btn soft" type="submit" data-more="1">Save &amp; add another</button>'}<button class="btn" type="submit">Save</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#rkf').onsubmit = async ev => {
+    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter, more = !!(btn && btn.dataset.more); btn.disabled = true;
+    try{
+      if (x){ const r = await api('updateRack', { id:x.id, ...f }); Object.assign(x, r.rack); }
+      else { const r = await api('addRack', f); S.d.rack.push(r.rack); }
+      rackState().sel = f.rack; rackState().q = '';
+      w.remove(); render(); toast('Saved ' + f.rack + f.row);
+      if (more) rackForm(null, f.rack, Number(f.row));
+    }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function rackDel(id){ if (!can('rack')) return deny();
+  const x = (S.d.rack || []).find(e => e.id === id); if (!x) return;
+  if (!await confirmBox('Delete this item?', `${x.name} (${rackLoc(x)}) will be removed from your sheet.`, 'Delete', true)) return;
+  try { await api('deleteRack', { id }); S.d.rack = S.d.rack.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
 }
 
 /* =====================================================================

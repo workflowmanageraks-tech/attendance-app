@@ -50,9 +50,10 @@ const SHEET_KEYS = {
   ACT: ['activity log', 'activity'],
   LPH: ['login security photos', 'security photos', 'login photos'],
   LIC: ['lic', 'lic policies', 'policies'],
-  VCS: ['vcs complaints', 'vcs complaint']
+  VCS: ['vcs complaints', 'vcs complaint'],
+  RACK: ['rack mapping']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -89,7 +90,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'CGRP', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'RACK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'CGRP', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -159,6 +160,7 @@ var WRITE_ACTIONS = {
   addPw: 1, updatePw: 1, deletePw: 1,
   addLink: 1, updateLink: 1, deleteLink: 1,
   addVcs: 1, updateVcs: 1,
+  addRack: 1, updateRack: 1, deleteRack: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, setActivityAccess: 1, calDisconnect: 1
@@ -173,6 +175,7 @@ var NEED = {
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
   addLic: 'lic', updateLic: 'lic', deleteLic: 'lic',
   addVcs: 'vcs', updateVcs: 'vcs',
+  addRack: 'rack', updateRack: 'rack', deleteRack: 'rack',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
   changeCredentials: 'creds',
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
@@ -187,13 +190,13 @@ var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvata
 //   (owner differs from uid only when an admin uses "View as user")
 var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '', group: null };
 
-function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', lic: 'edit', vcs: 'edit', tt: 'edit', emp: true, creds: true, addUser: true }; }
+function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', lic: 'edit', vcs: 'edit', rack: 'edit', tt: 'edit', emp: true, creds: true, addUser: true }; }
 function normPerms_(p, role) {
   if (role === 'admin') return fullPerms_();
   p = p || {};
   function lvl(v) { v = String(v || '').toLowerCase(); return (v === 'none' || v === 'view' || v === 'edit') ? v : 'edit'; }
   function bool(v, d) { return (v === undefined || v === null || v === '') ? d : (v === true || v === 'true' || v === 'yes' || v === 1 || v === '1'); }
-  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), lic: lvl(p.lic), vcs: lvl(p.vcs), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false) };
+  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), lic: lvl(p.lic), vcs: lvl(p.vcs), rack: lvl(p.rack), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false) };
 }
 function need_(sec) {
   var p = CTX.perms || {};
@@ -293,6 +296,9 @@ function route_(req) {
       case 'deleteLic':         out = deleteLic_(req); break;
       case 'addVcs':            out = addVcs_(req); break;
       case 'updateVcs':         out = updateVcs_(req); break;
+      case 'addRack':           out = addRack_(req); break;
+      case 'updateRack':        out = updateRack_(req); break;
+      case 'deleteRack':        out = deleteRack_(req); break;
       case 'setTimetable':      out = setTimetable_(req); break;
       case 'calAuthUrl':        return calAuthUrl_();
       case 'calStatus':         return calStatus_();
@@ -460,7 +466,7 @@ function teamRows_(rows) {                       // keep only my own rows + my t
   var m = teamMap_(); m[CTX.uid] = 1;
   return rows.filter(function (r) { return m[r.uid]; });
 }
-function chatOnlyPerms_() { return { att: 'none', exp: 'none', work: 'none', pw: 'none', link: 'none', lic: 'none', vcs: 'none', tt: 'none', emp: false, creds: true, addUser: false }; }
+function chatOnlyPerms_() { return { att: 'none', exp: 'none', work: 'none', pw: 'none', link: 'none', lic: 'none', vcs: 'none', rack: 'none', tt: 'none', emp: false, creds: true, addUser: false }; }
 
 function findByUsername_(uname, s) {
   uname = String(uname || '').trim().toLowerCase();
@@ -620,6 +626,7 @@ var ACTIVITY_LABEL_ = {
   addPw: 'Added a saved password', updatePw: 'Updated a saved password', deletePw: 'Deleted a saved password',
   addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link',
   addVcs: 'Logged a VCS complaint', updateVcs: 'Updated a VCS complaint',
+  addRack: 'Added a rack item', updateRack: 'Updated a rack item', deleteRack: 'Deleted a rack item',
   setTimetable: 'Edited Time Table', addTtCat: 'Added a Time Table category', updateTtCat: 'Renamed a Time Table category', deleteTtCat: 'Deleted a Time Table category',
   saveUser: 'Added/edited a user', deleteUser: 'Deleted a user', kickUser: 'Signed a user out everywhere',
   saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group', setActivityAccess: 'Changed who can see the Activity log',
@@ -639,6 +646,7 @@ function activityDetail_(a, req) {
     if (a === 'addLink' || a === 'updateLink') return req.name || '';
     if (a === 'addVcs') return String(req.title || '').slice(0, 60);
     if (a === 'updateVcs') return [req.status, req.toId].filter(has_).join(' · ');
+    if (a === 'addRack' || a === 'updateRack') return [String(req.rack || '').toUpperCase() + String(req.row || ''), req.name].filter(has_).join(' · ');
     if (a === 'saveGroup') return req.name || '';
     if (a === 'deployUpload' || a === 'deployRestore') return req.path || '';
   } catch (e) {}
@@ -878,7 +886,7 @@ function setSee_(cur, ids, users) {
 function capPerms_(p, mine, keepAdd) {
   p = normPerms_(p, 'user'); mine = mine || {};
   var rank = { none: 0, view: 1, edit: 2 }, out = {};
-  ['att', 'exp', 'work', 'pw', 'link', 'lic', 'vcs', 'tt'].forEach(function (k) {
+  ['att', 'exp', 'work', 'pw', 'link', 'lic', 'vcs', 'rack', 'tt'].forEach(function (k) {
     var m = mine[k] || 'none';
     out[k] = rank[p[k]] <= rank[m] ? p[k] : m;
   });
@@ -994,7 +1002,7 @@ function listGroups_() {
 }
 // moves every row owned by `fromId` to the group, so the group starts with that person's existing data
 function adoptData_(fromId, toOwner) {
-  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 8], ['CAT', 3], ['TT', 4]].forEach(function (p) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 8], ['RACK', 10], ['CAT', 3], ['TT', 4]].forEach(function (p) {
     var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
     if (last < 2) return;
     var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
@@ -1151,6 +1159,10 @@ function createSheet_(k) {
   } else if (k === 'VCS') {
     sh.getRange(1, 1, 1, 12).setValues([['ID', 'Complaint', 'Details', 'Logged By ID', 'Logged By', 'Logged At', 'Assigned To ID', 'Assigned To', 'Status', 'Updated At', 'Updated By', 'Updates']]);
     sh.getRange('A:L').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'RACK') {
+    sh.getRange(1, 1, 1, 10).setValues([['Rack (A-Z)', 'Row (1-4, 1 = top)', 'Item Name', 'Item Code', 'Qty', 'Unit', 'Note', 'Updated', 'ID', 'Owner']]);
+    sh.getRange('A:J').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LIC') {
     sh.getRange(1, 1, 1, 9).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'Premium Frequency', 'ID', 'Owner', 'Renewal Due Date']]);
@@ -2014,6 +2026,77 @@ function updateVcs_(req) {
   return { ok: true, vcs: vcsOut_(sh.getRange(row, 1, 1, 12).getValues()[0]) };
 }
 
+// ---------- RACK MAPPING ----------
+// Where is each item kept?  Racks A-Z, every rack has 4 rows (1 = top shelf). Location code = rack letter + row, e.g. "B3".
+// Rack | Row | Item Name | Item Code | Qty | Unit | Note | Updated | ID | Owner   (like Links: every user / group sees only its own rows)
+var RACK_ROWS = 4;
+var RACK_UNITS = { Pcs: 1, Boxes: 1, Cartons: 1, Sets: 1, Packs: 1 };
+function rackSheet_() { return ownedSheet_('RACK', 10); }
+function rackOut_(r, id) {
+  var q = String(r[4] === undefined || r[4] === null ? '' : r[4]).trim();
+  return { id: id, rack: String(r[0]).trim().toUpperCase(), row: Number(r[1]) || 1, name: String(r[2]), code: String(r[3]),
+    qty: q === '' || isNaN(Number(q)) ? '' : Number(q), unit: RACK_UNITS[String(r[5])] ? String(r[5]) : 'Pcs', note: String(r[6]), at: String(r[7]) };
+}
+function readRack_() {
+  var sh = rackSheet_(), last = sh.getLastRow();
+  if (last < 2) return [];
+  var vals = sh.getRange(2, 1, last - 1, 10).getValues();
+  var out = [], dirty = false;
+  vals.forEach(function (r) {
+    if (!has_(r[0]) && !has_(r[2])) return;
+    var id = String(r[8] || '').trim();
+    if (!id) { id = Utilities.getUuid().slice(0, 8); r[8] = id; dirty = true; }
+    if (ownerOf_(r[9]) !== CTX.owner) return;
+    out.push(rackOut_(r, id));
+  });
+  if (dirty) sh.getRange(2, 9, vals.length, 1).setValues(vals.map(function (r) { return [r[8]]; }));
+  return out;
+}
+function validRack_(req) {
+  var rack = String(req.rack || '').trim().toUpperCase();
+  if (!/^[A-Z]$/.test(rack)) fail_('Choose a rack from A to Z.');
+  var row = parseInt(req.row, 10);
+  if (!(row >= 1 && row <= RACK_ROWS)) fail_('Choose a row from 1 to ' + RACK_ROWS + '.');
+  var name = String(req.name || '').trim().slice(0, 200);
+  if (!name) fail_('Write the item name.');
+  var q = String(req.qty === undefined || req.qty === null ? '' : req.qty).trim(), qty = '';
+  if (q !== '') { qty = Number(q); if (isNaN(qty) || qty < 0 || qty > 100000000) fail_('Quantity must be a number (0 or more).'); }
+  var unit = RACK_UNITS[String(req.unit)] ? String(req.unit) : 'Pcs';
+  return { rack: rack, row: row, name: name, code: String(req.code || '').trim().slice(0, 60), qty: qty, unit: unit, note: String(req.note || '').trim().slice(0, 500) };
+}
+function findRackRow_(sh, id) {
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var v = sh.getRange(2, 9, last - 1, 2).getValues();            // ID, Owner
+  for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id) && ownerOf_(v[i][1]) === CTX.owner) return i + 2;
+  return -1;
+}
+function addRack_(req) {
+  var p = validRack_(req), sh = rackSheet_();
+  var row = sh.getLastRow() + 1, id = Utilities.getUuid().slice(0, 8), now = nowStr_();
+  var rng = sh.getRange(row, 1, 1, 10);
+  rng.setNumberFormat('@');
+  rng.setValues([[p.rack, String(p.row), p.name, p.code, String(p.qty), p.unit, p.note, now, id, CTX.owner]]);
+  return { ok: true, rack: rackOut_([p.rack, p.row, p.name, p.code, p.qty, p.unit, p.note, now], id) };
+}
+function updateRack_(req) {
+  var p = validRack_(req), sh = rackSheet_();
+  var row = findRackRow_(sh, req.id);
+  if (row < 0) fail_('Item not found. Please refresh.');
+  var now = nowStr_();
+  var rng = sh.getRange(row, 1, 1, 8);
+  rng.setNumberFormat('@');
+  rng.setValues([[p.rack, String(p.row), p.name, p.code, String(p.qty), p.unit, p.note, now]]);
+  return { ok: true, rack: rackOut_([p.rack, p.row, p.name, p.code, p.qty, p.unit, p.note, now], String(req.id)) };
+}
+function deleteRack_(req) {
+  var sh = rackSheet_();
+  var row = findRackRow_(sh, req.id);
+  if (row < 0) fail_('Item not found. Please refresh.');
+  sh.deleteRow(row);
+  return { ok: true };
+}
+
 // ---------- TIME TABLE ----------
 // Sheet "Timetable": Type | Key | Value | Owner
 //   Type "Category" -> Key = category name (these fill the dropdown of every slot)
@@ -2409,6 +2492,7 @@ function getAll_() {
     lic: p.lic === 'none' ? [] : readLic_(),
     vcs: p.vcs === 'none' ? [] : readVcs_(),
     vcsUsers: p.vcs === 'none' ? [] : vcsUsers_(),
+    rack: p.rack === 'none' ? [] : readRack_(),
     ttCats: T.cats.map(function (c) { return c.name; }),
     timetable: ttDaysOut_(T)
   };
