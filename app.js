@@ -329,7 +329,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || [];
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || [];
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -402,19 +402,19 @@ async function boot(){
    ===================================================================== */
 const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
-const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', lic:'edit', tt:'edit', emp:true, creds:true };
+const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', lic:'edit', vcs:'edit', tt:'edit', emp:true, creds:true };
 const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
 const canAddUsers = () => isAdmin() || !!perms().addUser;   // admin, or a user the admin allowed to add users
 function deny(){ toast('You have view-only access to this section', true); }
-const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link', lic:'lic' };
-const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links', lic:'LIC' };
+const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link', lic:'lic', vcs:'vcs' };
+const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links', lic:'LIC', vcs:'VCS Complaints' };
 
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
-  const chatOnly = ['att','exp','work','pw','link','lic','tt'].every(k => p[k] === 'none') && !isAdmin();
+  const chatOnly = ['att','exp','work','pw','link','lic','vcs','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary));
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary));
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
@@ -430,6 +430,7 @@ function applyRO(v){
   if (!can('tt')){ kill('[onclick*="ttCats"],[onclick*="ttClear"],[onclick*="ttCopyPrev"]'); v.querySelectorAll('[data-tt]').forEach(e => { e.disabled = true; }); }
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
   if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"]');
+  if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
     v.querySelectorAll('tr').forEach(tr => { if (tr.querySelector('input.in')) tr.remove(); });
@@ -612,7 +613,7 @@ function usersCard(){
 }
 function userForm(id){
   const x = id ? (S.users || []).find(u => u.id === id) : null;
-  const p = (x && x.perms) || { att:'none', exp:'none', work:'none', pw:'none', link:'none', lic:'none', tt:'none', emp:false, creds:true };   // new user = Chat only
+  const p = (x && x.perms) || { att:'none', exp:'none', work:'none', pw:'none', link:'none', lic:'none', vcs:'none', tt:'none', emp:false, creds:true };   // new user = Chat only
   const RK = { none:0, view:1, edit:2 }, mine = perms();   // a user who adds users can't give more access than he has
   const sel = (n, v) => { const mx = isAdmin() ? 2 : (RK[mine[n.slice(2)]] ?? 0), o = (k, t) => RK[k] <= mx ? `<option value="${k}" ${v===k?'selected':''}>${t}</option>` : '';
     return `<select class="select" name="${n}">${o('none','No access (hidden)')}${o('view','View only')}${o('edit','Can add / edit / delete')}</select>`; };
@@ -633,6 +634,7 @@ function userForm(id){
           <div class="field"><label>🔑 Passwords</label>${sel('p_pw', p.pw || 'edit')}</div>
           <div class="field"><label>🔗 Links</label>${sel('p_link', p.link || 'edit')}</div>
           <div class="field"><label>📄 LIC</label>${sel('p_lic', p.lic || 'edit')}</div>
+          <div class="field"><label>📋 VCS Complaints</label>${sel('p_vcs', p.vcs || 'edit')}</div>
           <div class="field"><label>⏱️ Time Table</label>${sel('p_tt', p.tt || 'edit')}</div>
         </div>
         <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''} ${(isAdmin() || can('emp')) ? '' : 'disabled'}> Can add / edit / delete employees</label>
@@ -654,7 +656,7 @@ function userForm(id){
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
         ...(S.me.primary ? { see:f.getAll('see') } : {}),
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
+        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), vcs:f.get('p_vcs'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
       S.users = r.users; w.remove(); if (!isAdmin()) await loadAll();   // a new user may have created / joined my group
       render(); toast(x ? 'User updated' : 'User added'); chatLoadUsers();
     } catch(e){ btn.disabled = false; handleErr(e); }
@@ -1144,6 +1146,7 @@ const TITLES = {
   passwords:['Password Manager','Save website logins and copy them in one tap'],
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   lic:['LIC','Customer policies — amount, dates and how long each one runs'],
+  vcs:['VCS Complaint Manage','Log complaints, assign them to a user and track Open / Pending / Closed'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
@@ -1480,7 +1483,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, logins:vLogins, deploy:vDeploy, updates:vUpdates, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, logins:vLogins, deploy:vDeploy, updates:vUpdates, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
@@ -2167,6 +2170,65 @@ async function linkDel(id){ if (!can('link')) return deny();
   const x = S.d.links.find(e => e.id === id); if (!x) return;
   if (!await confirmBox('Delete this link?', `${x.name || x.link || 'This entry'} will be removed from your sheet.`, 'Delete', true)) return;
   try { await api('deleteLink', { id }); S.d.links = S.d.links.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+
+/* =====================================================================
+   VIEW: VCS COMPLAINT MANAGE  (log a complaint -> assign it to a user -> status Open / Pending / Closed)
+   ===================================================================== */
+const VCS_ST = ['Open', 'Pending', 'Closed'];
+const VCS_ICON = { Open:'🔴', Pending:'🟡', Closed:'🟢' };
+function vcsState(){ return S.vcs = S.vcs || { f:'all', draft:{} }; }
+function vVcs(){
+  const V = vcsState(), all = S.d.vcs || [], users = S.d.vcsUsers || [], ro = !can('vcs');
+  const list = all.filter(x => V.f === 'all' || x.status === V.f);
+  const cnt = s => all.filter(x => x.status === s).length;
+  const filt = ['all', ...VCS_ST].map(s => `<option value="${s}" ${V.f === s ? 'selected' : ''}>${s === 'all' ? 'All (' + all.length + ')' : VCS_ICON[s] + ' ' + s + ' (' + cnt(s) + ')'}</option>`).join('');
+  const cards = list.map(x => {
+    const d = V.draft[x.id] || {}, st = d.st || x.status, to = d.to !== undefined ? d.to : x.toId;
+    const known = users.some(u => u.id === to);
+    const toOpts = `<option value="">— Not assigned —</option>` + (to && !known ? `<option value="${esc(to)}" selected>${esc(x.toName || to)}</option>` : '')
+      + users.map(u => `<option value="${esc(u.id)}" ${u.id === to ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
+    const stOpts = VCS_ST.map(s => `<option value="${s}" ${s === st ? 'selected' : ''}>${VCS_ICON[s]} ${s}</option>`).join('');
+    return `<div class="card" style="margin-bottom:12px">
+      <div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
+        <b style="word-break:break-word;white-space:normal">${esc(x.title)}</b><span class="tag">${VCS_ICON[x.status] || ''} ${esc(x.status)}</span></div>
+      ${x.details ? `<div style="margin-top:6px;white-space:pre-wrap;word-break:break-word">${esc(x.details)}</div>` : ''}
+      <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">Logged by <b>${esc(x.byName || '—')}</b> · ${esc(x.at)}${x.toName ? ' · Forwarded to <b>' + esc(x.toName) + '</b>' : ' · Not assigned yet'}${x.updAt && x.updAt !== x.at ? ' · Updated ' + esc(x.updAt) + (x.updBy ? ' by ' + esc(x.updBy) : '') : ''}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px">
+        <div class="field" style="margin:0"><label>Assign to (forward to user)</label><select class="select" data-vcs="to" data-id="${esc(x.id)}" onchange="vcsDraft('${esc(x.id)}','to',this.value)">${toOpts}</select></div>
+        <div class="field" style="margin:0"><label>Status</label><select class="select" data-vcs="st" data-id="${esc(x.id)}" onchange="vcsDraft('${esc(x.id)}','st',this.value)">${stOpts}</select></div>
+      </div>
+      <div class="actions" style="margin-top:12px"><button class="btn sm" onclick="vcsUpdate('${esc(x.id)}')">✔ Update</button></div>
+    </div>`;
+  }).join('');
+  return `<div class="card" style="margin-bottom:16px"><div class="actions">
+      <select class="select" style="width:auto" onchange="vcsState().f=this.value;render()">${filt}</select>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="vcsForm()">＋ Log complaint</button></div></div>
+    ${list.length ? cards : `<div class="card"><div class="empty-state">${all.length ? 'No complaints with this status.' : 'No complaints yet. Tap “Log complaint” to add one.'}</div></div>`}
+    <p class="muted" style="font-size:calc(13px*var(--fs))">You see the complaints you logged and the ones forwarded to you${isAdmin() ? ' (as admin you see all of them)' : ''}. Change “Assign to” and “Status”, then tap <b>Update</b>.${ro ? ' 🔒 You have view-only access.' : ''}</p>`;
+}
+function vcsDraft(id, k, v){ const V = vcsState(); (V.draft[id] = V.draft[id] || {})[k] = v; }
+function vcsForm(){ if (!can('vcs')) return deny();
+  const w = openModal(`<h3>Log complaint</h3><p class="sub">Write the complaint. After saving, assign it to a user and set its status from the list.</p>
+    <form id="vcf" autocomplete="off">
+      <div class="field"><label>Complaint</label><input class="input" name="title" maxlength="300" placeholder="e.g. Customer name / short summary" required></div>
+      <div class="field"><label>Details <span class="muted">(optional)</span></label><textarea class="input" name="details" rows="4" maxlength="3000" placeholder="Full details of the complaint"></textarea></div>
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">Log complaint</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#vcf').onsubmit = async ev => {
+    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
+    try{ const r = await api('addVcs', f); S.d.vcs.unshift(r.vcs); w.remove(); render(); toast('Complaint logged'); }
+    catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function vcsUpdate(id){ if (!can('vcs')) return deny();
+  const x = (S.d.vcs || []).find(e => e.id === id); if (!x) return;
+  const q = k => document.querySelector(`[data-vcs="${k}"][data-id="${id}"]`);
+  const d = vcsState().draft[id] || {};
+  const to = q('to') ? q('to').value : (d.to !== undefined ? d.to : x.toId), st = q('st') ? q('st').value : (d.st || x.status);
+  try { const r = await api('updateVcs', { id, toId:to, status:st }); Object.assign(x, r.vcs); delete vcsState().draft[id]; render(); toast('Complaint updated'); }
+  catch(e){ handleErr(e); }
 }
 
 /* =====================================================================

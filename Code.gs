@@ -49,9 +49,10 @@ const SHEET_KEYS = {
   CGRP: ['group conversations'],
   ACT: ['activity log', 'activity'],
   LPH: ['login security photos', 'security photos', 'login photos'],
-  LIC: ['lic', 'lic policies', 'policies']
+  LIC: ['lic', 'lic policies', 'policies'],
+  VCS: ['vcs complaints', 'vcs complaint']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -157,6 +158,7 @@ var WRITE_ACTIONS = {
   addWork: 1, updateWork: 1, deleteWork: 1,
   addPw: 1, updatePw: 1, deletePw: 1,
   addLink: 1, updateLink: 1, deleteLink: 1,
+  addVcs: 1, updateVcs: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, setActivityAccess: 1, calDisconnect: 1
@@ -170,6 +172,7 @@ var NEED = {
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
   addLic: 'lic', updateLic: 'lic', deleteLic: 'lic',
+  addVcs: 'vcs', updateVcs: 'vcs',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
   changeCredentials: 'creds',
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
@@ -184,13 +187,13 @@ var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvata
 //   (owner differs from uid only when an admin uses "View as user")
 var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '', group: null };
 
-function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', lic: 'edit', tt: 'edit', emp: true, creds: true, addUser: true }; }
+function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', lic: 'edit', vcs: 'edit', tt: 'edit', emp: true, creds: true, addUser: true }; }
 function normPerms_(p, role) {
   if (role === 'admin') return fullPerms_();
   p = p || {};
   function lvl(v) { v = String(v || '').toLowerCase(); return (v === 'none' || v === 'view' || v === 'edit') ? v : 'edit'; }
   function bool(v, d) { return (v === undefined || v === null || v === '') ? d : (v === true || v === 'true' || v === 'yes' || v === 1 || v === '1'); }
-  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), lic: lvl(p.lic), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false) };
+  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), lic: lvl(p.lic), vcs: lvl(p.vcs), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false) };
 }
 function need_(sec) {
   var p = CTX.perms || {};
@@ -288,6 +291,8 @@ function route_(req) {
       case 'addLic':            out = addLic_(req); break;
       case 'updateLic':         out = updateLic_(req); break;
       case 'deleteLic':         out = deleteLic_(req); break;
+      case 'addVcs':            out = addVcs_(req); break;
+      case 'updateVcs':         out = updateVcs_(req); break;
       case 'setTimetable':      out = setTimetable_(req); break;
       case 'calAuthUrl':        return calAuthUrl_();
       case 'calStatus':         return calStatus_();
@@ -455,7 +460,7 @@ function teamRows_(rows) {                       // keep only my own rows + my t
   var m = teamMap_(); m[CTX.uid] = 1;
   return rows.filter(function (r) { return m[r.uid]; });
 }
-function chatOnlyPerms_() { return { att: 'none', exp: 'none', work: 'none', pw: 'none', link: 'none', tt: 'none', emp: false, creds: true, addUser: false }; }
+function chatOnlyPerms_() { return { att: 'none', exp: 'none', work: 'none', pw: 'none', link: 'none', lic: 'none', vcs: 'none', tt: 'none', emp: false, creds: true, addUser: false }; }
 
 function findByUsername_(uname, s) {
   uname = String(uname || '').trim().toLowerCase();
@@ -614,6 +619,7 @@ var ACTIVITY_LABEL_ = {
   addWork: 'Added a work entry', updateWork: 'Updated a work entry', deleteWork: 'Deleted a work entry',
   addPw: 'Added a saved password', updatePw: 'Updated a saved password', deletePw: 'Deleted a saved password',
   addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link',
+  addVcs: 'Logged a VCS complaint', updateVcs: 'Updated a VCS complaint',
   setTimetable: 'Edited Time Table', addTtCat: 'Added a Time Table category', updateTtCat: 'Renamed a Time Table category', deleteTtCat: 'Deleted a Time Table category',
   saveUser: 'Added/edited a user', deleteUser: 'Deleted a user', kickUser: 'Signed a user out everywhere',
   saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group', setActivityAccess: 'Changed who can see the Activity log',
@@ -631,6 +637,8 @@ function activityDetail_(a, req) {
     if (a === 'deleteUser' || a === 'deleteEmployee' || a === 'kickUser') return String(req.id || req.uid || '');
     if (a === 'addPw' || a === 'updatePw') return req.site || req.url || '';
     if (a === 'addLink' || a === 'updateLink') return req.name || '';
+    if (a === 'addVcs') return String(req.title || '').slice(0, 60);
+    if (a === 'updateVcs') return [req.status, req.toId].filter(has_).join(' · ');
     if (a === 'saveGroup') return req.name || '';
     if (a === 'deployUpload' || a === 'deployRestore') return req.path || '';
   } catch (e) {}
@@ -870,7 +878,7 @@ function setSee_(cur, ids, users) {
 function capPerms_(p, mine, keepAdd) {
   p = normPerms_(p, 'user'); mine = mine || {};
   var rank = { none: 0, view: 1, edit: 2 }, out = {};
-  ['att', 'exp', 'work', 'pw', 'link', 'lic', 'tt'].forEach(function (k) {
+  ['att', 'exp', 'work', 'pw', 'link', 'lic', 'vcs', 'tt'].forEach(function (k) {
     var m = mine[k] || 'none';
     out[k] = rank[p[k]] <= rank[m] ? p[k] : m;
   });
@@ -1139,6 +1147,10 @@ function createSheet_(k) {
     // with the person's on-screen consent notice shown first. Never taken on a successful sign-in.
     sh.getRange(1, 1, 1, 5).setValues([['Time', 'Username tried', 'Reason', 'Front camera (base64 image)', 'Back camera (base64 image)']]);
     sh.getRange('A:C').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'VCS') {
+    sh.getRange(1, 1, 1, 11).setValues([['ID', 'Complaint', 'Details', 'Logged By ID', 'Logged By', 'Logged At', 'Assigned To ID', 'Assigned To', 'Status', 'Updated At', 'Updated By']]);
+    sh.getRange('A:K').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LIC') {
     sh.getRange(1, 1, 1, 9).setValues([['Customer Name', 'Policy Number', 'Amount', 'Start Date', 'End Date', 'Premium Frequency', 'ID', 'Owner', 'Renewal Due Date']]);
@@ -1907,6 +1919,87 @@ function deleteLic_(req) {
   return { ok: true };
 }
 
+// ---------- VCS complaints ----------
+// ONE shared sheet (not per-owner): a complaint is visible to the person who logged it, the person it is assigned to,
+// and every admin. Columns: ID | Complaint | Details | Logged By ID | Logged By | Logged At | Assigned To ID |
+// Assigned To | Status | Updated At | Updated By
+var VCS_STATUSES = { Open: 1, Pending: 1, Closed: 1 };
+// people a complaint can be assigned to: active accounts that can open the VCS tab (admins always can)
+function vcsUsers_() {
+  var s = readSettings_().values, out = [];
+  var a = getAccount_('ADMIN', s);
+  if (a) out.push({ id: 'ADMIN', name: a.name || a.username || 'Admin' });
+  readUsers_().forEach(function (u) {
+    if (u.active && (u.role === 'admin' || (u.perms && u.perms.vcs !== 'none'))) out.push({ id: u.id, name: u.name || u.username });
+  });
+  return out;
+}
+// name of the person making the request (the main admin's name lives in the Settings sheet)
+function vcsWho_() {
+  var n = CTX.name || CTX.username;
+  if (n) return n;
+  var a = getAccount_(CTX.uid, readSettings_().values);
+  return (a && (a.name || a.username)) || 'User';
+}
+function vcsSeen_(r) {
+  return CTX.role === 'admin' || String(r[3]) === CTX.uid || String(r[6]) === CTX.uid;
+}
+function vcsOut_(r) {
+  var st = String(r[8]);
+  return { id: String(r[0]), title: String(r[1]), details: String(r[2]), byId: String(r[3]), byName: String(r[4]), at: tsStr_(r[5]),
+    toId: String(r[6]), toName: String(r[7]), status: VCS_STATUSES[st] ? st : 'Open', updAt: tsStr_(r[9]), updBy: String(r[10]) };
+}
+function readVcs_() {
+  var sh = getSheet_('VCS'), last = sh.getLastRow();
+  if (last < 2) return [];
+  var out = [];
+  sh.getRange(2, 1, last - 1, 11).getValues().forEach(function (r) {
+    if (!has_(r[0]) || (!has_(r[1]) && !has_(r[2]))) return;
+    if (!vcsSeen_(r)) return;
+    out.push(vcsOut_(r));
+  });
+  return out.reverse();                              // newest first
+}
+function findVcsRow_(sh, id) {
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var v = sh.getRange(2, 1, last - 1, 11).getValues();
+  for (var i = 0; i < v.length; i++) if (String(v[i][0]) === String(id)) return vcsSeen_(v[i]) ? i + 2 : -1;
+  return -1;
+}
+function vcsAssignee_(toId) {
+  toId = String(toId || '').trim();
+  if (!toId) return { id: '', name: '' };
+  var u = vcsUsers_().filter(function (x) { return x.id === toId; })[0];
+  if (!u) fail_('That user cannot be given complaints (not found, disabled, or has no access to this tab).');
+  return u;
+}
+function addVcs_(req) {
+  var title = String(req.title || '').trim().slice(0, 300);
+  if (!title) fail_('Write the complaint first.');
+  var details = String(req.details || '').trim().slice(0, 3000);
+  var to = vcsAssignee_(req.toId);
+  var sh = getSheet_('VCS');
+  var row = sh.getLastRow() + 1, id = Utilities.getUuid().slice(0, 8), now = nowStr_(), who = vcsWho_();
+  var rec = [id, title, details, CTX.uid, who, now, to.id, to.name, 'Open', now, who];
+  var rng = sh.getRange(row, 1, 1, 11);
+  rng.setNumberFormat('@');
+  rng.setValues([rec]);
+  return { ok: true, vcs: vcsOut_(rec) };
+}
+function updateVcs_(req) {
+  var sh = getSheet_('VCS');
+  var row = findVcsRow_(sh, req.id);
+  if (row < 0) fail_('Complaint not found. Please refresh.');
+  var st = String(req.status || '').trim();
+  if (!VCS_STATUSES[st]) fail_('Status must be Open, Pending or Closed.');
+  var to = vcsAssignee_(req.toId);
+  var rng = sh.getRange(row, 7, 1, 5);
+  rng.setNumberFormat('@');
+  rng.setValues([[to.id, to.name, st, nowStr_(), vcsWho_()]]);
+  return { ok: true, vcs: vcsOut_(sh.getRange(row, 1, 1, 11).getValues()[0]) };
+}
+
 // ---------- TIME TABLE ----------
 // Sheet "Timetable": Type | Key | Value | Owner
 //   Type "Category" -> Key = category name (these fill the dropdown of every slot)
@@ -2300,6 +2393,8 @@ function getAll_() {
     passwords: p.pw === 'none' ? [] : readPw_(),
     links: p.link === 'none' ? [] : readLink_(),
     lic: p.lic === 'none' ? [] : readLic_(),
+    vcs: p.vcs === 'none' ? [] : readVcs_(),
+    vcsUsers: p.vcs === 'none' ? [] : vcsUsers_(),
     ttCats: T.cats.map(function (c) { return c.name; }),
     timetable: ttDaysOut_(T)
   };
