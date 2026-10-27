@@ -430,7 +430,7 @@ function applyRO(v){
   if (!can('tt')){ kill('[onclick*="ttCats"],[onclick*="ttClear"],[onclick*="ttCopyPrev"]'); v.querySelectorAll('[data-tt]').forEach(e => { e.disabled = true; }); }
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
   if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"]');
-  if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
+  if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"],[onclick*="vcsReopen"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
     v.querySelectorAll('tr').forEach(tr => { if (tr.querySelector('input.in')) tr.remove(); });
@@ -2180,20 +2180,21 @@ const VCS_ICON = { Open:'🔴', Pending:'🟡', Closed:'🟢' };
 function vcsState(){ return S.vcs = S.vcs || { f:'all', draft:{} }; }
 function vVcs(){
   const V = vcsState(), all = S.d.vcs || [], users = S.d.vcsUsers || [], ro = !can('vcs');
-  const list = all.filter(x => V.f === 'all' || x.status === V.f);
-  const cnt = s => all.filter(x => x.status === s).length;
-  const filt = ['all', ...VCS_ST].map(s => `<option value="${s}" ${V.f === s ? 'selected' : ''}>${s === 'all' ? 'All (' + all.length + ')' : VCS_ICON[s] + ' ' + s + ' (' + cnt(s) + ')'}</option>`).join('');
-  const cards = list.map(x => {
+  const act = all.filter(x => x.status !== 'Closed'), done = all.filter(x => x.status === 'Closed');
+  const meta = x => `Logged by <b>${esc(x.byName || '—')}</b> · ${esc(x.at)}${x.toName ? ' · Forwarded to <b>' + esc(x.toName) + '</b>' : ' · Not assigned yet'}${x.updAt && x.updAt !== x.at ? ' · Updated ' + esc(x.updAt) + (x.updBy ? ' by ' + esc(x.updBy) : '') : ''}`;
+  const head = x => `<div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
+        <b style="word-break:break-word;white-space:normal">${esc(x.title)}</b><span class="tag">${VCS_ICON[x.status] || ''} ${esc(x.status)}</span></div>
+      ${x.details ? `<div style="margin-top:6px;white-space:pre-wrap;word-break:break-word">${esc(x.details)}</div>` : ''}
+      <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">${meta(x)}</div>`;
+  const doneCards = done.map(x => `<div class="card" style="margin-bottom:12px">${head(x)}
+      <div class="actions" style="margin-top:12px"><button class="btn soft sm" onclick="vcsReopen('${esc(x.id)}')">↻ Reopen</button></div></div>`).join('');
+  const cards = act.map(x => {
     const d = V.draft[x.id] || {}, st = d.st || x.status, to = d.to !== undefined ? d.to : x.toId;
     const known = users.some(u => u.id === to);
     const toOpts = `<option value="">— Not assigned —</option>` + (to && !known ? `<option value="${esc(to)}" selected>${esc(x.toName || to)}</option>` : '')
       + users.map(u => `<option value="${esc(u.id)}" ${u.id === to ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
     const stOpts = VCS_ST.map(s => `<option value="${s}" ${s === st ? 'selected' : ''}>${VCS_ICON[s]} ${s}</option>`).join('');
-    return `<div class="card" style="margin-bottom:12px">
-      <div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
-        <b style="word-break:break-word;white-space:normal">${esc(x.title)}</b><span class="tag">${VCS_ICON[x.status] || ''} ${esc(x.status)}</span></div>
-      ${x.details ? `<div style="margin-top:6px;white-space:pre-wrap;word-break:break-word">${esc(x.details)}</div>` : ''}
-      <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">Logged by <b>${esc(x.byName || '—')}</b> · ${esc(x.at)}${x.toName ? ' · Forwarded to <b>' + esc(x.toName) + '</b>' : ' · Not assigned yet'}${x.updAt && x.updAt !== x.at ? ' · Updated ' + esc(x.updAt) + (x.updBy ? ' by ' + esc(x.updBy) : '') : ''}</div>
+    return `<div class="card" style="margin-bottom:12px">${head(x)}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px">
         <div class="field" style="margin:0"><label>Assign to (forward to user)</label><select class="select" data-vcs="to" data-id="${esc(x.id)}" onchange="vcsDraft('${esc(x.id)}','to',this.value)">${toOpts}</select></div>
         <div class="field" style="margin:0"><label>Status</label><select class="select" data-vcs="st" data-id="${esc(x.id)}" onchange="vcsDraft('${esc(x.id)}','st',this.value)">${stOpts}</select></div>
@@ -2202,11 +2203,20 @@ function vVcs(){
     </div>`;
   }).join('');
   return `<div class="card" style="margin-bottom:16px"><div class="actions">
-      <select class="select" style="width:auto" onchange="vcsState().f=this.value;render()">${filt}</select>
+      <span class="muted">🔴 Open ${all.filter(x => x.status === 'Open').length} · 🟡 Pending ${all.filter(x => x.status === 'Pending').length} · 🟢 Closed ${done.length}</span>
       <span style="flex:1"></span>
       <button class="btn" onclick="vcsForm()">＋ Log complaint</button></div></div>
-    ${list.length ? cards : `<div class="card"><div class="empty-state">${all.length ? 'No complaints with this status.' : 'No complaints yet. Tap “Log complaint” to add one.'}</div></div>`}
-    <p class="muted" style="font-size:calc(13px*var(--fs))">You see the complaints you logged and the ones forwarded to you${isAdmin() ? ' (as admin you see all of them)' : ''}. Change “Assign to” and “Status”, then tap <b>Update</b>.${ro ? ' 🔒 You have view-only access.' : ''}</p>`;
+    <details class="card" style="margin-bottom:16px" ${V.openPrev ? 'open' : ''} ontoggle="vcsState().openPrev=this.open">
+      <summary style="cursor:pointer;font-weight:700">🗂️ Previous complaints (Closed) · ${done.length}</summary>
+      <div style="margin-top:12px">${done.length ? doneCards : '<div class="empty-state">No closed complaints yet.</div>'}</div></details>
+    <h3 style="margin:0 0 10px">Open &amp; Pending · ${act.length}</h3>
+    ${act.length ? cards : `<div class="card"><div class="empty-state">${all.length ? 'No open or pending complaints.' : 'No complaints yet. Tap “Log complaint” to add one.'}</div></div>`}
+    <p class="muted" style="font-size:calc(13px*var(--fs))">You see the complaints you logged and the ones forwarded to you${isAdmin() ? ' (as admin you see all of them)' : ''}. Change “Assign to” and “Status”, then tap <b>Update</b>. Closed complaints move to “Previous complaints” and can be reopened.${ro ? ' 🔒 You have view-only access.' : ''}</p>`;
+}
+async function vcsReopen(id){ if (!can('vcs')) return deny();
+  const x = (S.d.vcs || []).find(e => e.id === id); if (!x) return;
+  try { const r = await api('updateVcs', { id, toId:x.toId, status:'Open' }); Object.assign(x, r.vcs); render(); toast('Complaint reopened'); }
+  catch(e){ handleErr(e); }
 }
 function vcsDraft(id, k, v){ const V = vcsState(); (V.draft[id] = V.draft[id] || {})[k] = v; }
 function vcsForm(){ if (!can('vcs')) return deny();
