@@ -329,7 +329,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{} };
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -2319,18 +2319,21 @@ function rackOpen(n){
 }
 /* ---- packing calculator ----
    Units are listed from the LARGEST to the SMALLEST:  1 Carton = 9 Inner · 1 Inner = 12 Small Box · 1 Small Box = 7 Piece.
-   Fill only the links you know. Enter a quantity in any unit and every answer that can be worked out is shown:
-   how many of each bigger unit are needed, the space left in the last one, and the total in each smaller unit.
-   Units can be renamed, added, removed and re-ordered. */
+   Fill only the links you know. Enter a quantity in any unit and every answer that can be worked out is shown.
+   INS list: save the packing of each INS number once (kept in the Google Sheet), then pick it from the dropdown to fill the links automatically. */
 const RACK_CALC_K = 'ks_rack_calc_v3';
 function rackCalcLoad(){
-  let st = { units:[{ n:'Carton', p:'' }, { n:'Inner', p:'' }, { n:'Small Box', p:'' }, { n:'Piece', p:'' }], q:'', u:3 };
+  let st = { units:[{ n:'Carton', p:'' }, { n:'Inner', p:'' }, { n:'Small Box', p:'' }, { n:'Piece', p:'' }], q:'', u:3, sel:'' };
   try{
     const s = JSON.parse(localStorage.getItem(RACK_CALC_K) || 'null');
-    if (s && Array.isArray(s.units) && s.units.length >= 2) st = { units:s.units.map(x => ({ n:String(x.n || ''), p:String(x.p === undefined ? '' : x.p) })), q:String(s.q || ''), u:+s.u || 0 };
+    if (s && Array.isArray(s.units) && s.units.length >= 2) st = { units:s.units.map(x => ({ n:String(x.n || ''), p:String(x.p === undefined ? '' : x.p) })), q:String(s.q || ''), u:+s.u || 0, sel:String(s.sel || '') };
   }catch(e){}
   if (!(st.u >= 0 && st.u < st.units.length)) st.u = st.units.length - 1;
   return st;
+}
+function rackPresets(){
+  const l = ((S.d.rackCfg && S.d.rackCfg.presets) || []).map(x => ({ name:String(x.name || ''), vals:Array.isArray(x.vals) ? x.vals.map(String) : [] }));
+  return l.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric:true, sensitivity:'base' }));
 }
 function rackCalc(){
   const st = rackCalcLoad();
@@ -2342,6 +2345,9 @@ function rackCalc(){
   const prod = (a, b) => { let r = 1; for (let i = a + 1; i <= b; i++){ const p = per(i); if (!p) return 0; r *= p; } return r; };   // how many of unit b in 1 of unit a (a is larger); 0 = not known
   const save = () => { try{ localStorage.setItem(RACK_CALC_K, JSON.stringify(st)); }catch(e){} };
   const row = (k, v, cls) => `<div class="rk-calc-row ${cls || ''}"><span>${k}</span><b>${v}</b></div>`;
+  const chainHtml = (vals, attr) => st.units.map((u, i) => i === 0 ? '' : `<div class="rk-chain"><span class="rk-chain-l">1 ${esc(nm(i - 1))}</span><span class="rk-chain-eq">=</span><input class="input" ${attr}="${i}" type="number" inputmode="numeric" min="1" step="1" value="${esc(vals[i] || '')}" placeholder="—" aria-label="${esc(nm(i))} in 1 ${esc(nm(i - 1))}"><span class="rk-chain-r">${esc(nm(i))}</span></div>`).join('');
+  const curVals = () => st.units.map(u => u.p);                       // index i = how many unit i in 1 unit i-1 (index 0 unused)
+  const applyPreset = p => { st.units.forEach((u, i) => { u.p = i === 0 ? '' : String((p.vals[i - 1]) || ''); }); st.sel = p.name; };
 
   const run = () => {
     save(); const out = $$('#rcOut'); if (!out) return;
@@ -2371,30 +2377,75 @@ function rackCalc(){
   };
 
   const drawMain = () => {
-    const chain = st.units.map((u, i) => i === 0 ? '' : `<div class="rk-chain"><span class="rk-chain-l">1 ${esc(nm(i - 1))}</span><span class="rk-chain-eq">=</span><input class="input" data-p="${i}" type="number" inputmode="numeric" min="1" step="1" value="${esc(u.p)}" placeholder="—" aria-label="${esc(nm(i))} in 1 ${esc(nm(i - 1))}"><span class="rk-chain-r">${esc(nm(i))}</span></div>`).join('');
+    const pl = rackPresets(); if (st.sel && !pl.some(p => p.name === st.sel)) st.sel = '';
     $$('#rcBody').innerHTML = `<h3>🧮 Packing calculator</h3><p class="sub">Fill only the links you know — you do not need all of them.</p>
-      <div class="sec-title" style="margin-top:4px">How it is packed</div>
-      <div class="rk-chains">${chain}</div>
+      <div class="actions" style="justify-content:space-between;flex-wrap:nowrap;margin-top:4px"><div class="sec-title" style="margin:0">How it is packed</div><button type="button" class="btn soft sm" data-ins title="Add / edit / delete INS entries">⚙ INS list</button></div>
+      <select class="select" id="rcSel" style="margin:8px 0 12px" aria-label="Select INS"><option value="">${pl.length ? '— Select INS number —' : '— No INS saved yet (tap ⚙ INS list) —'}</option>${pl.map(p => `<option value="${esc(p.name)}" ${p.name === st.sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+      <div class="rk-chains">${chainHtml(curVals(), 'data-p')}</div>
       <div class="sec-title" style="margin-top:16px">How much do you have?</div>
       <div class="actions" style="flex-wrap:nowrap"><input class="input" id="rcQ" type="number" inputmode="numeric" min="0" step="1" placeholder="Quantity" value="${esc(st.q)}">
         <select class="select" id="rcU" style="width:auto">${st.units.map((u, i) => `<option value="${i}" ${i === st.u ? 'selected' : ''}>${esc(nm(i))}</option>`).join('')}</select></div>
       <div id="rcOut" style="margin-top:14px"></div>
       <div class="foot"><button type="button" class="btn ghost" data-edit>✏️ Edit units</button><button type="button" class="btn ghost" data-x>Close</button></div>`;
     $$('#rcBody').oninput = e => {
-      if (e.target.dataset.p !== undefined) st.units[+e.target.dataset.p].p = e.target.value;
+      if (e.target.dataset.p !== undefined){ st.units[+e.target.dataset.p].p = e.target.value; st.sel = ''; const s = $$('#rcSel'); if (s) s.value = ''; }
       else if (e.target.id === 'rcQ') st.q = e.target.value;
       run();
     };
     $$('#rcU').onchange = e => { st.u = +e.target.value; run(); };
+    $$('#rcSel').onchange = e => { const p = pl.find(x => x.name === e.target.value); if (p) applyPreset(p); else st.sel = ''; save(); drawMain(); };
     $$('[data-x]').onclick = () => w.remove();
     $$('[data-edit]').onclick = drawEdit;
+    $$('[data-ins]').onclick = () => { if (!can('rack')) return deny(); drawList(); };
     run();
+  };
+
+  /* ---- INS list: add / edit / delete ---- */
+  const savePresets = async list => { const r = await api('saveRackPresets', { presets:list }); S.d.rackCfg = r.cfg; };
+  const drawList = () => {
+    const pl = rackPresets();
+    $$('#rcBody').innerHTML = `<h3>⚙ INS list</h3><p class="sub">Save the packing of each INS number once. Then just pick it in the calculator and the links fill by themselves.</p>
+      <div class="actions" style="flex-wrap:nowrap"><input class="input" id="rcFind" placeholder="🔍 Find INS" autocomplete="off"><button class="btn soft" type="button" data-add>＋ Add INS</button></div>
+      <div id="rcPL" style="margin-top:8px">${pl.length ? pl.map((p, i) => `<div class="rk-catrow" data-nm="${esc(p.name.toLowerCase())}"><b style="min-width:70px">${esc(p.name)}</b><span class="muted" style="flex:1;font-size:calc(12.5px*var(--fs))">${st.units.slice(1).map((u, j) => esc(p.vals[j] || '—')).join(' · ')}</span>
+        <button class="btn ghost sm" type="button" data-ed="${i}">Edit</button><button class="btn ghost sm" type="button" data-dl="${i}" aria-label="Delete">🗑</button></div>`).join('') : '<div class="empty-state">No INS saved yet. Tap “＋ Add INS”.</div>'}</div>
+      <div class="foot"><button type="button" class="btn ghost" data-back>← Back</button></div>`;
+    $$('#rcFind').oninput = e => { const q = e.target.value.trim().toLowerCase(); w.querySelectorAll('#rcPL [data-nm]').forEach(r => r.classList.toggle('hidden', !!q && !r.dataset.nm.includes(q))); };
+    $$('[data-back]').onclick = drawMain;
+    $$('[data-add]').onclick = () => drawForm(null);
+    $$('#rcPL').onclick = async e => {
+      const ed = e.target.closest('[data-ed]'), dl = e.target.closest('[data-dl]');
+      if (ed) drawForm(pl[+ed.dataset.ed]);
+      else if (dl){
+        const p = pl[+dl.dataset.dl];
+        if (!await confirmBox('Delete this INS?', `“${p.name}” will be removed from the list.`, 'Delete', true)) return;
+        try{ await savePresets(pl.filter(x => x !== p)); if (st.sel === p.name) st.sel = ''; save(); drawList(); toast('Deleted'); }catch(err){ handleErr(err); }
+      }
+    };
+  };
+  const drawForm = p => {
+    const vals = [''].concat(st.units.slice(1).map((u, j) => p ? String(p.vals[j] || '') : u.p));   // new entry starts from what is on the calculator now
+    $$('#rcBody').innerHTML = `<h3>${p ? 'Edit INS' : 'Add INS'}</h3><p class="sub">Name it (for example INS 17) and fill how it is packed. Leave unknown links empty.</p>
+      <div class="field"><label>INS name / number</label><input class="input" id="rcName" maxlength="60" placeholder="e.g. INS 17" autocapitalize="characters" value="${esc(p ? p.name : '')}" autocomplete="off"></div>
+      <div class="rk-chains">${chainHtml(vals, 'data-v')}</div>
+      <div class="foot"><button type="button" class="btn ghost" data-back>Cancel</button><button type="button" class="btn" data-save>Save</button></div>`;
+    $$('[data-back]').onclick = drawList;
+    $$('[data-save]').onclick = async ev => {
+      const name = $$('#rcName').value.trim(); if (!name) return toast('Enter the INS name', true);
+      const all = rackPresets();
+      if (all.some(x => x !== p && x.name.toLowerCase() === name.toLowerCase())) return toast('That INS already exists — edit it instead', true);
+      const nv = st.units.slice(1).map((u, j) => { const el = w.querySelector(`[data-v="${j + 1}"]`); return el ? el.value.trim() : ''; });
+      const item = { name, vals:nv };
+      const list = p ? all.map(x => x === p ? item : x) : [...all, item];
+      const b = ev.currentTarget; b.disabled = true;
+      try{ await savePresets(list); if (p && st.sel === p.name){ applyPreset(item); } save(); drawList(); toast('Saved ' + name); }
+      catch(err){ b.disabled = false; handleErr(err); }
+    };
   };
 
   const drawEdit = () => {
     const rows = () => st.units.map((u, i) => `<div class="actions" style="margin-bottom:8px;flex-wrap:nowrap"><span class="muted" style="min-width:18px">${i + 1}</span><input class="input" data-n="${i}" maxlength="24" value="${esc(u.n)}" placeholder="Unit name" autocomplete="off">
         <button class="btn ghost sm" type="button" data-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button><button class="btn ghost sm" type="button" data-del="${i}" aria-label="Remove unit">✕</button></div>`).join('');
-    $$('#rcBody').innerHTML = `<h3>Edit units</h3><p class="sub">List the units from the <b>largest to the smallest</b> (Carton, Inner, Small Box, Piece). Rename, add, remove or move them with ↑. A new unit is added at the bottom (smallest).</p>
+    $$('#rcBody').innerHTML = `<h3>Edit units</h3><p class="sub">List the units from the <b>largest to the smallest</b> (Carton, Inner, Small Box, Piece). Rename, add, remove or move them with ↑. A new unit is added at the bottom (smallest). Saved INS entries follow the unit order, so change the order only if you re-check them.</p>
       <div id="rcUnits">${rows()}</div>
       <div class="actions" style="margin:10px 0 4px"><button class="btn soft sm" type="button" data-add>＋ Add unit</button><button class="btn ghost sm" type="button" data-reset>↺ Reset names</button></div>
       <div class="foot"><button type="button" class="btn" data-done>Done</button></div>`;
@@ -2402,8 +2453,8 @@ function rackCalc(){
     box.oninput = e => { if (e.target.dataset.n !== undefined) st.units[+e.target.dataset.n].n = e.target.value; save(); };
     box.onclick = e => {
       const d = e.target.closest('[data-del]'), u = e.target.closest('[data-up]');
-      if (d){ if (st.units.length <= 2) return toast('Keep at least two units', true); st.units.splice(+d.dataset.del, 1); if (st.u >= st.units.length) st.u = st.units.length - 1; st.units[0].p = ''; redraw(); }
-      else if (u && +u.dataset.up > 0){ const i = +u.dataset.up; [st.units[i - 1], st.units[i]] = [st.units[i], st.units[i - 1]]; st.units[0].p = ''; redraw(); }
+      if (d){ if (st.units.length <= 2) return toast('Keep at least two units', true); st.units.splice(+d.dataset.del, 1); if (st.u >= st.units.length) st.u = st.units.length - 1; st.units[0].p = ''; st.sel = ''; redraw(); }
+      else if (u && +u.dataset.up > 0){ const i = +u.dataset.up; [st.units[i - 1], st.units[i]] = [st.units[i], st.units[i - 1]]; st.units[0].p = ''; st.sel = ''; redraw(); }
     };
     $$('[data-add]').onclick = () => { if (st.units.length >= 8) return toast('Up to 8 units', true); st.units.push({ n:'', p:'' }); redraw(); const ins = box.querySelectorAll('input'); ins[ins.length - 1].focus(); };
     $$('[data-reset]').onclick = () => { ['Carton', 'Inner', 'Small Box', 'Piece'].forEach((n, i) => { if (st.units[i]) st.units[i].n = n; }); redraw(); };
