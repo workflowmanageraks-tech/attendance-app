@@ -747,3 +747,11 @@ html[data-mode="dark"] .rk-cat{background:var(--soft2);color:var(--brand-ink)}
 .rk-sumrow>b{color:var(--brand-ink);min-width:34px}
 .rk-bit{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:2px 8px;font-size:calc(12.5px*var(--fs))}
 .rk-bit i{font-style:normal;font-weight:700;color:var(--muted);text-transform:uppercase;font-size:calc(10.5px*var(--fs));margin-right:4px}
+
+.rk-calc{border:1px solid var(--line);border-radius:var(--rad-s);background:var(--soft);padding:6px 12px}
+.rk-calc-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:calc(14px*var(--fs))}
+.rk-calc-row span{color:var(--muted)}
+.rk-calc-row b{text-align:right}
+.rk-calc-row.main b{color:var(--brand-ink);font-size:calc(16px*var(--fs))}
+.rk-calc-sep{padding:8px 0;font-size:calc(13px*var(--fs));color:var(--muted)}
+.rk-calc-h{font-weight:800;font-size:calc(12px*var(--fs));text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding:6px 0 0}

@@ -2276,6 +2276,7 @@ function vRack(){
   const stats = `<div class="rk-stats"><div><b>${RACK_MAX}</b><span>Racks</span></div><div><b>${filled}</b><span>Racks filled</span></div><div><b>${cfg.fields.length}</b><span>Fields per row</span></div></div>`;
   const bar = `<div class="card" style="margin-bottom:16px"><div class="actions">
       <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Search anything you filled — item, INS no., scheme, 12b …" value="${esc(R.q)}" oninput="rackSearch(this.value)">
+      <button class="btn soft" onclick="rackCalc()">🧮 Calculator</button>
       ${ro ? '' : `<button class="btn ghost" onclick="rackFieldsEdit()">✏️ Customize fields</button><button class="btn ghost" onclick="rackRowsEdit()">☰ Customize rows</button>`}</div></div>`;
   let body;
   if (q){
@@ -2315,6 +2316,54 @@ function rackOpen(n){
       w.remove(); render(); toast('Saved rack ' + n);
     }catch(e){ sv.disabled = false; handleErr(e); }
   };
+}
+/* ---- packing calculator: pieces → box → inner → carton, how many are needed and how much space is left ---- */
+const RACK_CALC_K = 'ks_rack_calc_v1';
+function rackCalc(){
+  let st = { p:'7', b:'12', i:'9', q:'', u:'inner' };
+  try{ const s = JSON.parse(localStorage.getItem(RACK_CALC_K) || 'null'); if (s && typeof s === 'object') st = { ...st, ...s }; }catch(e){}
+  const w = openModal(`<h3>🧮 Packing calculator</h3><p class="sub">Enter how it is packed, then a quantity — it tells how many Inner / Carton are needed and how much space is left.</p>
+    <div class="sec-title" style="margin-top:4px">How it is packed</div>
+    <div class="rk-fields" style="grid-template-columns:1fr 1fr 1fr">
+      <label class="rk-fld"><span>Pieces in 1 Box</span><input class="input" id="rcP" type="number" inputmode="numeric" min="1" step="1" value="${esc(st.p)}"></label>
+      <label class="rk-fld"><span>Box in 1 Inner</span><input class="input" id="rcB" type="number" inputmode="numeric" min="1" step="1" value="${esc(st.b)}"></label>
+      <label class="rk-fld"><span>Inner in 1 Carton</span><input class="input" id="rcI" type="number" inputmode="numeric" min="1" step="1" value="${esc(st.i)}"></label>
+    </div>
+    <div class="sec-title" style="margin-top:16px">How much do you have?</div>
+    <div class="actions" style="flex-wrap:nowrap"><input class="input" id="rcQ" type="number" inputmode="numeric" min="0" step="1" placeholder="Quantity" value="${esc(st.q)}">
+      <select class="select" id="rcU" style="width:auto"><option value="piece">Pieces</option><option value="box">Box</option><option value="inner">Inner</option><option value="carton">Carton</option></select></div>
+    <div id="rcOut" style="margin-top:14px"></div>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Close</button></div>`);
+  const $$ = s => w.querySelector(s); $$('#rcU').value = st.u;
+  const num = id => { const v = Math.floor(Number($$(id).value)); return v >= 1 ? v : 0; };
+  const nf = n => Number(n).toLocaleString('en-IN');
+  const row = (k, v, cls) => `<div class="rk-calc-row ${cls || ''}"><span>${k}</span><b>${v}</b></div>`;
+  const run = () => {
+    const P = num('#rcP'), B = num('#rcB'), I = num('#rcI'), q = Math.floor(Number($$('#rcQ').value)), u = $$('#rcU').value;
+    try{ localStorage.setItem(RACK_CALC_K, JSON.stringify({ p:$$('#rcP').value, b:$$('#rcB').value, i:$$('#rcI').value, q:$$('#rcQ').value, u })); }catch(e){}
+    const out = $$('#rcOut');
+    if (!P || !B || !I){ out.innerHTML = '<div class="empty-state">Fill all three packing numbers (1 or more).</div>'; return; }
+    if (!(q >= 1)){ out.innerHTML = `<div class="empty-state">Enter a quantity. 1 Box = ${nf(P)} pcs · 1 Inner = ${nf(B)} Box = ${nf(P * B)} pcs · 1 Carton = ${nf(I)} Inner = ${nf(P * B * I)} pcs</div>`; return; }
+    const perBox = P, perInner = P * B, perCarton = P * B * I;
+    const total = q * ({ piece:1, box:perBox, inner:perInner, carton:perCarton }[u]);
+    const boxes = Math.ceil(total / perBox), inners = Math.ceil(total / perInner), cartons = Math.ceil(total / perCarton);
+    const spPcs = boxes * perBox - total, spBox = inners * B - boxes, spInner = cartons * I - inners, spAll = cartons * perCarton - total;
+    const fullCartons = Math.floor(inners / I), looseInners = inners - fullCartons * I;
+    out.innerHTML = `<div class="rk-calc">
+      ${row('Total pieces', nf(total))}
+      ${row('Box needed', nf(boxes))}
+      ${row('Inner needed', nf(inners))}
+      ${row('Carton needed', nf(cartons), 'main')}
+      <div class="rk-calc-sep">${fullCartons ? nf(fullCartons) + ' full carton' + (fullCartons > 1 ? 's' : '') : 'No full carton'}${looseInners ? ' + ' + nf(looseInners) + ' Inner in the last carton' : ''}</div>
+      <div class="rk-calc-h">Space left</div>
+      ${row('In the last Inner', nf(spBox) + ' Box' + (spPcs ? ' (+ ' + nf(spPcs) + ' pcs in the last Box)' : ''))}
+      ${row('In the last Carton', nf(spInner) + ' Inner more can fit', 'main')}
+      ${row('Total free space in last Carton', nf(spAll) + ' pcs')}
+    </div>`;
+  };
+  w.querySelectorAll('input,select').forEach(el => { el.oninput = run; el.onchange = run; });
+  $$('[data-x]').onclick = () => w.remove();
+  run();
 }
 /* ---- customise the rows (a, b, c, d …) ---- */
 function rackRowsEdit(){ if (!can('rack')) return deny();
