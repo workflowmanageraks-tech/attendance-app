@@ -161,7 +161,7 @@ var WRITE_ACTIONS = {
   addPw: 1, updatePw: 1, deletePw: 1,
   addLink: 1, updateLink: 1, deleteLink: 1,
   addVcs: 1, updateVcs: 1,
-  addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1,
+  addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, setActivityAccess: 1, calDisconnect: 1
@@ -176,7 +176,7 @@ var NEED = {
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
   addLic: 'lic', updateLic: 'lic', deleteLic: 'lic',
   addVcs: 'vcs', updateVcs: 'vcs',
-  addRack: 'rack', updateRack: 'rack', deleteRack: 'rack', saveRackRows: 'rack', saveRackCats: 'rack',
+  addRack: 'rack', updateRack: 'rack', deleteRack: 'rack', saveRackRows: 'rack', saveRackCats: 'rack', saveRackFields: 'rack', saveRackData: 'rack',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
   changeCredentials: 'creds',
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
@@ -302,6 +302,8 @@ function route_(req) {
       case 'deleteRack':        out = deleteRack_(req); break;
       case 'saveRackRows':      out = saveRackRows_(req); break;
       case 'saveRackCats':      out = saveRackCats_(req); break;
+      case 'saveRackFields':    out = saveRackFields_(req); break;
+      case 'saveRackData':      out = saveRackData_(req); break;
       case 'setTimetable':      out = setTimetable_(req); break;
       case 'calAuthUrl':        return calAuthUrl_();
       case 'calStatus':         return calStatus_();
@@ -630,7 +632,7 @@ var ACTIVITY_LABEL_ = {
   addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link',
   addVcs: 'Logged a VCS complaint', updateVcs: 'Updated a VCS complaint',
   addRack: 'Added a rack item', updateRack: 'Updated a rack item', deleteRack: 'Deleted a rack item',
-  saveRackRows: 'Customised rack rows', saveRackCats: 'Changed rack categories',
+  saveRackRows: 'Customised rack rows', saveRackCats: 'Changed rack categories', saveRackFields: 'Changed rack fields', saveRackData: 'Saved rack details',
   setTimetable: 'Edited Time Table', addTtCat: 'Added a Time Table category', updateTtCat: 'Renamed a Time Table category', deleteTtCat: 'Deleted a Time Table category',
   saveUser: 'Added/edited a user', deleteUser: 'Deleted a user', kickUser: 'Signed a user out everywhere',
   saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group', setActivityAccess: 'Changed who can see the Activity log',
@@ -2171,7 +2173,8 @@ function deleteRack_(req) {
   return { ok: true };
 }
 // ----- rack settings: custom rows per rack + category list -----
-function readRackCfgDefault_() { return { rows: { '*': RACK_DEF_ROWS.slice() }, cats: RACK_DEF_CATS.slice() }; }
+var RACK_DEF_FIELDS = ['Carton', 'Inner', 'Box', 'Scheme', 'INS No.'];
+function readRackCfgDefault_() { return { rows: { '*': RACK_DEF_ROWS.slice() }, cats: RACK_DEF_CATS.slice(), fields: RACK_DEF_FIELDS.slice(), data: {} }; }
 function rackCfgSheet_() { return ownedSheet_('RACKCFG', 4); }
 function readRackCfg_() {
   var cfg = readRackCfgDefault_(), sh = rackCfgSheet_(), last = sh.getLastRow();
@@ -2179,10 +2182,12 @@ function readRackCfg_() {
   sh.getRange(2, 1, last - 1, 4).getValues().forEach(function (r) {
     if (ownerOf_(r[3]) !== CTX.owner) return;
     var v; try { v = JSON.parse(String(r[2])); } catch (e) { return; }
+    if (String(r[0]) === 'Data') { if (v && typeof v === 'object' && !Array.isArray(v)) cfg.data[String(r[1])] = v; return; }
     if (!Array.isArray(v) || !v.length) return;
     v = v.map(String);
     if (String(r[0]) === 'Rows') cfg.rows[String(r[1])] = v;
     else if (String(r[0]) === 'Cats') cfg.cats = v;
+    else if (String(r[0]) === 'Fields') cfg.fields = v;
   });
   return cfg;
 }
@@ -2238,6 +2243,35 @@ function saveRackCats_(req) {
   rackCfgSet_('Cats', '*', cats);
   rackCatCols_(rackSheet_(), cats);                    // one number column per category, right in the sheet
   return { ok: true, cfg: readRackCfg_() };
+}
+
+function saveRackFields_(req) {
+  var inp = req.fields;
+  if (!Array.isArray(inp)) fail_('Invalid list.');
+  var names = [], olds = [], seen = {};
+  inp.forEach(function (x) {
+    var n = String(x && x.n !== undefined ? x.n : '').trim().slice(0, 40), o = String(x && x.o ? x.o : '');
+    if (!n || seen[n.toLowerCase()]) return;
+    seen[n.toLowerCase()] = 1; names.push(n); olds.push(o);
+  });
+  if (!names.length) fail_('Keep at least one field.');
+  if (names.length > 30) fail_('At most 30 fields are allowed.');
+  var cfg = readRackCfg_();
+  Object.keys(cfg.data).forEach(function (rk) {            // keep typed values under renamed fields, drop removed ones
+    var old = cfg.data[rk], nv = {}, any = false;
+    names.forEach(function (n, i) { var val = olds[i] ? old[olds[i]] : undefined; if (val !== undefined && String(val) !== '') { nv[n] = String(val); any = true; } });
+    rackCfgSet_('Data', rk, any ? nv : null);
+  });
+  rackCfgSet_('Fields', '*', names);
+  return { ok: true, cfg: readRackCfg_() };
+}
+function saveRackData_(req) {
+  var rk = String(req.rack === undefined || req.rack === null ? '' : req.rack).trim(), n = parseInt(rk, 10);
+  if (!/^\d{1,3}$/.test(rk) || !(n >= 1 && n <= RACK_MAX)) fail_('Choose a rack from 1 to ' + RACK_MAX + '.');
+  var fields = readRackCfg_().fields, vals = {}, any = false, inp = req.values || {};
+  fields.forEach(function (f) { var s = String(inp[f] === undefined || inp[f] === null ? '' : inp[f]).trim().slice(0, 200); if (s) { vals[f] = s; any = true; } });
+  rackCfgSet_('Data', String(n), any ? vals : null);
+  return { ok: true, rack: String(n), values: vals };
 }
 
 // ---------- TIME TABLE ----------

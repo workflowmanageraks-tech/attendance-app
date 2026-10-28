@@ -719,3 +719,14 @@ html[data-mode="dark"] .rk-cat{background:var(--soft2);color:var(--brand-ink)}
 .rk-num b{font-size:calc(15px*var(--fs));color:var(--muted)}
 .rk-num.on{border-color:var(--brand);background:var(--brand-soft)}
 .rk-num.on b{color:var(--brand-ink)}
+
+/* rack mapping — per-rack field boxes */
+.rk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.rk-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:12px}
+.rk-card.has{border-color:var(--brand)}
+.rk-card-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.rk-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.rk-fld{display:flex;flex-direction:column;gap:3px;min-width:0}
+.rk-fld span{font-size:calc(11px*var(--fs));font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+.rk-fld .input{padding:7px 9px}
+@media (max-width:640px){.rk-grid{grid-template-columns:1fr}}
