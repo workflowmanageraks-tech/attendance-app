@@ -769,3 +769,14 @@ html[data-mode="dark"] .rk-cat{background:var(--soft2);color:var(--brand-ink)}
 .rk-calc-sum{padding:10px 2px 6px;font-size:calc(14px*var(--fs));line-height:1.5;border-bottom:1px solid var(--line)}
 .rk-calc-sum b{color:var(--brand-ink)}
 .rk-calc-row.dim b{color:var(--muted);font-weight:600}
+
+/* chat: translate / select / copy */
+.ch-b{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;cursor:pointer}
+.ch-b.picked{outline:2px solid #2563eb;outline-offset:1px;filter:brightness(.96)}
+.ch-b .tg{font-size:calc(10.5px*var(--fs));color:#2563eb;margin-top:3px;font-weight:600}
+.ch-b .tg.bad{color:#b91c1c}
+.ch-sel{align-items:center;gap:8px;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--line);flex:none}
+.ch-sbtn{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:6px 12px;font-weight:700;font-size:calc(13px*var(--fs))}
+.ch-lg{font-size:calc(9px*var(--fs));font-weight:800;margin-left:1px;vertical-align:sub}
+.ch-opts{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+.ch-opts .btn{width:100%;justify-content:center;text-align:center}

@@ -326,6 +326,7 @@ function route_(req) {
       case 'chatUsers':         return chatUsers_();
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
+      case 'chatTranslate':     return chatTranslate_(req);
       case 'chatSend':          return chatSend_(req);
       case 'chatGroupSave':     return chatGroupSave_(req);
       case 'chatGroupLeave':    return chatGroupLeave_(req);
@@ -2546,6 +2547,23 @@ function chatFetch_(req) {
   var ms = seenMap_([w])[w] || 0;
   var pr = ms ? presence_(ms, now) : null;
   return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, peerSeen: ms, now: now, presence: pr };
+}
+// Translate messages (English / Hindi / Indonesian) with Google Translate built into Apps Script. Results are cached 6 hours.
+var TR_LANGS = { en: 1, hi: 1, id: 1 };
+function chatTranslate_(req) {
+  var to = String(req.to || '').toLowerCase();
+  if (!TR_LANGS[to]) fail_('Choose English, Hindi or Indonesian.');
+  var texts = Array.isArray(req.texts) ? req.texts.slice(0, 30) : [];
+  var cache = CacheService.getScriptCache(), out = [];
+  texts.forEach(function (t) {
+    t = String(t == null ? '' : t).slice(0, CHAT_MAX_LEN);
+    if (!t.trim()) { out.push(''); return; }
+    var key = 'tr' + to + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, t)).replace(/=+$/, '');
+    var hit = cache.get(key);
+    if (hit !== null) { out.push(hit); return; }
+    try { var r = LanguageApp.translate(t, '', to); cache.put(key, r, 21600); out.push(r); } catch (e) { out.push(null); }
+  });
+  return { ok: true, translations: out };
 }
 function chatSend_(req) {
   var peer = isChatGroupId_(req.to) ? chatGroupOk_(String(req.to).trim()) : chatPeerOk_(req.to);

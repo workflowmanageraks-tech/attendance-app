@@ -3483,7 +3483,7 @@ boot();
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
    ===================================================================== */
-const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{} });
+const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
 S.chat = chatFresh();
 let chatTimer = null;
 function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); document.body.classList.remove('chat-conv'); chatBadge(); }
@@ -3588,8 +3588,9 @@ function chatRenderPane(){
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
       <div class="ch-av" id="chHAv" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
       <div class="ch-info"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
-      <div class="ch-calls"><button class="ch-cbtn" onclick="ludoDial()" aria-label="Play Ludo">🎲</button>${u.isGroup ? `<button class="ch-cbtn" onclick="groupChatForm('${esc(u.id)}')" aria-label="Group info">ℹ️</button>` : `<button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button>`}</div>
+      <div class="ch-calls"><button class="ch-cbtn" id="chLangBtn" onclick="chatLangMenu()" aria-label="Translate chat">🌐</button><button class="ch-cbtn" onclick="ludoDial()" aria-label="Play Ludo">🎲</button>${u.isGroup ? `<button class="ch-cbtn" onclick="groupChatForm('${esc(u.id)}')" aria-label="Group info">ℹ️</button>` : `<button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button>`}</div>
     </div>
+    <div class="ch-sel" id="chSel" style="display:none"></div>
     <div class="ch-msgs" id="chMsgs"></div>
     <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
       <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
@@ -3598,7 +3599,7 @@ function chatRenderPane(){
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; };
   ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); };
   ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches){ e.preventDefault(); chatSend(); } };
-  grow(); chatHeader(); S.chat.sig = ''; chatRenderMsgs(true);
+  grow(); chatHeader(); chatLangBtn(); chatSelBar(); chatBindMsgs(); S.chat.sig = ''; chatRenderMsgs(true);
 }
 function chatHeader(){
   const u = chatPeer(S.chat.with); if (!u) return;
@@ -3610,10 +3611,10 @@ function chatHeader(){
 function chatRenderMsgs(toBottom){
   const box = $('#chMsgs'); if (!box) return;
   const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0;
-  const sig = arr.map(m => m.id + (m.state || '') + (m.mine && m.t <= pr ? 'r' : '')).join(',') + '|' + S.chat.histLoaded[id];
+  const sig = arr.map(m => m.id + (m.state || '') + (m.mine && m.t <= pr ? 'r' : '')).join(',') + '|' + S.chat.histLoaded[id] + '|' + S.chat.lang + '|' + S.chat.trv;
   if (sig === S.chat.sig && !toBottom) return;
   S.chat.sig = sig;
-  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90, keepTop = box.scrollTop;
   if (!arr.length){
     box.innerHTML = `<div class="ch-load">${S.chat.histLoaded[id] ? 'No messages yet — say hi 👋' : 'Loading messages…'}</div>`;
     return;
@@ -3628,10 +3629,13 @@ function chatRenderMsgs(toBottom){
       else if (m.state === 'failed') meta = 'Not sent · tap to retry';
       else meta += ` <span class="tick ${m.t <= pr ? 'read' : ''}">${m.t <= pr ? '✓✓' : '✓'}</span>`;
     }
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}<div class="tx">${esc(m.text)}</div><div class="mt">${meta}</div></div>`;
+    const v = chatView(m), sl = S.chat.sel.has(m.id);
+    const tg = v.busy ? '<div class="tg">🌐 Translating…</div>' : v.fail ? '<div class="tg bad">🌐 Could not translate · tap to retry</div>' : v.lang ? `<div class="tg">🌐 ${esc(CH_LANGS[v.lang].short)} · tap for options</div>` : '';
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}<div class="tx">${esc(v.text)}</div>${tg}<div class="mt">${meta}</div></div>`;
   });
   box.innerHTML = html;
-  if (toBottom || near) box.scrollTop = box.scrollHeight;
+  if (toBottom || near) box.scrollTop = box.scrollHeight; else box.scrollTop = keepTop;
+  chatNeedTr();
 }
 function chatMerge(id, list){
   const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
@@ -3695,7 +3699,7 @@ async function chatFetchConv(first){
 }
 function chatOpen(id){
   const c = S.chat; if (!chatPeer(id)) return;
-  c.with = id; const u = chatPeer(id); if (u){ u.unread = 0; chatSumUnread(); }
+  c.sel.clear(); c.with = id; const u = chatPeer(id); if (u){ u.unread = 0; chatSumUnread(); }
   document.body.classList.add('chat-conv');
   chatRenderList(); chatRenderPane(); chatFetchConv(true);
   if (!window.matchMedia('(max-width:860px)').matches){ const t = $('#chInput'); if (t) t.focus(); }
@@ -3737,8 +3741,142 @@ function groupChatForm(id){
     } catch(e){ btn.disabled = false; chatErr(e); toast(e.message, true); }
   };
 }
+
+/* ---------- chat translation (English / Hindi / Indonesian), select & copy ---------- */
+const CH_LANGS = { en:{ name:'English', short:'EN' }, hi:{ name:'हिन्दी (Hindi)', short:'HI' }, id:{ name:'Bahasa Indonesia', short:'ID' } };
+const chatMsg = id => (S.chat.msgs[S.chat.with] || []).find(m => m.id === id);
+function chatLangOf(m){
+  const o = S.chat.ov[m.id];
+  const l = o !== undefined ? o : (m.mine ? '' : S.chat.lang);
+  return l === 'orig' ? '' : (l || '');
+}
+function chatView(m){
+  const l = chatLangOf(m); if (!l || m.state) return { text:m.text };
+  const k = l + '|' + m.id;
+  if (S.chat.tr[k] != null) return { text:S.chat.tr[k], lang:l };
+  if (S.chat.trFail[k]) return { text:m.text, fail:true, lang:l };
+  return { text:m.text, busy:true, lang:l };
+}
+function chatNeedTr(){
+  const c = S.chat, id = c.with; if (!id) return;
+  const arr = (c.msgs[id] || []).slice(-60), by = {};
+  arr.forEach(m => {
+    const l = chatLangOf(m); if (!l || m.state || !String(m.text).trim()) return;
+    const k = l + '|' + m.id; if (c.tr[k] != null || c.trFail[k] || c.trBusy[k]) return;
+    (by[l] = by[l] || []).push({ id:m.id, text:m.text });
+  });
+  Object.keys(by).forEach(l => chatTrRun(by[l], l, id));
+}
+async function chatTrRun(items, lang, convId){
+  const c = S.chat;
+  for (let i = 0; i < items.length; i += 25){
+    const part = items.slice(i, i + 25);
+    part.forEach(x => c.trBusy[lang + '|' + x.id] = 1);
+    try{
+      const r = await chatApi('chatTranslate', { to:lang, texts:part.map(x => x.text) });
+      part.forEach((x, j) => { const t = r.translations && r.translations[j]; if (typeof t === 'string') c.tr[lang + '|' + x.id] = t; else c.trFail[lang + '|' + x.id] = 1; });
+    }catch(e){ chatErr(e); part.forEach(x => c.trFail[lang + '|' + x.id] = 1); }
+    part.forEach(x => delete c.trBusy[lang + '|' + x.id]);
+    c.trv++;
+    if (S.view === 'chat' && c.with === convId) chatRenderMsgs();
+  }
+}
+function chatLangBtn(){
+  const b = $('#chLangBtn'); if (!b) return;
+  b.innerHTML = S.chat.lang ? `🌐<span class=\"ch-lg\">${CH_LANGS[S.chat.lang].short}</span>` : '🌐';
+}
+function chatLangMenu(){
+  const cur = S.chat.lang;
+  const w = openModal(`<h3>🌐 Translate chat</h3><p class=\"sub\">Messages you receive are shown in the language you pick. Tap any message to translate just that one.</p>
+    <div class=\"ch-opts\">
+      <button class=\"btn ${!cur ? '' : 'ghost'}\" data-l=\"\">${!cur ? '✓ ' : ''}Off — show original</button>
+      ${Object.keys(CH_LANGS).map(k => `<button class=\"btn ${cur === k ? '' : 'ghost'}\" data-l=\"${k}\">${cur === k ? '✓ ' : ''}${esc(CH_LANGS[k].name)}</button>`).join('')}
+    </div><div class=\"foot\"><button class=\"btn ghost\" data-x>Close</button></div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelectorAll('[data-l]').forEach(b => b.onclick = () => {
+    S.chat.lang = b.dataset.l; S.chat.ov = {}; S.chat.trFail = {};
+    try{ localStorage.setItem('ks_chat_lang_v1', S.chat.lang); }catch(e){}
+    w.remove(); S.chat.trv++; chatLangBtn(); chatRenderMsgs();
+    toast(S.chat.lang ? 'Translating to ' + CH_LANGS[S.chat.lang].name : 'Translation off');
+  });
+}
+function chatMsgMenu(id){
+  const m = chatMsg(id); if (!m) return;
+  const v = chatView(m), cur = chatLangOf(m);
+  const w = openModal(`<h3>Message</h3><p class=\"sub\" style=\"white-space:pre-wrap;max-height:120px;overflow:auto\">${esc(v.text)}</p>
+    <div class=\"ch-opts\">
+      ${Object.keys(CH_LANGS).map(k => `<button class=\"btn ${cur === k ? '' : 'ghost'}\" data-l=\"${k}\">🌐 ${cur === k ? '✓ ' : ''}${esc(CH_LANGS[k].name)}</button>`).join('')}
+      <button class=\"btn ghost\" data-l=\"orig\">↩ Show original</button>
+      <button class=\"btn ghost\" data-copy>📋 Copy</button>
+      <button class=\"btn ghost\" data-pick>☑ Select</button>
+    </div><div class=\"foot\"><button class=\"btn ghost\" data-x>Close</button></div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-copy]').onclick = () => { w.remove(); chatCopyText(v.text); };
+  w.querySelector('[data-pick]').onclick = () => { w.remove(); chatTogglePick(id); };
+  w.querySelectorAll('[data-l]').forEach(b => b.onclick = () => {
+    const l = b.dataset.l; S.chat.ov[id] = l; delete S.chat.trFail[l + '|' + id];
+    w.remove(); S.chat.trv++; chatRenderMsgs();
+  });
+}
+async function chatCopyText(t){
+  try{ await navigator.clipboard.writeText(t); }
+  catch(e){ const x = document.createElement('textarea'); x.value = t; x.style.cssText = 'position:fixed;opacity:0;left:-999px'; document.body.appendChild(x); x.select(); try{ document.execCommand('copy'); }catch(_){} x.remove(); }
+  toast('Copied');
+}
+function chatTogglePick(id){
+  const s = S.chat.sel; if (s.has(id)) s.delete(id); else s.add(id);
+  S.chat.trv++; chatSelBar(); chatRenderMsgs();
+}
+function chatSelBar(){
+  const b = $('#chSel'); if (!b) return;
+  const n = S.chat.sel.size; b.style.display = n ? 'flex' : 'none';
+  if (n) b.innerHTML = `<button class=\"ch-sbtn\" onclick=\"chatSelClear()\" aria-label=\"Cancel\">✕</button><b>${n} selected</b><span style=\"flex:1\"></span><button class=\"ch-sbtn\" onclick=\"chatSelAll()\">☑ All</button><button class=\"ch-sbtn\" onclick=\"chatSelTr()\">🌐</button><button class=\"ch-sbtn\" onclick=\"chatSelCopy()\">📋 Copy</button>`;
+}
+function chatSelClear(){ S.chat.sel.clear(); S.chat.trv++; chatSelBar(); chatRenderMsgs(); }
+function chatSelAll(){ (S.chat.msgs[S.chat.with] || []).forEach(m => { if (!m.state) S.chat.sel.add(m.id); }); S.chat.trv++; chatSelBar(); chatRenderMsgs(); }
+function chatSelCopy(){
+  const u = chatPeer(S.chat.with), arr = (S.chat.msgs[S.chat.with] || []).filter(m => S.chat.sel.has(m.id));
+  if (!arr.length) return;
+  const t = arr.length === 1 ? chatView(arr[0]).text : arr.map(m => (m.mine ? 'Me' : (m.from || (u && (u.name || u.username)) || '')) + ': ' + chatView(m).text).join('\n');
+  chatCopyText(t); chatSelClear();
+}
+function chatSelTr(){
+  if (!S.chat.sel.size) return;
+  const w = openModal(`<h3>🌐 Translate ${S.chat.sel.size} message${S.chat.sel.size > 1 ? 's' : ''}</h3>
+    <div class=\"ch-opts\">${Object.keys(CH_LANGS).map(k => `<button class=\"btn ghost\" data-l=\"${k}\">${esc(CH_LANGS[k].name)}</button>`).join('')}<button class=\"btn ghost\" data-l=\"orig\">↩ Show original</button></div>
+    <div class=\"foot\"><button class=\"btn ghost\" data-x>Close</button></div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelectorAll('[data-l]').forEach(b => b.onclick = () => {
+    const l = b.dataset.l; S.chat.sel.forEach(id => { S.chat.ov[id] = l; delete S.chat.trFail[l + '|' + id]; });
+    w.remove(); S.chat.sel.clear(); S.chat.trv++; chatSelBar(); chatRenderMsgs();
+  });
+}
+/* tap a message = options; long-press = select (then tap more to add / remove) */
+function chatBindMsgs(){
+  const box = $('#chMsgs'); if (!box) return;
+  let tm = null, long = false, x0 = 0, y0 = 0;
+  const bub = e => e.target.closest && e.target.closest('.ch-b[data-mid]');
+  const stop = () => { clearTimeout(tm); tm = null; };
+  box.addEventListener('pointerdown', e => {
+    const b = bub(e); if (!b || b.classList.contains('failed')) return;
+    long = false; x0 = e.clientX; y0 = e.clientY; stop();
+    tm = setTimeout(() => { long = true; tm = null; if (navigator.vibrate) try{ navigator.vibrate(15); }catch(_){}; chatTogglePick(b.dataset.mid); }, 450);
+  });
+  box.addEventListener('pointermove', e => { if (tm && (Math.abs(e.clientX - x0) > 8 || Math.abs(e.clientY - y0) > 8)) stop(); });
+  ['pointerup', 'pointercancel', 'pointerleave', 'scroll'].forEach(ev => box.addEventListener(ev, stop, true));
+  box.addEventListener('contextmenu', e => { if (bub(e)) e.preventDefault(); });
+  box.addEventListener('click', e => {
+    const b = bub(e); if (!b || b.classList.contains('failed')) return;
+    if (long){ long = false; return; }
+    const id = b.dataset.mid, m = chatMsg(id); if (!m) return;
+    if (S.chat.sel.size) return chatTogglePick(id);
+    const v = chatView(m);
+    if (v.fail){ delete S.chat.trFail[v.lang + '|' + id]; S.chat.trv++; chatRenderMsgs(); return; }
+    chatMsgMenu(id);
+  });
+}
 function chatBack(){
-  S.chat.with = null; document.body.classList.remove('chat-conv');
+  S.chat.sel.clear(); S.chat.with = null; document.body.classList.remove('chat-conv');
   chatRenderList(); chatRenderPane(); chatLoadUsers();
 }
 async function chatSend(){
