@@ -755,3 +755,7 @@ html[data-mode="dark"] .rk-cat{background:var(--soft2);color:var(--brand-ink)}
 .rk-calc-row.main b{color:var(--brand-ink);font-size:calc(16px*var(--fs))}
 .rk-calc-sep{padding:8px 0;font-size:calc(13px*var(--fs));color:var(--muted)}
 .rk-calc-h{font-weight:800;font-size:calc(12px*var(--fs));text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding:6px 0 0}
+
+.rk-calc-blk{border-bottom:1px solid var(--line);padding-bottom:4px}
+.rk-calc-blk:last-child{border-bottom:0}
+.rk-calc-blk .rk-calc-row:last-child{border-bottom:0}
