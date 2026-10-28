@@ -647,6 +647,40 @@ function makeApp(store, env) {
     return { code: 200, u, body: r.body };
   }
 
+  // ---------- Chat translate (English / Hindi / Indonesian) ----------
+  // Apps Script's LanguageApp does not exist on this Node server, so translate by calling Google Translate directly.
+  // Runs outside the sheet queue (like call polling), so chat never waits for it. Results are cached 6 hours.
+  const TR_OK = { en: 1, hi: 1, id: 1 }, trCache = new Map();
+  async function trOne(text, to) {
+    const key = to + '|' + crypto.createHash('md5').update(text).digest('base64');
+    const hit = trCache.get(key); if (hit && hit.t > Date.now()) return hit.v;
+    const r = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=auto&tl=' + to + '&q=' + encodeURIComponent(text),
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error('translate HTTP ' + r.status);
+    const j = await r.json();
+    const v = (Array.isArray(j[0]) ? j[0] : []).map(x => (x && x[0]) || '').join('');
+    if (!v) throw new Error('empty translation');
+    if (trCache.size > 3000) trCache.clear();
+    trCache.set(key, { v, t: Date.now() + 6 * 3600 * 1000 });
+    return v;
+  }
+  async function trRoute(req) {
+    if (!globalThis.checkToken_(req.token)) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    const to = String(req.to || '').toLowerCase();
+    if (!TR_OK[to]) globalThis.fail_('Choose English, Hindi or Indonesian.');
+    const texts = (Array.isArray(req.texts) ? req.texts : []).slice(0, 30).map(t => String(t == null ? '' : t).slice(0, 1800));
+    const out = await Promise.all(texts.map(async t => {
+      if (!t.trim()) return '';
+      try { return await trOne(t, to); } catch (e) { console.warn('Translate failed:', e.message); return null; }
+    }));
+    return { ok: true, translations: out };
+  }
+  const fastTr = body => {
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || r.action !== 'chatTranslate') return null;
+    return Promise.resolve().then(() => trRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
+  };
+
   let chain = Promise.resolve();
   function withWb(fn) {                                                // run fn in the request queue with fresh sheet data, save its changes
     const job = async () => {
@@ -685,7 +719,7 @@ function makeApp(store, env) {
     return Promise.resolve().then(() => LUDO_ACTIONS.has(r.action) ? ludoRoute(r) : callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
   };
   const errOut = err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' });
-  return { handle: body => fastCall(body) || (chain = chain.then(() => run(body), () => run(body))),
+  return { handle: body => fastCall(body) || fastTr(body) || (chain = chain.then(() => run(body), () => run(body))),
            updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
 }
