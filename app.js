@@ -2261,63 +2261,60 @@ function rackVals(n){
   return o;
 }
 function rackFilled(n){ const v = rackVals(n); return Object.keys(v).some(r => Object.keys(v[r] || {}).some(f => String(v[r][f] || '').trim() !== '')); }
-function rackHay(n, v, fields){
-  return (n + ' ' + Object.keys(v).map(r => r + ' ' + fields.map(f => f + ' ' + ((v[r] || {})[f] || '')).join(' ')).join(' ')).toLowerCase();
+function rackHay(n, v){          // only what you typed (+ rack number and row names) — so a search never matches every rack
+  return (n + ' ' + Object.keys(v).map(r => { const o = v[r] || {}, vals = Object.keys(o).map(f => o[f]).filter(x => String(x || '').trim() !== ''); return vals.length ? r + ' ' + n + r + ' ' + vals.join(' ') : ''; }).join(' ')).toLowerCase();
 }
-function rackCardHtml(n, fields, ro){
-  const v = rackVals(n), rows = rackRowsOf(n);
-  const extra = Object.keys(v).filter(r => !rows.includes(r) && Object.keys(v[r] || {}).length);   // rows removed from the list but still holding data
-  const secs = [...rows, ...extra].map(r => `<div class="rk-row" data-row="${esc(r)}"><div class="rk-row-h"><span class="rk-loc" style="margin:0">${n}${esc(String(r).toUpperCase())}</span><span class="muted" style="font-size:calc(12px*var(--fs))">Row ${esc(String(r).toUpperCase())}</span></div>
-      <div class="rk-fields">${fields.map((f, i) => `<label class="rk-fld"><span>${esc(f)}</span><input class="input" data-f="${i}" maxlength="200" value="${esc(((v[r] || {})[f]) || '')}" ${ro ? 'disabled' : ''} autocomplete="off"></label>`).join('')}</div></div>`).join('');
-  return `<div class="rk-card ${rackFilled(n) ? 'has' : ''}" data-rack="${n}" data-hay="${esc(rackHay(n, v, fields))}">
-    <div class="rk-card-h"><span class="rk-loc" style="margin:0;font-size:calc(14px*var(--fs))">Rack ${n}</span>${ro ? '' : `<button class="btn sm" type="button" data-save="${n}" disabled>Save</button>`}</div>
-    ${secs}
-  </div>`;
+function rackSummaryHtml(n, fields){
+  const v = rackVals(n), rows = [...rackRowsOf(n), ...Object.keys(v).filter(r => !rackRowsOf(n).includes(r))];
+  const parts = rows.map(r => { const o = v[r] || {}, bits = fields.filter(f => String(o[f] || '').trim() !== '').map(f => `<span class="rk-bit"><i>${esc(f)}</i> ${esc(o[f])}</span>`).join('');
+    return bits ? `<div class="rk-sumrow"><b>${esc(n)}${esc(String(r).toUpperCase())}</b>${bits}</div>` : ''; }).join('');
+  return parts || '<div class="rk-empty">Nothing filled yet</div>';
 }
 function vRack(){
-  const R = rackState(), cfg = rackCfg(), ro = !can('rack');
+  const R = rackState(), cfg = rackCfg(), ro = !can('rack'), q = (R.q || '').trim().toLowerCase();
   let filled = 0; for (let n = 1; n <= RACK_MAX; n++) if (rackFilled(n)) filled++;
   const stats = `<div class="rk-stats"><div><b>${RACK_MAX}</b><span>Racks</span></div><div><b>${filled}</b><span>Racks filled</span></div><div><b>${cfg.fields.length}</b><span>Fields per row</span></div></div>`;
   const bar = `<div class="card" style="margin-bottom:16px"><div class="actions">
-      <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Find a rack — number or any value (e.g. 12, INS-09)" value="${esc(R.q)}" oninput="rackSearch(this.value)">
-      <select class="select" style="width:auto" onchange="rackState().show=this.value;rackFilter()" id="rkshow" aria-label="Which racks to show"><option value="all" ${R.show === 'all' ? 'selected' : ''}>All 1–${RACK_MAX}</option><option value="used" ${R.show === 'used' ? 'selected' : ''}>Only filled racks</option></select>
-      <button class="btn ghost" onclick="rackFieldsEdit()">✏️ Customize fields</button>
-      <button class="btn ghost" onclick="rackRowsEdit()">☰ Customize rows</button></div></div>`;
-  const cards = Array.from({ length:RACK_MAX }, (_, i) => rackCardHtml(i + 1, cfg.fields, ro)).join('');
-  setTimeout(rackBind, 0);
-  return stats + bar + `<div class="rk-grid" id="rkGrid">${cards}</div><div id="rkNone" class="empty-state hidden">No rack matches.</div>
-    <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Every rack has rows A, B, C, D — each row has its own Carton, Inner, Box, Scheme, INS No. boxes. Type, then press <b>Save</b> on that rack. Use <b>Customize fields</b> / <b>Customize rows</b> to change them. Saved in the “Rack Config” tab of your Google Sheet.</p>`;
+      <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Search anything you filled — item, INS no., scheme, 12b …" value="${esc(R.q)}" oninput="rackSearch(this.value)">
+      ${ro ? '' : `<button class="btn ghost" onclick="rackFieldsEdit()">✏️ Customize fields</button><button class="btn ghost" onclick="rackRowsEdit()">☰ Customize rows</button>`}</div></div>`;
+  let body;
+  if (q){
+    const hits = []; for (let n = 1; n <= RACK_MAX; n++) if (rackHay(n, rackVals(n)).includes(q)) hits.push(n);
+    hits.sort((a, b) => (String(b) === q) - (String(a) === q) || a - b);
+    body = `<div class="card"><h3>Search results <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${hits.length} rack${hits.length === 1 ? '' : 's'}</span></h3>
+      ${hits.length ? hits.map(n => `<div class="rk-hit" onclick="rackOpen(${n})" role="button" tabindex="0"><div class="rk-hit-h"><span class="rk-loc" style="margin:0">Rack ${n}</span><span class="muted">Open ›</span></div>${rackSummaryHtml(n, cfg.fields)}</div>`).join('') : '<div class="empty-state">Nothing found in any rack.</div>'}</div>`;
+  } else {
+    const cells = []; for (let n = 1; n <= RACK_MAX; n++) cells.push(`<button type="button" class="rk-day ${rackFilled(n) ? 'has' : ''}" onclick="rackOpen(${n})" aria-label="Rack ${n}">${n}</button>`);
+    body = `<div class="card"><h3 style="margin:0 0 10px">Racks <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· tap a number to open it and fill rows A, B, C, D</span></h3>
+      <div class="rk-cal">${cells.join('')}</div></div>`;
+  }
+  return stats + bar + body + `<p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Coloured numbers already have something saved. Saved in the “Rack Config” tab of your Google Sheet.</p>`;
 }
-function rackBind(){
-  const g = document.getElementById('rkGrid'); if (!g) return;
-  g.oninput = e => { const c = e.target.closest('.rk-card'); if (!c) return; const b = c.querySelector('[data-save]'); if (b) b.disabled = false; };
-  g.onkeydown = e => { if (e.key === 'Enter' && e.target.matches('input')){ e.preventDefault(); const b = e.target.closest('.rk-card').querySelector('[data-save]'); if (b && !b.disabled) b.click(); } };
-  g.onclick = e => { const b = e.target.closest('[data-save]'); if (b) rackSave(b.dataset.save, b); };
-  rackFilter();
+function rackSearch(v){
+  rackState().q = v; clearTimeout(window._rkt);
+  window._rkt = setTimeout(() => { render(); const i = $('#rkq'); if (i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
 }
-function rackFilter(){
-  const R = rackState(), q = (R.q || '').trim().toLowerCase(); let n = 0;
-  document.querySelectorAll('#rkGrid .rk-card').forEach(c => {
-    const ok = (!q || c.dataset.hay.includes(q)) && (R.show !== 'used' || c.classList.contains('has'));
-    c.classList.toggle('hidden', !ok); if (ok) n++;
-  });
-  const none = document.getElementById('rkNone'); if (none) none.classList.toggle('hidden', n > 0);
-}
-function rackSearch(v){ rackState().q = v; clearTimeout(window._rkt); window._rkt = setTimeout(rackFilter, 150); }
-async function rackSave(n, btn){ if (!can('rack')) return deny();
-  const card = btn.closest('.rk-card'), fields = rackCfg().fields, values = {};
-  card.querySelectorAll('.rk-row').forEach(sec => {
-    const r = sec.dataset.row; values[r] = {};
-    sec.querySelectorAll('[data-f]').forEach(i => { values[r][fields[+i.dataset.f]] = i.value.trim(); });
-  });
-  btn.disabled = true;
-  try{
-    const r = await api('saveRackData', { rack:String(n), values });
-    S.d.rackCfg = S.d.rackCfg || {}; S.d.rackCfg.data = S.d.rackCfg.data || {};
-    if (r.values && Object.keys(r.values).length) S.d.rackCfg.data[String(n)] = r.values; else delete S.d.rackCfg.data[String(n)];
-    card.classList.toggle('has', rackFilled(n)); card.dataset.hay = rackHay(n, rackVals(n), fields);
-    toast('Saved rack ' + n);
-  }catch(e){ btn.disabled = false; handleErr(e); }
+/* ---- one rack: popup with rows A, B, C, D (each with all fields) and a Save button ---- */
+function rackOpen(n){
+  n = +n; const fields = rackCfg().fields, ro = !can('rack'), v = rackVals(n), rows = rackRowsOf(n);
+  const extra = Object.keys(v).filter(r => !rows.includes(r) && Object.keys(v[r] || {}).length);
+  const secs = [...rows, ...extra].map(r => `<div class="rk-row" data-row="${esc(r)}"><div class="rk-row-h"><span class="rk-loc" style="margin:0">${n}${esc(String(r).toUpperCase())}</span><span class="muted" style="font-size:calc(12px*var(--fs))">Row ${esc(String(r).toUpperCase())}</span></div>
+      <div class="rk-fields">${fields.map((f, i) => `<label class="rk-fld"><span>${esc(f)}</span><input class="input" data-f="${i}" maxlength="200" value="${esc(((v[r] || {})[f]) || '')}" ${ro ? 'disabled' : ''} autocomplete="off"></label>`).join('')}</div></div>`).join('');
+  const w = openModal(`<h3>Rack ${n}</h3><p class="sub">What is kept in each row of this rack.</p>${secs}
+    <div class="foot"><button type="button" class="btn ghost" data-x>${ro ? 'Close' : 'Cancel'}</button>${ro ? '' : '<button class="btn" type="button" data-save>Save</button>'}</div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  const sv = w.querySelector('[data-save]'); if (!sv) return;
+  sv.onclick = async () => {
+    const values = {};
+    w.querySelectorAll('.rk-row').forEach(sec => { const r = sec.dataset.row; values[r] = {}; sec.querySelectorAll('[data-f]').forEach(i => { values[r][fields[+i.dataset.f]] = i.value.trim(); }); });
+    sv.disabled = true;
+    try{
+      const r = await api('saveRackData', { rack:String(n), values });
+      S.d.rackCfg = S.d.rackCfg || {}; S.d.rackCfg.data = S.d.rackCfg.data || {};
+      if (r.values && Object.keys(r.values).length) S.d.rackCfg.data[String(n)] = r.values; else delete S.d.rackCfg.data[String(n)];
+      w.remove(); render(); toast('Saved rack ' + n);
+    }catch(e){ sv.disabled = false; handleErr(e); }
+  };
 }
 /* ---- customise the rows (a, b, c, d …) ---- */
 function rackRowsEdit(){ if (!can('rack')) return deny();
