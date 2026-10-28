@@ -2318,30 +2318,28 @@ function rackOpen(n){
   };
 }
 /* ---- packing calculator ----
-   Units go from smallest to largest (Piece → Box → Inner → Carton). Each unit (except the first) says how many of the unit before it fit in one.
-   Fill only what you know: every answer that can be worked out from the numbers you gave is shown. Units can be renamed, added, removed and re-ordered. */
-const RACK_CALC_K = 'ks_rack_calc_v2';
+   Units are listed from the LARGEST to the SMALLEST:  1 Carton = 9 Inner · 1 Inner = 12 Small Box · 1 Small Box = 7 Piece.
+   Fill only the links you know. Enter a quantity in any unit and every answer that can be worked out is shown:
+   how many of each bigger unit are needed, the space left in the last one, and the total in each smaller unit.
+   Units can be renamed, added, removed and re-ordered. */
+const RACK_CALC_K = 'ks_rack_calc_v3';
 function rackCalcLoad(){
-  let st = { units:[{ n:'Piece', p:'' }, { n:'Box', p:'' }, { n:'Inner', p:'' }, { n:'Carton', p:'' }], q:'', u:2 };
+  let st = { units:[{ n:'Carton', p:'' }, { n:'Inner', p:'' }, { n:'Small Box', p:'' }, { n:'Piece', p:'' }], q:'', u:3 };
   try{
     const s = JSON.parse(localStorage.getItem(RACK_CALC_K) || 'null');
     if (s && Array.isArray(s.units) && s.units.length >= 2) st = { units:s.units.map(x => ({ n:String(x.n || ''), p:String(x.p === undefined ? '' : x.p) })), q:String(s.q || ''), u:+s.u || 0 };
-    else {
-      const o = JSON.parse(localStorage.getItem('ks_rack_calc_v1') || 'null');       // numbers saved by the first version
-      if (o) { st.units[1].p = String(o.p || ''); st.units[2].p = String(o.b || ''); st.units[3].p = String(o.i || ''); st.q = String(o.q || ''); st.u = { piece:0, box:1, inner:2, carton:3 }[o.u] ?? 2; }
-    }
   }catch(e){}
-  if (!(st.u >= 0 && st.u < st.units.length)) st.u = 0;
+  if (!(st.u >= 0 && st.u < st.units.length)) st.u = st.units.length - 1;
   return st;
 }
 function rackCalc(){
-  const st = rackCalcLoad(); let editing = false;
+  const st = rackCalcLoad();
   const w = openModal(`<div id="rcBody"></div>`);
   const $$ = s => w.querySelector(s);
   const nf = n => Number(n).toLocaleString('en-IN');
-  const nm = (i) => (st.units[i].n || '').trim() || ('Unit ' + (i + 1));
-  const per = i => { const v = Math.floor(Number(st.units[i].p)); return v >= 1 ? v : 0; };
-  const prod = (a, b) => { let r = 1; for (let i = a + 1; i <= b; i++){ const p = per(i); if (!p) return 0; r *= p; } return r; };   // how many of unit a make one unit b (0 = not known)
+  const nm = i => (st.units[i].n || '').trim() || ('Unit ' + (i + 1));
+  const per = i => { const v = Math.floor(Number(st.units[i].p)); return v >= 1 ? v : 0; };         // how many of unit i in 1 of unit i-1
+  const prod = (a, b) => { let r = 1; for (let i = a + 1; i <= b; i++){ const p = per(i); if (!p) return 0; r *= p; } return r; };   // how many of unit b in 1 of unit a (a is larger); 0 = not known
   const save = () => { try{ localStorage.setItem(RACK_CALC_K, JSON.stringify(st)); }catch(e){} };
   const row = (k, v, cls) => `<div class="rk-calc-row ${cls || ''}"><span>${k}</span><b>${v}</b></div>`;
 
@@ -2349,30 +2347,34 @@ function rackCalc(){
     save(); const out = $$('#rcOut'); if (!out) return;
     const q = Math.floor(Number(st.q)), k = st.u, U = st.units.length;
     if (!(q >= 1)){ out.innerHTML = '<div class="empty-state">Enter a quantity to see the answer.</div>'; return; }
-    let html = '', hidden = [];
-    for (let j = k - 1; j >= 0; j--){               // smaller units: exact conversion
+    let blocks = '', totals = '', sum = [], hidden = [];
+    for (let j = 0; j < k; j++){                       // bigger units: how many are needed + space left in the last one
       const pr = prod(j, k); if (!pr){ hidden.push(nm(j)); continue; }
-      html += row(`Total ${esc(nm(j))}`, nf(q * pr));
-    }
-    for (let j = k + 1; j < U; j++){                // bigger units: how many are needed + space left
-      const pr = prod(k, j); if (!pr){ hidden.push(nm(j)); continue; }
       const need = Math.ceil(q / pr), spare = need * pr - q, full = Math.floor(q / pr), loose = q - full * pr;
-      let big = ''; for (let m = j - 1; m > k; m--){ const pm = prod(k, m); if (pm && spare >= pm){ big = ` (= ${nf(Math.floor(spare / pm))} ${esc(nm(m))}${spare % pm ? ' + ' + nf(spare % pm) + ' ' + esc(nm(k)) : ''})`; break; } }
-      html += `<div class="rk-calc-blk">${row(`${esc(nm(j))} needed`, nf(need), 'main')}
+      let big = ''; for (let m = j + 1; m < k; m++){ const pm = prod(m, k); if (pm && spare >= pm){ big = ` (= ${nf(Math.floor(spare / pm))} ${esc(nm(m))}${spare % pm ? ' + ' + nf(spare % pm) + ' ' + esc(nm(k)) : ''})`; break; } }
+      sum.push(`<b>${nf(need)} ${esc(nm(j))}</b>`);
+      blocks += `<div class="rk-calc-blk">${row(`${esc(nm(j))} needed`, nf(need), 'main')}
         <div class="rk-calc-sep">${full ? nf(full) + ' full ' + esc(nm(j)) : 'No full ' + esc(nm(j))}${loose ? ' + ' + nf(loose) + ' ' + esc(nm(k)) + ' in the last one' : ''}</div>
-        ${row(`Space left in last ${esc(nm(j))}`, nf(spare) + ' ' + esc(nm(k)) + ' more can fit' + big)}</div>`;
+        ${row(`Space left in last ${esc(nm(j))}`, nf(spare) + ' ' + esc(nm(k)) + ' more can fit' + big, spare ? '' : 'dim')}</div>`;
     }
-    if (!html) html = `<div class="empty-state">Fill the “how many in 1” boxes to see more. Nothing can be worked out from the numbers given so far.</div>`;
-    else if (hidden.length) html += `<div class="rk-calc-sep">Fill the missing “how many in 1” boxes to also see: ${hidden.map(esc).join(', ')}.</div>`;
+    for (let j = k + 1; j < U; j++){                  // smaller units: exact conversion
+      const pr = prod(k, j); if (!pr){ hidden.push(nm(j)); continue; }
+      totals += row(`Total ${esc(nm(j))}`, nf(q * pr));
+    }
+    let html = '';
+    if (sum.length) html += `<div class="rk-calc-sum">${nf(q)} ${esc(nm(k))} fits in ${sum.join(' · ')}</div>`;
+    html += blocks;
+    if (totals) html += `<div class="rk-calc-blk">${totals}</div>`;
+    if (!blocks && !totals) html = '<div class="empty-state">Fill at least the link that connects this unit to another one (for example 1 Inner = 12 Small Box) to see an answer.</div>';
+    else if (hidden.length) html += `<div class="rk-calc-sep">Fill the missing links to also see: ${hidden.map(esc).join(', ')}.</div>`;
     out.innerHTML = `<div class="rk-calc">${html}</div>`;
   };
 
   const drawMain = () => {
-    editing = false;
-    const inputs = st.units.map((u, i) => i === 0 ? '' : `<label class="rk-fld"><span>${esc(nm(i - 1))} in 1 ${esc(nm(i))}</span><input class="input" data-p="${i}" type="number" inputmode="numeric" min="1" step="1" value="${esc(u.p)}" placeholder="optional"></label>`).join('');
-    $$('#rcBody').innerHTML = `<h3>🧮 Packing calculator</h3><p class="sub">Fill only what you know — you do not need every box. You get every answer that can be worked out from it.</p>
+    const chain = st.units.map((u, i) => i === 0 ? '' : `<div class="rk-chain"><span class="rk-chain-l">1 ${esc(nm(i - 1))}</span><span class="rk-chain-eq">=</span><input class="input" data-p="${i}" type="number" inputmode="numeric" min="1" step="1" value="${esc(u.p)}" placeholder="—" aria-label="${esc(nm(i))} in 1 ${esc(nm(i - 1))}"><span class="rk-chain-r">${esc(nm(i))}</span></div>`).join('');
+    $$('#rcBody').innerHTML = `<h3>🧮 Packing calculator</h3><p class="sub">Fill only the links you know — you do not need all of them.</p>
       <div class="sec-title" style="margin-top:4px">How it is packed</div>
-      <div class="rk-fields">${inputs}</div>
+      <div class="rk-chains">${chain}</div>
       <div class="sec-title" style="margin-top:16px">How much do you have?</div>
       <div class="actions" style="flex-wrap:nowrap"><input class="input" id="rcQ" type="number" inputmode="numeric" min="0" step="1" placeholder="Quantity" value="${esc(st.q)}">
         <select class="select" id="rcU" style="width:auto">${st.units.map((u, i) => `<option value="${i}" ${i === st.u ? 'selected' : ''}>${esc(nm(i))}</option>`).join('')}</select></div>
@@ -2390,10 +2392,9 @@ function rackCalc(){
   };
 
   const drawEdit = () => {
-    editing = true;
     const rows = () => st.units.map((u, i) => `<div class="actions" style="margin-bottom:8px;flex-wrap:nowrap"><span class="muted" style="min-width:18px">${i + 1}</span><input class="input" data-n="${i}" maxlength="24" value="${esc(u.n)}" placeholder="Unit name" autocomplete="off">
         <button class="btn ghost sm" type="button" data-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button><button class="btn ghost sm" type="button" data-del="${i}" aria-label="Remove unit">✕</button></div>`).join('');
-    $$('#rcBody').innerHTML = `<h3>Edit units</h3><p class="sub">List the units from smallest to largest (e.g. Piece, Box, Inner, Carton). Rename, add, remove or move them. You enter how many of one fit in the next one on the calculator screen.</p>
+    $$('#rcBody').innerHTML = `<h3>Edit units</h3><p class="sub">List the units from the <b>largest to the smallest</b> (Carton, Inner, Small Box, Piece). Rename, add, remove or move them with ↑. A new unit is added at the bottom (smallest).</p>
       <div id="rcUnits">${rows()}</div>
       <div class="actions" style="margin:10px 0 4px"><button class="btn soft sm" type="button" data-add>＋ Add unit</button><button class="btn ghost sm" type="button" data-reset>↺ Reset names</button></div>
       <div class="foot"><button type="button" class="btn" data-done>Done</button></div>`;
@@ -2401,11 +2402,11 @@ function rackCalc(){
     box.oninput = e => { if (e.target.dataset.n !== undefined) st.units[+e.target.dataset.n].n = e.target.value; save(); };
     box.onclick = e => {
       const d = e.target.closest('[data-del]'), u = e.target.closest('[data-up]');
-      if (d){ if (st.units.length <= 2) return toast('Keep at least two units', true); const i = +d.dataset.del; st.units.splice(i, 1); if (st.u >= st.units.length) st.u = st.units.length - 1; if (st.units[0]) st.units[0].p = ''; redraw(); }
+      if (d){ if (st.units.length <= 2) return toast('Keep at least two units', true); st.units.splice(+d.dataset.del, 1); if (st.u >= st.units.length) st.u = st.units.length - 1; st.units[0].p = ''; redraw(); }
       else if (u && +u.dataset.up > 0){ const i = +u.dataset.up; [st.units[i - 1], st.units[i]] = [st.units[i], st.units[i - 1]]; st.units[0].p = ''; redraw(); }
     };
     $$('[data-add]').onclick = () => { if (st.units.length >= 8) return toast('Up to 8 units', true); st.units.push({ n:'', p:'' }); redraw(); const ins = box.querySelectorAll('input'); ins[ins.length - 1].focus(); };
-    $$('[data-reset]').onclick = () => { ['Piece', 'Box', 'Inner', 'Carton'].forEach((n, i) => { if (st.units[i]) st.units[i].n = n; }); redraw(); };
+    $$('[data-reset]').onclick = () => { ['Carton', 'Inner', 'Small Box', 'Piece'].forEach((n, i) => { if (st.units[i]) st.units[i].n = n; }); redraw(); };
     $$('[data-done]').onclick = () => { st.units.forEach((u, i) => { if (!u.n.trim()) u.n = 'Unit ' + (i + 1); }); drawMain(); };
   };
   drawMain();
