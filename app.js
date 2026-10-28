@@ -329,7 +329,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], data:{} };
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{} };
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -431,7 +431,7 @@ function applyRO(v){
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
   if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"]');
   if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"],[onclick*="vcsReopen"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
-  if (!can('rack')) kill('[onclick*="rackFieldsEdit"]');
+  if (!can('rack')) kill('[onclick*="rackFieldsEdit"],[onclick*="rackRowsEdit"]');
   if (!can('work')){
     kill('[onclick*="workAddMore"],[onclick*="workEdit"],[onclick*="workDel"],[onclick*="workSave"],[onclick*="workCancel"]');
     v.querySelectorAll('tr').forEach(tr => { if (tr.querySelector('input.in')) tr.remove(); });
@@ -1149,7 +1149,7 @@ const TITLES = {
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   lic:['LIC','Customer policies — amount, dates and how long each one runs'],
   vcs:['VCS Complaint Manage','Log complaints, assign them to a user and track Open / Pending / Closed'],
-  rack:['Rack Mapping','Racks 1–100 — Carton, Inner, Box, Scheme, INS No. for every rack (customizable)'],
+  rack:['Rack Mapping','Racks 1–100, rows A–D — Carton, Inner, Box, Scheme, INS No. in every row (customizable)'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
@@ -2250,31 +2250,43 @@ async function vcsUpdate(id){ if (!can('vcs')) return deny();
    VIEW: RACK MAPPING  (racks 1–100 — every rack has the same customisable fields: Carton, Inner, Box, Scheme, INS No. …)
    Each field is a box you can type in and save. Fields can be renamed, added and removed with “Customize fields”.
    ===================================================================== */
-const RACK_MAX = 100, RACK_DEF_FIELDS = ['Carton','Inner','Box','Scheme','INS No.'];
+const RACK_MAX = 100, RACK_DEF_ROWS = ['a','b','c','d'], RACK_DEF_FIELDS = ['Carton','Inner','Box','Scheme','INS No.'];
 function rackState(){ return S.rackUi = S.rackUi || { q:'', show:'all' }; }
-function rackCfg(){ const c = S.d.rackCfg || {}; return { fields:(c.fields && c.fields.length) ? c.fields : RACK_DEF_FIELDS, data:c.data || {} }; }
-function rackVals(n){ return rackCfg().data[String(n)] || {}; }
-function rackFilled(n){ const v = rackVals(n); return Object.keys(v).some(k => String(v[k] || '').trim() !== ''); }
+function rackCfg(){ const c = S.d.rackCfg || {}; return { fields:(c.fields && c.fields.length) ? c.fields : RACK_DEF_FIELDS, rows:c.rows || { '*':RACK_DEF_ROWS }, data:c.data || {} }; }
+function rackRowsOf(n){ const c = rackCfg(); return c.rows[String(n)] || c.rows['*'] || RACK_DEF_ROWS; }
+/* saved shape: { rowName: { field: value } } — older saves were flat { field: value }, treated as the first row */
+function rackVals(n){
+  const o = rackCfg().data[String(n)] || {};
+  if (Object.keys(o).some(k => typeof o[k] !== 'object')) return { [rackRowsOf(n)[0]]:o };
+  return o;
+}
+function rackFilled(n){ const v = rackVals(n); return Object.keys(v).some(r => Object.keys(v[r] || {}).some(f => String(v[r][f] || '').trim() !== '')); }
+function rackHay(n, v, fields){
+  return (n + ' ' + Object.keys(v).map(r => r + ' ' + fields.map(f => f + ' ' + ((v[r] || {})[f] || '')).join(' ')).join(' ')).toLowerCase();
+}
 function rackCardHtml(n, fields, ro){
-  const v = rackVals(n);
-  const hay = (n + ' ' + fields.map(f => f + ' ' + (v[f] || '')).join(' ')).toLowerCase();
-  return `<div class="rk-card ${rackFilled(n) ? 'has' : ''}" data-rack="${n}" data-hay="${esc(hay)}">
+  const v = rackVals(n), rows = rackRowsOf(n);
+  const extra = Object.keys(v).filter(r => !rows.includes(r) && Object.keys(v[r] || {}).length);   // rows removed from the list but still holding data
+  const secs = [...rows, ...extra].map(r => `<div class="rk-row" data-row="${esc(r)}"><div class="rk-row-h"><span class="rk-loc" style="margin:0">${n}${esc(String(r).toUpperCase())}</span><span class="muted" style="font-size:calc(12px*var(--fs))">Row ${esc(String(r).toUpperCase())}</span></div>
+      <div class="rk-fields">${fields.map((f, i) => `<label class="rk-fld"><span>${esc(f)}</span><input class="input" data-f="${i}" maxlength="200" value="${esc(((v[r] || {})[f]) || '')}" ${ro ? 'disabled' : ''} autocomplete="off"></label>`).join('')}</div></div>`).join('');
+  return `<div class="rk-card ${rackFilled(n) ? 'has' : ''}" data-rack="${n}" data-hay="${esc(rackHay(n, v, fields))}">
     <div class="rk-card-h"><span class="rk-loc" style="margin:0;font-size:calc(14px*var(--fs))">Rack ${n}</span>${ro ? '' : `<button class="btn sm" type="button" data-save="${n}" disabled>Save</button>`}</div>
-    <div class="rk-fields">${fields.map((f, i) => `<label class="rk-fld"><span>${esc(f)}</span><input class="input" data-f="${i}" maxlength="200" value="${esc(v[f] || '')}" ${ro ? 'disabled' : ''} autocomplete="off"></label>`).join('')}</div>
+    ${secs}
   </div>`;
 }
 function vRack(){
   const R = rackState(), cfg = rackCfg(), ro = !can('rack');
   let filled = 0; for (let n = 1; n <= RACK_MAX; n++) if (rackFilled(n)) filled++;
-  const stats = `<div class="rk-stats"><div><b>${RACK_MAX}</b><span>Racks</span></div><div><b>${filled}</b><span>Racks filled</span></div><div><b>${cfg.fields.length}</b><span>Fields</span></div></div>`;
+  const stats = `<div class="rk-stats"><div><b>${RACK_MAX}</b><span>Racks</span></div><div><b>${filled}</b><span>Racks filled</span></div><div><b>${cfg.fields.length}</b><span>Fields per row</span></div></div>`;
   const bar = `<div class="card" style="margin-bottom:16px"><div class="actions">
       <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Find a rack — number or any value (e.g. 12, INS-09)" value="${esc(R.q)}" oninput="rackSearch(this.value)">
       <select class="select" style="width:auto" onchange="rackState().show=this.value;rackFilter()" id="rkshow" aria-label="Which racks to show"><option value="all" ${R.show === 'all' ? 'selected' : ''}>All 1–${RACK_MAX}</option><option value="used" ${R.show === 'used' ? 'selected' : ''}>Only filled racks</option></select>
-      <button class="btn ghost" onclick="rackFieldsEdit()">✏️ Customize fields</button></div></div>`;
+      <button class="btn ghost" onclick="rackFieldsEdit()">✏️ Customize fields</button>
+      <button class="btn ghost" onclick="rackRowsEdit()">☰ Customize rows</button></div></div>`;
   const cards = Array.from({ length:RACK_MAX }, (_, i) => rackCardHtml(i + 1, cfg.fields, ro)).join('');
   setTimeout(rackBind, 0);
   return stats + bar + `<div class="rk-grid" id="rkGrid">${cards}</div><div id="rkNone" class="empty-state hidden">No rack matches.</div>
-    <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Type in the boxes and press <b>Save</b> on that rack. Use <b>Customize fields</b> to rename or add boxes (Carton, Inner, Box, Scheme, INS No. …). Saved in the “Rack Config” tab of your Google Sheet.</p>`;
+    <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Every rack has rows A, B, C, D — each row has its own Carton, Inner, Box, Scheme, INS No. boxes. Type, then press <b>Save</b> on that rack. Use <b>Customize fields</b> / <b>Customize rows</b> to change them. Saved in the “Rack Config” tab of your Google Sheet.</p>`;
 }
 function rackBind(){
   const g = document.getElementById('rkGrid'); if (!g) return;
@@ -2294,15 +2306,40 @@ function rackFilter(){
 function rackSearch(v){ rackState().q = v; clearTimeout(window._rkt); window._rkt = setTimeout(rackFilter, 150); }
 async function rackSave(n, btn){ if (!can('rack')) return deny();
   const card = btn.closest('.rk-card'), fields = rackCfg().fields, values = {};
-  card.querySelectorAll('[data-f]').forEach(i => { values[fields[+i.dataset.f]] = i.value.trim(); });
+  card.querySelectorAll('.rk-row').forEach(sec => {
+    const r = sec.dataset.row; values[r] = {};
+    sec.querySelectorAll('[data-f]').forEach(i => { values[r][fields[+i.dataset.f]] = i.value.trim(); });
+  });
   btn.disabled = true;
   try{
     const r = await api('saveRackData', { rack:String(n), values });
     S.d.rackCfg = S.d.rackCfg || {}; S.d.rackCfg.data = S.d.rackCfg.data || {};
     if (r.values && Object.keys(r.values).length) S.d.rackCfg.data[String(n)] = r.values; else delete S.d.rackCfg.data[String(n)];
-    card.classList.toggle('has', rackFilled(n)); card.dataset.hay = (n + ' ' + fields.map(f => f + ' ' + (values[f] || '')).join(' ')).toLowerCase();
+    card.classList.toggle('has', rackFilled(n)); card.dataset.hay = rackHay(n, rackVals(n), fields);
     toast('Saved rack ' + n);
   }catch(e){ btn.disabled = false; handleErr(e); }
+}
+/* ---- customise the rows (a, b, c, d …) ---- */
+function rackRowsEdit(){ if (!can('rack')) return deny();
+  let rows = [...rackRowsOf(1)];
+  const w = openModal(`<h3>Customize rows</h3><p class="sub">Rows of every rack (up to 12). Each row gets its own Carton, Inner, Box, Scheme, INS No. boxes. If you rename or remove a row, what you typed in the old row name stays saved but is hidden unless the same row name is added back.</p>
+    <div id="rkRows"></div>
+    <div class="actions" style="margin:10px 0 4px"><button class="btn soft sm" type="button" data-add>＋ Add row</button><button class="btn ghost sm" type="button" data-reset>↺ Reset to a, b, c, d</button></div>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="button" data-save>Save rows</button></div>`);
+  const draw = () => { w.querySelector('#rkRows').innerHTML = rows.map((r, i) => `<div class="actions" style="margin-bottom:8px;flex-wrap:nowrap"><input class="input" data-i="${i}" maxlength="12" value="${esc(r)}" placeholder="row name" autocapitalize="off" autocomplete="off"><button class="btn ghost sm" type="button" data-del="${i}" aria-label="Remove row">✕</button></div>`).join(''); };
+  draw();
+  const box = w.querySelector('#rkRows');
+  box.oninput = e => { if (e.target.dataset.i !== undefined) rows[+e.target.dataset.i] = e.target.value; };
+  box.onclick = e => { const b = e.target.closest('[data-del]'); if (b){ if (rows.length <= 1) return toast('Keep at least one row', true); rows.splice(+b.dataset.del, 1); draw(); } };
+  w.querySelector('[data-add]').onclick = () => { if (rows.length >= 12) return toast('Up to 12 rows only', true); rows.push(''); draw(); const ins = box.querySelectorAll('input'); ins[ins.length - 1].focus(); };
+  w.querySelector('[data-reset]').onclick = () => { rows = [...RACK_DEF_ROWS]; draw(); };
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-save]').onclick = async ev => {
+    const clean = rows.map(r => r.trim()).filter(Boolean); if (!clean.length) return toast('Keep at least one row', true);
+    const b = ev.currentTarget; b.disabled = true;
+    try{ const r = await api('saveRackRows', { rows:clean, all:true }); S.d.rackCfg = r.cfg; w.remove(); render(); toast('Rows saved'); }
+    catch(e){ b.disabled = false; handleErr(e); }
+  };
 }
 /* ---- customise the fields (rename / add / remove) ---- */
 function rackFieldsEdit(){ if (!can('rack')) return deny();

@@ -2245,6 +2245,12 @@ function saveRackCats_(req) {
   return { ok: true, cfg: readRackCfg_() };
 }
 
+function rackNorm_(o, firstRow) {                          // old saves were flat { field: value } -> treat as the first row
+  o = (o && typeof o === 'object') ? o : {};
+  var flat = Object.keys(o).some(function (k) { return typeof o[k] !== 'object'; });
+  if (!flat) return o;
+  var r = {}; r[firstRow] = o; return r;
+}
 function saveRackFields_(req) {
   var inp = req.fields;
   if (!Array.isArray(inp)) fail_('Invalid list.');
@@ -2256,10 +2262,14 @@ function saveRackFields_(req) {
   });
   if (!names.length) fail_('Keep at least one field.');
   if (names.length > 30) fail_('At most 30 fields are allowed.');
-  var cfg = readRackCfg_();
-  Object.keys(cfg.data).forEach(function (rk) {            // keep typed values under renamed fields, drop removed ones
-    var old = cfg.data[rk], nv = {}, any = false;
-    names.forEach(function (n, i) { var val = olds[i] ? old[olds[i]] : undefined; if (val !== undefined && String(val) !== '') { nv[n] = String(val); any = true; } });
+  var cfg = readRackCfg_(), first = (cfg.rows['*'] || RACK_DEF_ROWS)[0];
+  Object.keys(cfg.data).forEach(function (rk) {            // keep typed values under renamed fields, drop removed ones (in every row)
+    var old = rackNorm_(cfg.data[rk], (cfg.rows[rk] || cfg.rows['*'] || RACK_DEF_ROWS)[0]), nv = {}, any = false;
+    Object.keys(old).forEach(function (row) {
+      var src = old[row] || {}, rv = {};
+      names.forEach(function (n, i) { var val = olds[i] ? src[olds[i]] : undefined; if (val !== undefined && String(val) !== '') { rv[n] = String(val); any = true; } });
+      if (Object.keys(rv).length) nv[row] = rv;
+    });
     rackCfgSet_('Data', rk, any ? nv : null);
   });
   rackCfgSet_('Fields', '*', names);
@@ -2268,10 +2278,15 @@ function saveRackFields_(req) {
 function saveRackData_(req) {
   var rk = String(req.rack === undefined || req.rack === null ? '' : req.rack).trim(), n = parseInt(rk, 10);
   if (!/^\d{1,3}$/.test(rk) || !(n >= 1 && n <= RACK_MAX)) fail_('Choose a rack from 1 to ' + RACK_MAX + '.');
-  var fields = readRackCfg_().fields, vals = {}, any = false, inp = req.values || {};
-  fields.forEach(function (f) { var s = String(inp[f] === undefined || inp[f] === null ? '' : inp[f]).trim().slice(0, 200); if (s) { vals[f] = s; any = true; } });
-  rackCfgSet_('Data', String(n), any ? vals : null);
-  return { ok: true, rack: String(n), values: vals };
+  var fields = readRackCfg_().fields, out = {}, any = false, inp = req.values || {};
+  Object.keys(inp).slice(0, 24).forEach(function (row) {
+    if (!RACK_ROW_RE.test(row)) return;
+    var src = inp[row] || {}, rv = {};
+    fields.forEach(function (f) { var s = String(src[f] === undefined || src[f] === null ? '' : src[f]).trim().slice(0, 200); if (s) { rv[f] = s; any = true; } });
+    if (Object.keys(rv).length) out[row] = rv;
+  });
+  rackCfgSet_('Data', String(n), any ? out : null);
+  return { ok: true, rack: String(n), values: out };
 }
 
 // ---------- TIME TABLE ----------

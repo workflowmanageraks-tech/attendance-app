@@ -730,3 +730,6 @@ html[data-mode="dark"] .rk-cat{background:var(--soft2);color:var(--brand-ink)}
 .rk-fld span{font-size:calc(11px*var(--fs));font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
 .rk-fld .input{padding:7px 9px}
 @media (max-width:640px){.rk-grid{grid-template-columns:1fr}}
+
+.rk-row{border-top:1px dashed var(--line2);padding-top:10px;margin-top:10px}
+.rk-row-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
