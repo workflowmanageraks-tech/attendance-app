@@ -163,7 +163,7 @@ var WRITE_ACTIONS = {
   addVcs: 1, updateVcs: 1,
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
-  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1,
+  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
@@ -174,7 +174,7 @@ var NEED = {
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
-  addLic: 'lic', updateLic: 'lic', deleteLic: 'lic',
+  addLic: 'lic', updateLic: 'lic', deleteLic: 'lic', saveLicFields: 'lic',
   addVcs: 'vcs', updateVcs: 'vcs',
   addRack: 'rack', updateRack: 'rack', deleteRack: 'rack', saveRackRows: 'rack', saveRackCats: 'rack', saveRackFields: 'rack', saveRackData: 'rack', saveRackPresets: 'rack',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
@@ -292,6 +292,7 @@ function route_(req) {
       case 'addLink':           out = addLink_(req); break;
       case 'updateLink':        out = updateLink_(req); break;
       case 'deleteLink':        out = deleteLink_(req); break;
+      case 'saveLicFields':     out = saveLicFields_(req); break;
       case 'addLic':            out = addLic_(req); break;
       case 'updateLic':         out = updateLic_(req); break;
       case 'deleteLic':         out = deleteLic_(req); break;
@@ -324,6 +325,8 @@ function route_(req) {
       case 'deleteGroup':       out = deleteGroup_(req); break;
       case 'setActivityAccess': out = setActivityAccess_(req); break;
       case 'chatUsers':         return chatUsers_();
+      case 'chatPhotos':        return chatPhotos_(req);
+      case 'setMyPhoto':        out = setMyPhoto_(req); break;
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
       case 'chatTranslate':     return chatTranslate_(req);
@@ -631,7 +634,7 @@ var ACTIVITY_LABEL_ = {
   addCategory: 'Added a category', updateCategory: 'Updated a category', deleteCategory: 'Deleted a category',
   addWork: 'Added a work entry', updateWork: 'Updated a work entry', deleteWork: 'Deleted a work entry',
   addPw: 'Added a saved password', updatePw: 'Updated a saved password', deletePw: 'Deleted a saved password',
-  addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link',
+  addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link', saveLicFields: 'Changed LIC extra fields',
   addVcs: 'Logged a VCS complaint', updateVcs: 'Updated a VCS complaint',
   addRack: 'Added a rack item', updateRack: 'Updated a rack item', deleteRack: 'Deleted a rack item',
   saveRackRows: 'Customised rack rows', saveRackCats: 'Changed rack categories', saveRackFields: 'Changed rack fields', saveRackData: 'Saved rack details', saveRackPresets: 'Changed INS packing list',
@@ -1860,22 +1863,50 @@ function deleteLink_(req) {
 // It lives in column I (9) so the Owner column (H, 8) stays where older sheets and adoptData_() expect it.
 var LIC_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 var LIC_FREQS = { monthly: 1, quarterly: 1, halfyearly: 1, yearly: 1 };   // '' = one-time / single premium (no renewal)
-// the LIC sheet with its extra "Renewal Due Date" column (older sheets get it added automatically)
+// the LIC sheet with its extra columns (older sheets get them added automatically):
+// I = Renewal Due Date | J = Policy Name | K = Total Policy Amount | L = Nominee | M = Customer Mobile | N = More Details (JSON of the extra fields you add yourself)
+var LIC_EXTRA_HDR = ['Policy Name', 'Total Policy Amount', 'Nominee', 'Customer Mobile', 'More Details (JSON)'];
 function licSheet_() {
   var sh = ownedSheet_('LIC', 8);
-  if (sh.getMaxColumns() < 9) sh.insertColumnsAfter(sh.getMaxColumns(), 9 - sh.getMaxColumns());
+  if (sh.getMaxColumns() < 14) sh.insertColumnsAfter(sh.getMaxColumns(), 14 - sh.getMaxColumns());
   var h = sh.getRange(1, 9);
   if (String(h.getValue()) !== 'Renewal Due Date') {
     h.setNumberFormat('@'); h.setValue('Renewal Due Date'); h.setFontWeight('bold');
     sh.getRange('I:I').setNumberFormat('@');
   }
+  if (String(sh.getRange(1, 10).getValue()) !== 'Policy Name') {
+    var hx = sh.getRange(1, 10, 1, 5);
+    hx.setNumberFormat('@'); hx.setValues([LIC_EXTRA_HDR]); hx.setFontWeight('bold');
+    sh.getRange('J:N').setNumberFormat('@');
+  }
   return sh;
+}
+// names of the extra fields this owner added (stored in the "Rack Config" sheet under type "LicFields")
+function readLicFields_() {
+  var sh = rackCfgSheet_(), last = sh.getLastRow(), out = [];
+  if (last < 2) return out;
+  sh.getRange(2, 1, last - 1, 4).getValues().forEach(function (r) {
+    if (String(r[0]) !== 'LicFields' || ownerOf_(r[3]) !== CTX.owner) return;
+    try { var v = JSON.parse(String(r[2])); if (Array.isArray(v)) out = v.map(String); } catch (e) {}
+  });
+  return out;
+}
+function licExtraClean_(inp) {
+  var names = readLicFields_(), out = {};
+  if (!inp || typeof inp !== 'object') return out;
+  names.forEach(function (n) {
+    var v = inp[n];
+    if (v === undefined || v === null) return;
+    v = String(v).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 300);
+    if (v) out[n] = v;
+  });
+  return out;
 }
 function readLic_() {
   var sh = licSheet_();
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 9).getValues();
+  var vals = sh.getRange(2, 1, last - 1, 14).getValues();
   var out = [], dirty = false;
   vals.forEach(function (r) {
     if (r[0] === '' && r[1] === '' && r[2] === '') return;
@@ -1883,9 +1914,11 @@ function readLic_() {
     if (!id) { id = Utilities.getUuid().slice(0, 8); r[6] = id; dirty = true; }
     if (ownerOf_(r[7]) !== CTX.owner) return;
     var freq = String(r[5] || '').trim().toLowerCase();
+    var ex = {}; try { var j = JSON.parse(String(r[13] || '{}')); if (j && typeof j === 'object' && !Array.isArray(j)) ex = j; } catch (e) {}
     out.push({ id: id, name: String(r[0]), policyNo: String(r[1]), amount: Number(r[2]) || 0,
       startDate: LIC_DATE_RE.test(r[3]) ? String(r[3]) : '', endDate: LIC_DATE_RE.test(r[4]) ? String(r[4]) : '',
-      freq: LIC_FREQS[freq] ? freq : '', dueDate: LIC_DATE_RE.test(r[8]) ? String(r[8]) : '' });
+      freq: LIC_FREQS[freq] ? freq : '', dueDate: LIC_DATE_RE.test(r[8]) ? String(r[8]) : '',
+      policyName: String(r[9] || ''), totalAmount: Number(r[10]) || 0, nominee: String(r[11] || ''), phone: String(r[12] || ''), extra: ex });
   });
   if (dirty) sh.getRange(2, 7, vals.length, 1).setValues(vals.map(function (r) { return [r[6]]; }));
   return out;
@@ -1898,7 +1931,12 @@ function validLic_(req) {
     policyNo: String(req.policyNo || '').trim().slice(0, 80),
     amount: Math.max(0, Number(req.amount) || 0),
     startDate: dt(req.startDate), endDate: dt(req.endDate), dueDate: dt(req.dueDate),
-    freq: LIC_FREQS[freq] ? freq : ''
+    freq: LIC_FREQS[freq] ? freq : '',
+    policyName: String(req.policyName || '').trim().slice(0, 200),
+    totalAmount: Math.max(0, Number(req.totalAmount) || 0),
+    nominee: String(req.nominee || '').trim().slice(0, 200),
+    phone: String(req.phone || '').trim().slice(0, 30),
+    extra: licExtraClean_(req.extra)
   };
   if (!(p.name || p.policyNo)) fail_('Fill in at least the customer name or policy number.');
   if (p.startDate && p.endDate && p.endDate < p.startDate) fail_('Ending date cannot be before the starting date.');
@@ -1916,9 +1954,10 @@ function addLic_(req) {
   var sh = licSheet_();
   var row = sh.getLastRow() + 1;
   var id = Utilities.getUuid().slice(0, 8);
-  var rng = sh.getRange(row, 1, 1, 9);
+  var rng = sh.getRange(row, 1, 1, 14);
   rng.setNumberFormat('@');
-  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq, id, CTX.owner, p.dueDate]]);
+  rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq, id, CTX.owner, p.dueDate,
+    p.policyName, p.totalAmount, p.nominee, p.phone, JSON.stringify(p.extra)]]);
   p.id = id;
   return { ok: true, lic: p };
 }
@@ -1933,8 +1972,38 @@ function updateLic_(req) {
   var rd = sh.getRange(row, 9);
   rd.setNumberFormat('@');
   rd.setValue(p.dueDate);
+  var rx = sh.getRange(row, 10, 1, 5);
+  rx.setNumberFormat('@');
+  rx.setValues([[p.policyName, p.totalAmount, p.nominee, p.phone, JSON.stringify(p.extra)]]);
   p.id = String(req.id);
   return { ok: true, lic: p };
+}
+// rename / add / remove the extra fields. x.o = old name ('' for a new one), x.n = new name. Typed values follow a rename.
+function saveLicFields_(req) {
+  var inp = req.fields;
+  if (!Array.isArray(inp)) fail_('Invalid list.');
+  var names = [], olds = [], seen = {};
+  inp.forEach(function (x) {
+    var n = String(x && x.n !== undefined ? x.n : '').trim().slice(0, 40), o = String(x && x.o ? x.o : '');
+    if (!n || seen[n.toLowerCase()]) return;
+    seen[n.toLowerCase()] = 1; names.push(n); olds.push(o);
+  });
+  if (names.length > 20) fail_('At most 20 extra fields are allowed.');
+  var sh = licSheet_(), last = sh.getLastRow();
+  if (last >= 2) {
+    var own = sh.getRange(2, 8, last - 1, 1).getValues(), js = sh.getRange(2, 14, last - 1, 1).getValues(), changed = false;
+    for (var i = 0; i < js.length; i++) {
+      if (ownerOf_(own[i][0]) !== CTX.owner || !String(js[i][0] || '').trim()) continue;
+      var old = {}; try { old = JSON.parse(String(js[i][0])) || {}; } catch (e) { old = {}; }
+      var nv = {};
+      names.forEach(function (n, k) { var v = olds[k] ? old[olds[k]] : undefined; if (v !== undefined && String(v) !== '') nv[n] = String(v); });
+      var out = Object.keys(nv).length ? JSON.stringify(nv) : '';
+      if (out !== String(js[i][0])) { js[i][0] = out; changed = true; }
+    }
+    if (changed) { var rg = sh.getRange(2, 14, last - 1, 1); rg.setNumberFormat('@'); rg.setValues(js); }
+  }
+  rackCfgSet_('LicFields', '*', names.length ? names : null);
+  return { ok: true, fields: names };
 }
 function deleteLic_(req) {
   var sh = licSheet_();
@@ -2481,7 +2550,7 @@ function chatPeers_() {
 }
 function chatUsers_() {
   var now = Date.now(), peers = chatPeers_(), ids = peers.map(function (a) { return a.id; });
-  var seen = seenMap_(ids), ptr = readPtr_(CTX.uid), info = {}, total = 0;
+  var seen = seenMap_(ids), ptr = readPtr_(CTX.uid), info = {}, total = 0, avm = avMap_();
   var myG = myChatGroups_(), gset = {}, ginfo = {};
   myG.forEach(function (g) { gset[g.id] = g; });
   chatRows_().forEach(function (r) {                    // oldest -> newest
@@ -2501,7 +2570,7 @@ function chatUsers_() {
     if (!ms && a.lastLogin) { var t = parseDue_(a.lastLogin); if (!isNaN(t)) ms = t; }     // never pinged yet -> last login
     var p = presence_(ms, now), o = info[a.id] || { unread: 0, last: null };
     total += o.unread;
-    return { id: a.id, name: a.name || a.username, username: a.username, role: a.role, online: p.online, ago: p.ago,
+    return { id: a.id, name: a.name || a.username, username: a.username, role: a.role, online: p.online, ago: p.ago, pv: avVer_(avm[a.id]),
       unread: o.unread, lastText: o.last ? o.last.text.slice(0, 80) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false };
   });
   var nm = chatNameMap_();
@@ -2512,7 +2581,36 @@ function chatUsers_() {
       unread: o.unread, lastText: o.last ? o.last.text.slice(0, 80) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false,
       lastFrom: o.last && o.last.from !== CTX.uid ? (nm[o.last.from] || 'Someone') : '' };
   });
-  return { ok: true, users: users, groups: groups, unread: total, now: now, me: CTX.uid };
+  return { ok: true, users: users, groups: groups, unread: total, now: now, me: CTX.uid, mePv: avVer_(avm[CTX.uid]) };
+}
+// ---------- chat profile photos ----------
+// One small (<= ~8 KB) JPEG data-URL per user, kept in the script properties as  AVT_<userId> = "<timestamp>|<data-url>".
+// chatUsers only sends the timestamp (pv); the app asks for the picture itself (chatPhotos) when the timestamp changed.
+function avMap_() {
+  var all = PropertiesService.getScriptProperties().getProperties(), out = {};
+  Object.keys(all).forEach(function (k) { if (k.indexOf('AVT_') === 0 && all[k]) out[k.slice(4)] = String(all[k]); });
+  return out;
+}
+function avVer_(v) { var i = String(v || '').indexOf('|'); return i > 0 ? (Number(String(v).slice(0, i)) || 0) : 0; }
+function setMyPhoto_(req) {
+  var d = String(req.photo || ''), P = PropertiesService.getScriptProperties();
+  if (!d) { P.deleteProperty('AVT_' + CTX.uid); return { ok: true, pv: 0 }; }
+  if (d.length > 8500 || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(d)) fail_('That photo is too big or not a valid picture. Try another one.');
+  var ts = Date.now();
+  P.setProperty('AVT_' + CTX.uid, ts + '|' + d);
+  return { ok: true, pv: ts };
+}
+function chatPhotos_(req) {
+  var want = Array.isArray(req.ids) ? req.ids.slice(0, 80) : [], allowed = {}, out = {}, m = avMap_();
+  allowed[CTX.uid] = 1;
+  chatPeers_().forEach(function (a) { allowed[a.id] = 1; });
+  want.forEach(function (id) {
+    id = String(id); if (id === 'me') id = CTX.uid;
+    if (!allowed[id] || !m[id]) return;
+    var i = m[id].indexOf('|');
+    out[id] = { pv: Number(m[id].slice(0, i)) || 0, src: m[id].slice(i + 1) };
+  });
+  return { ok: true, photos: out };
 }
 function chatPing_() {
   var ptr = readPtr_(CTX.uid), total = 0;
@@ -2721,6 +2819,7 @@ function getAll_() {
     passwords: p.pw === 'none' ? [] : readPw_(),
     links: p.link === 'none' ? [] : readLink_(),
     lic: p.lic === 'none' ? [] : readLic_(),
+    licFields: p.lic === 'none' ? [] : readLicFields_(),
     vcs: p.vcs === 'none' ? [] : readVcs_(),
     vcsUsers: p.vcs === 'none' ? [] : vcsUsers_(),
     rack: p.rack === 'none' ? [] : readRack_(RC.cats),

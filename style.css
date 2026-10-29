@@ -780,3 +780,23 @@ html[data-mode="dark"] .rk-cat{background:var(--soft2);color:var(--brand-ink)}
 .ch-lg{font-size:calc(9px*var(--fs));font-weight:800;margin-left:1px;vertical-align:sub}
 .ch-opts{display:flex;flex-direction:column;gap:8px;margin:8px 0}
 .ch-opts .btn{width:100%;justify-content:center;text-align:center}
+
+
+/* ---------- chat: profile photos, ⋮ menu, keyboard ---------- */
+.ch-img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover}
+.ch-head{position:relative}
+.ch-head .ch-info{min-width:0}
+.ch-head .ch-name .nm{white-space:normal;overflow:visible;text-overflow:clip;word-break:break-word;line-height:1.2}
+.ch-cbtn{position:relative;font-weight:800}
+#chMore{font-size:calc(24px*var(--fs));padding-bottom:3px}
+.ch-cbtn .ch-lg{position:absolute;right:-3px;top:-4px;margin:0;vertical-align:baseline;background:var(--brand);color:#fff;border-radius:8px;padding:1px 4px;font-size:calc(9px*var(--fs));line-height:1.2}
+.ch-menu{position:absolute;right:10px;top:calc(100% - 4px);z-index:80;min-width:230px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 32px rgba(15,23,42,.22);padding:6px}
+.ch-menu button{display:flex;align-items:center;gap:12px;width:100%;border:0;background:none;color:var(--ink);padding:11px 12px;border-radius:10px;font-size:calc(15px*var(--fs));text-align:left;font-weight:600}
+.ch-menu button:hover,.ch-menu button:active{background:var(--brand-soft)}
+.ch-menu .ic{font-size:calc(19px*var(--fs));width:26px;text-align:center;flex:none}
+.ch-menu small{display:block;color:var(--muted);font-size:calc(11.5px*var(--fs));font-weight:600}
+body.kb-open .ch-comp{padding-bottom:8px}
+.ph-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.ph-big{width:84px;height:84px;font-size:calc(32px*var(--fs))}
+.ph-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.ph-btns label.btn{cursor:pointer}

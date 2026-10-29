@@ -329,7 +329,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.licFields = S.d.licFields || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -364,7 +364,9 @@ function pickEmp(id){
 function refreshUser(){
   const s = cfg(), me = S.me || {}, nm = me.name || me.username || s.name || s.username || 'User';
   $('#uName').textContent = nm; $('#uRole').textContent = me.role === 'admin' ? (me.primary ? 'Main admin' : 'Admin') : 'User';
-  $('#avatar').textContent = nm.trim().charAt(0).toUpperCase();
+  const av = $('#avatar'), mine = S.me && S.me.id && avSrc(S.me.id);
+  if (mine){ av.textContent = ''; av.style.backgroundImage = `url("${mine}")`; av.style.backgroundSize = 'cover'; av.style.backgroundPosition = 'center'; }
+  else { av.textContent = nm.trim().charAt(0).toUpperCase(); av.style.backgroundImage = ''; }
   const app = s.appName || 'KS';
   $('#brandTxt').textContent = app; document.title = app;
 }
@@ -383,6 +385,10 @@ function enterApp(){
   chatStart(); vcStart(); ludoStart();
   if (isAdmin()) loadLogs();
 }
+/* profile photos: tiny pictures cached on this phone; the server only sends a version number (pv) with the user list */
+let AV = (function(){ try{ return JSON.parse(localStorage.getItem('ks_av_v1') || '{}') || {}; }catch(e){ return {}; } })();
+const avSave = () => { try{ localStorage.setItem('ks_av_v1', JSON.stringify(AV)); }catch(e){} };
+const avSrc = id => (AV[id] && AV[id].src) || '';
 async function boot(){
   await bioDetect();
   const t = store.get(TK);
@@ -429,7 +435,7 @@ function applyRO(v){
   if (!can('pw')) kill('[onclick*="pwForm"],[onclick*="pwDel"]');
   if (!can('tt')){ kill('[onclick*="ttCats"],[onclick*="ttClear"],[onclick*="ttCopyPrev"]'); v.querySelectorAll('[data-tt]').forEach(e => { e.disabled = true; }); }
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
-  if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"]');
+  if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"],[onclick*="licFieldsEdit"]');
   if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"],[onclick*="vcsReopen"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
   if (!can('rack')) kill('[onclick*="rackFieldsEdit"],[onclick*="rackRowsEdit"]');
   if (!can('work')){
@@ -1296,6 +1302,40 @@ function thMenuRows(){
       <input class="input" data-ml="${esc(v)}" maxlength="24" value="${esc(T.menu.label[v] || thOrig(b).l || '')}" aria-label="Name">
       <label class="eye" title="${v === 'settings' ? 'Settings always stays visible' : 'Show / hide'}"><input type="checkbox" data-mh="${esc(v)}" ${off ? '' : 'checked'} ${v === 'settings' ? 'disabled' : ''}></label></div>`;
   }).join('');
+}
+/* ---------- my profile photo (shown in Chat) ---------- */
+function photoCard(){
+  const me = S.me || {}, id = me.id || '', src = id ? avSrc(id) : '', nm = (me.name || me.username || 'U').trim();
+  return `<div class="card" id="phCard"><h3>🖼 Profile photo</h3>
+    <p class="muted" style="margin-bottom:12px">This picture is shown next to your name in Chat, to the people who can see you.</p>
+    <div class="ph-row"><div class="ch-av ph-big" style="background:${chColor(id || 'x')}">${src ? `<img class="ch-img" alt="" src="${esc(src)}">` : ''}${esc(nm.charAt(0).toUpperCase())}</div>
+      <div class="ph-btns"><label class="btn" for="phFile">📷 ${src ? 'Change photo' : 'Choose photo'}</label><input type="file" id="phFile" accept="image/*" hidden onchange="photoPick(this)">${src ? '<button class="btn ghost" type="button" onclick="photoRemove()">Remove</button>' : ''}</div></div></div>`;
+}
+async function photoPick(inp){
+  const f = inp.files && inp.files[0]; inp.value = ''; if (!f) return;
+  if (!/^image\//.test(f.type)) return toast('Please choose a picture', true);
+  let img;
+  try{
+    const url = URL.createObjectURL(f);
+    img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('read')); i.src = url; });
+    URL.revokeObjectURL(url);
+  }catch(e){ return toast('Could not read this picture. Try a JPG or PNG photo.', true); }
+  const side = Math.min(img.naturalWidth, img.naturalHeight), sx = (img.naturalWidth - side) / 2, sy = (img.naturalHeight - side) / 2;
+  let out = '';
+  for (const [px, q] of [[128, .72], [112, .65], [96, .6], [96, .45], [80, .4]]){      // small enough to be saved in one sheet cell
+    const c = document.createElement('canvas'); c.width = c.height = px;
+    c.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, px, px);
+    out = c.toDataURL('image/jpeg', q); if (out.length <= 7500) break;
+  }
+  if (out.length > 8000) return toast('Could not shrink this picture enough. Try another one.', true);
+  try{
+    const r = await api('setMyPhoto', { photo:out });
+    AV[S.me.id] = { v:r.pv, src:out }; avSave(); refreshUser(); render(); toast('Profile photo saved');
+  }catch(e){ handleErr(e); }
+}
+async function photoRemove(){
+  if (!await confirmBox('Remove your profile photo?', 'Chat will show your first letter again.', 'Remove', true)) return;
+  try{ await api('setMyPhoto', { photo:'' }); delete AV[S.me.id]; avSave(); refreshUser(); render(); toast('Photo removed'); }catch(e){ handleErr(e); }
 }
 function themeCard(){
   const seg = (k, opts) => `<div class="seg" data-k="${k}">${opts.map(([v, l]) => `<button type="button" data-val="${v}" class="${String(T[k]) === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
@@ -2604,10 +2644,15 @@ function licStatusTag(endIso){
   const cls = c.status === 'Expired' ? 'off' : c.status === 'Expiring soon' ? 'main' : 'adm';
   return `<span class="tag ${cls}">${c.status}</span>`;
 }
+/* the extra fields you added yourself, as small "label: value" lines */
+function licMore(x){
+  const ex = x.extra || {};
+  return (S.d.licFields || []).filter(n => ex[n]).map(n => `<div><span class="muted">${esc(n)}:</span> ${esc(ex[n])}</div>`).join('');
+}
 function filteredLic(){
   const q = (S.lic.q || '').trim().toLowerCase();
   return [...(S.d.lic || [])]
-    .filter(x => !q || (x.name + ' ' + x.policyNo).toLowerCase().includes(q))
+    .filter(x => !q || [x.name, x.policyNo, x.policyName, x.nominee, x.phone, ...Object.values(x.extra || {})].join(' ').toLowerCase().includes(q))
     .sort((a, b) => (a.endDate || '9999').localeCompare(b.endDate || '9999'));     // soonest-ending first
 }
 function vLic(){
@@ -2627,12 +2672,17 @@ function vLic(){
   const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
       <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b>${licStatusTag(x.endDate)}</td>
       <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
-      <td data-l="Amount" class="n">${licAmt(x.amount)}</td>
+      <td data-l="Policy Name" style="white-space:normal;word-break:break-word;min-width:120px">${esc(x.policyName) || '<span class="dim">—</span>'}</td>
+      <td data-l="Premium Amount" class="n">${licAmt(x.amount)}</td>
+      <td data-l="Total Policy Amount" class="n">${licAmt(x.totalAmount)}</td>
+      <td data-l="Nominee" style="white-space:normal;word-break:break-word">${esc(x.nominee) || '<span class="dim">—</span>'}</td>
+      <td data-l="Customer Mobile" style="white-space:nowrap">${x.phone ? `<a href="tel:${esc(x.phone)}">${esc(x.phone)}</a>` : '<span class="dim">—</span>'}</td>
       <td data-l="Premium Mode"><span class="tag">${esc(LIC_FREQ[x.freq] || 'One-time')}</span></td>
       <td data-l="Starting Date">${licDateFmt(x.startDate)}</td>
       <td data-l="Ending Date">${licDateFmt(x.endDate)}</td>
       <td data-l="Next Renewal">${rn.due ? `${licDateFmt(rn.due)}<br><span class="lic-rn ${rn.cls}" data-lic-id="${esc(x.id)}" style="font-weight:700;white-space:nowrap">${esc(rn.text)}</span>` : '<span class="dim">—</span>'}</td>
       <td data-l="Time Left"><span class="lic-cd ${c.cls}" data-end="${esc(x.endDate || '')}" style="font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap">${esc(c.text)}</span></td>
+      ${licMore(x) ? `<td data-l="More details" style="white-space:normal;min-width:140px;font-size:calc(12.5px*var(--fs))">${licMore(x)}</td>` : ''}
       <td class="n nowrap"><button class="btn soft sm" onclick="licCopy('${esc(x.id)}')" title="Copy all of this customer's data">📋 Copy</button>
         <button class="btn ghost sm" onclick="licForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="licDel('${esc(x.id)}')">🗑</button></td></tr>`;
   }).join('');
@@ -2649,12 +2699,13 @@ function vLic(){
       <div class="card kpi a"><div class="lbl">Matured / Expired</div><div class="val">${matured}</div></div>
     </div>
     <div class="card" style="margin-bottom:16px"><div class="actions">
-      <input class="input" id="licq" style="width:220px" placeholder="Search customer name or policy no.…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)">
+      <input class="input" id="licq" style="width:220px" placeholder="Search name, policy, nominee, mobile…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)">
       <span style="flex:1"></span>
       <button class="btn soft" onclick="licExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="licExport('pdf')">⬇ PDF</button>
+      <button class="btn ghost" onclick="licFieldsEdit()" title="Add or rename your own extra details for every policy">⚙ Extra fields</button>
       <button class="btn" onclick="licForm()">＋ Add policy</button></div></div>
     <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
-      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Amount</th><th>Premium Mode</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Total Policy Amount</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
       <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;
@@ -2669,7 +2720,12 @@ async function licCopy(id){
   const txt = [
     x.name && 'Customer Name: ' + x.name,
     x.policyNo && 'Policy Number: ' + x.policyNo,
-    x.amount ? 'Amount: ₹' + Number(x.amount).toLocaleString('en-IN') : '',
+    x.policyName && 'Policy Name: ' + x.policyName,
+    x.amount ? 'Premium Amount: ₹' + Number(x.amount).toLocaleString('en-IN') : '',
+    x.totalAmount ? 'Total Policy Amount: ₹' + Number(x.totalAmount).toLocaleString('en-IN') : '',
+    x.nominee && 'Nominee: ' + x.nominee,
+    x.phone && 'Customer Mobile: ' + x.phone,
+    ...(S.d.licFields || []).filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]),
     'Premium Mode: ' + (LIC_FREQ[x.freq] || 'One-time'),
     x.startDate && 'Starting Date: ' + x.startDate,
     x.endDate && 'Ending Date: ' + x.endDate,
@@ -2683,21 +2739,38 @@ async function licCopy(id){
 function licForm(id){ if (!can('lic')) return deny();
   const x = id ? S.d.lic.find(e => e.id === id) : null;
   const freqOpts = Object.keys(LIC_FREQ).map(k => `<option value="${k}" ${(x ? x.freq : '') === k ? 'selected' : ''}>${LIC_FREQ[k]}</option>`).join('');
-  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer name, policy number, amount, premium mode, the starting / ending date and the renewal (premium due) date.</p>
+  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer, policy name, premium and total policy amount, nominee, mobile number, premium mode, dates and the renewal (premium due) date.</p>
     <form id="licf" autocomplete="off">
       <div class="row2"><div class="field"><label>Customer Name</label><input class="input" name="name" maxlength="200" autocomplete="off" value="${esc(x ? x.name : '')}"></div>
         <div class="field"><label>Policy Number</label><input class="input" name="policyNo" maxlength="80" autocomplete="off" value="${esc(x ? x.policyNo : '')}"></div></div>
-      <div class="row2"><div class="field"><label>Amount</label><input class="input" name="amount" type="number" min="0" step="0.01" inputmode="decimal" value="${x && x.amount ? x.amount : ''}"></div>
+      <div class="row2"><div class="field"><label>Policy Name</label><input class="input" name="policyName" maxlength="200" autocomplete="off" placeholder="e.g. Jeevan Anand" value="${esc(x ? x.policyName : '')}"></div>
+        <div class="field"><label>Total Policy Amount</label><input class="input" name="totalAmount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Total sum of the policy" value="${x && x.totalAmount ? x.totalAmount : ''}"></div></div>
+      <div class="row2"><div class="field"><label>Nominee</label><input class="input" name="nominee" maxlength="200" autocomplete="off" value="${esc(x ? x.nominee : '')}"></div>
+        <div class="field"><label>Customer Mobile No.</label><input class="input" name="phone" type="tel" inputmode="tel" maxlength="30" autocomplete="off" value="${esc(x ? x.phone : '')}"></div></div>
+      <div class="row2"><div class="field"><label>Premium Amount</label><input class="input" name="amount" type="number" min="0" step="0.01" inputmode="decimal" value="${x && x.amount ? x.amount : ''}"></div>
         <div class="field"><label>Premium paid</label><select class="select" name="freq">${freqOpts}</select></div></div>
       <div class="row2">
         <div class="field"><label>Starting Date</label><input class="input" type="date" name="startDate" value="${esc(x ? x.startDate : '')}"></div>
         <div class="field"><label>Ending Date</label><input class="input" type="date" name="endDate" value="${esc(x ? x.endDate : '')}"></div>
       </div>
       <div class="field"><label>Renewal / Premium Due Date</label><input class="input" type="date" name="dueDate" value="${esc(x ? x.dueDate : '')}"></div>
+      ${(S.d.licFields || []).length ? `<div class="field" style="margin-top:4px"><label style="font-weight:800">📎 More details</label></div><div class="row2">${S.d.licFields.map((n, i) => `<div class="field"><label>${esc(n)}</label><input class="input" data-ex="${esc(n)}" maxlength="300" autocomplete="off" value="${esc(x && x.extra ? (x.extra[n] || '') : '')}"></div>`).join('')}</div>` : ''}
+      <div class="actions" style="margin:0 0 8px"><button type="button" class="btn ghost sm" data-fields>⚙ Add / edit extra fields</button></div>
       <div id="licPrev" class="lic-prev"></div>
       <p class="muted" style="font-size:calc(12.5px*var(--fs));margin-top:-2px">Enter the due date once. For Monthly / Quarterly / Half-Yearly / Yearly it then repeats by itself and shows how many days / months / years are left. If left empty, the starting date is used.</p>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-fields]').onclick = () => {          // keep what is already typed, open the fields editor, then come back
+    const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {};
+    fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; });
+    S.licDraft = { id:x ? x.id : '', vals, ex }; w.remove(); licFieldsEdit(x ? x.id : '');
+  };
+  const dr = S.licDraft && S.licDraft.id === (x ? x.id : '') ? S.licDraft : null; S.licDraft = null;
+  if (dr){
+    const fm = w.querySelector('#licf');
+    Object.keys(dr.vals).forEach(k => { if (fm.elements[k] && !fm.elements[k].length) fm.elements[k].value = dr.vals[k]; });
+    fm.querySelectorAll('[data-ex]').forEach(i => { if (dr.ex[i.dataset.ex] !== undefined) i.value = dr.ex[i.dataset.ex]; });
+  }
   const prev = () => {                       // live "next due" line under the form
     const f = Object.fromEntries(new FormData(w.querySelector('#licf'))), rn = licRenewInfo(f), el = w.querySelector('#licPrev');
     el.innerHTML = rn.due ? `Next due: <b>${licDateFmt(rn.due)}</b> · <span class="${rn.cls}" style="font-weight:700">${esc(rn.text)}</span>${LIC_FREQ_MONTHS[f.freq] ? ` <span class="muted">(repeats every ${LIC_FREQ_MONTHS[f.freq]} month${LIC_FREQ_MONTHS[f.freq] > 1 ? 's' : ''})</span>` : ''}` : '';
@@ -2705,11 +2778,51 @@ function licForm(id){ if (!can('lic')) return deny();
   w.querySelector('#licf').addEventListener('input', prev); w.querySelector('#licf').addEventListener('change', prev); prev();
   w.querySelector('#licf').onsubmit = async ev => {
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
+    f.extra = {}; ev.target.querySelectorAll('[data-ex]').forEach(i => { if (i.value.trim()) f.extra[i.dataset.ex] = i.value.trim(); });
     try{
       if (x){ const r = await api('updateLic', { id:x.id, ...f }); Object.assign(x, r.lic); }
       else { const r = await api('addLic', f); S.d.lic.push(r.lic); }
       w.remove(); render(); toast('Saved');
     }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+/* add / rename / remove your own extra details (shown in every policy's form, copy text and exports) */
+function licFieldsEdit(reopenId){ if (!can('lic')) return deny();
+  let list = (S.d.licFields || []).map(f => ({ o:f, n:f }));
+  const w = openModal(`<h3>⚙ Extra policy fields</h3><p class="sub">Add your own details for every policy (e.g. Agent Code, Address, Aadhaar last 4, Bank). Renaming keeps what you already typed; removing a field deletes its saved values.</p>
+    <div id="lfF"></div>
+    <div class="actions" style="flex-wrap:nowrap;margin:10px 0 4px"><input class="input" id="lfNew" maxlength="40" placeholder="New field name (e.g. Address)" autocomplete="off"><button class="btn soft" type="button" data-add>＋ Add</button></div>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="button" data-save>Save fields</button></div>`);
+  const draw = () => { w.querySelector('#lfF').innerHTML = list.length ? list.map((x, i) => `<div class="actions" style="margin-bottom:8px;flex-wrap:nowrap"><input class="input" data-i="${i}" maxlength="40" value="${esc(x.n)}" autocomplete="off"><button class="btn ghost sm" type="button" data-up="${i}" aria-label="Move up">↑</button><button class="btn ghost sm" type="button" data-del="${i}" aria-label="Remove">🗑</button></div>`).join('') : '<div class="muted" style="margin-bottom:8px">No extra fields yet. Type a name below and tap Add.</div>'; };
+  draw();
+  const box = w.querySelector('#lfF');
+  box.oninput = e => { if (e.target.dataset.i !== undefined) list[+e.target.dataset.i].n = e.target.value; };
+  box.onclick = e => {
+    const d = e.target.closest('[data-del]'), u = e.target.closest('[data-up]');
+    if (d){ list.splice(+d.dataset.del, 1); draw(); }
+    else if (u && +u.dataset.up > 0){ const i = +u.dataset.up; [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); }
+  };
+  const add = () => {
+    const inp = w.querySelector('#lfNew'), v = inp.value.trim(); if (!v) return;
+    if (list.some(x => x.n.trim().toLowerCase() === v.toLowerCase())) return toast('That field already exists', true);
+    if (list.length >= 20) return toast('Up to 20 extra fields', true);
+    list.push({ o:'', n:v }); inp.value = ''; draw(); inp.focus();
+  };
+  w.querySelector('[data-add]').onclick = add;
+  w.querySelector('#lfNew').onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); add(); } };
+  const back = () => { if (reopenId !== undefined && reopenId !== null) licForm(reopenId || undefined); };
+  w.querySelector('[data-x]').onclick = () => { w.remove(); back(); };
+  w.querySelector('[data-save]').onclick = async ev => {
+    const pending = w.querySelector('#lfNew').value.trim(); if (pending && !list.some(x => x.n.trim().toLowerCase() === pending.toLowerCase())) list.push({ o:'', n:pending });
+    const clean = list.map(x => ({ o:x.o, n:x.n.trim() })).filter(x => x.n);
+    const b = ev.currentTarget; b.disabled = true;
+    try{
+      const r = await api('saveLicFields', { fields:clean });
+      S.d.licFields = r.fields || [];
+      const m = {}; clean.forEach(x => { if (x.o) m[x.o] = x.n; });         // keep the typed values in the page after a rename / delete
+      (S.d.lic || []).forEach(p => { const ex = p.extra || {}, nx = {}; Object.keys(m).forEach(o => { if (ex[o] !== undefined) nx[m[o]] = ex[o]; }); p.extra = nx; });
+      w.remove(); render(); toast('Fields saved'); back();
+    }catch(e){ b.disabled = false; handleErr(e); }
   };
 }
 async function licDel(id){ if (!can('lic')) return deny();
@@ -2955,6 +3068,7 @@ function vSettings(){
   if (!can('exp')) drop('Expense categories');
   if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
   grid.insertAdjacentHTML('afterbegin', themeCard());
+  grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
@@ -3374,26 +3488,34 @@ function pdfPasswords(P, d, first){
 }
 function licStatusPlain(endDate){ return licCountdown(endDate).status || '—'; }
 function xlLic(wb, d){
-  const ws = xSheet(wb, 'LIC Policies', 9, [24, 18, 14, 12, 12, 12, 16, 16, 12], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
-  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Amount', 'Premium Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status']);
+  const fx = S.d.licFields || [], cols = 13 + fx.length;
+  const ws = xSheet(wb, 'LIC Policies', cols, [5, 24, 18, 22, 14, 16, 22, 16, 12, 12, 12, 14, 12, ...fx.map(() => 20)], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
+  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Policy Name', 'Premium Amount', 'Total Policy Amount', 'Nominee', 'Customer Mobile', 'Premium Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status', ...fx]);
   d.lic.forEach((x, i) => { const row = ws.getRow(5 + i), z = i % 2 ? X.zebra : null, rn = licRenewInfo(x);
     xCell(row.getCell(1), i + 1, { h:'center', fill:z });
     xCell(row.getCell(2), x.name, { h:'left', fill:z });
     xCell(row.getCell(3), x.policyNo, { h:'left', fill:z, fmt:'@' });
-    xCell(row.getCell(4), x.amount, { h:'right', fill:z, fmt:XM() });
-    xCell(row.getCell(5), LIC_FREQ[x.freq] || 'One-time', { h:'left', fill:z });
-    xCell(row.getCell(6), xDate(x.startDate), { h:'left', fill:z, fmt:x.startDate ? 'dd-mmm-yyyy' : '@' });
-    xCell(row.getCell(7), xDate(x.endDate), { h:'left', fill:z, fmt:x.endDate ? 'dd-mmm-yyyy' : '@' });
-    xCell(row.getCell(8), rn.due ? xDate(rn.due) : '—', { h:'left', fill:z, fmt:rn.due ? 'dd-mmm-yyyy' : '@' });
+    xCell(row.getCell(4), x.policyName || '', { h:'left', fill:z });
+    xCell(row.getCell(5), x.amount, { h:'right', fill:z, fmt:XM() });
+    xCell(row.getCell(6), x.totalAmount, { h:'right', fill:z, fmt:XM() });
+    xCell(row.getCell(7), x.nominee || '', { h:'left', fill:z });
+    xCell(row.getCell(8), x.phone || '', { h:'left', fill:z, fmt:'@' });
+    xCell(row.getCell(9), LIC_FREQ[x.freq] || 'One-time', { h:'left', fill:z });
+    xCell(row.getCell(10), xDate(x.startDate), { h:'left', fill:z, fmt:x.startDate ? 'dd-mmm-yyyy' : '@' });
+    xCell(row.getCell(11), xDate(x.endDate), { h:'left', fill:z, fmt:x.endDate ? 'dd-mmm-yyyy' : '@' });
+    xCell(row.getCell(12), rn.due ? xDate(rn.due) : '—', { h:'left', fill:z, fmt:rn.due ? 'dd-mmm-yyyy' : '@' });
     const st = licStatusPlain(x.endDate);
-    xCell(row.getCell(9), st, { h:'center', fill:z, bold:true, color:st === 'Expired' ? X.bad : st === 'Expiring soon' ? 'FFB45309' : X.good }); });
-  if (d.lic.length) ws.autoFilter = { from:'A4', to:`I${4 + d.lic.length}` };
+    xCell(row.getCell(13), st, { h:'center', fill:z, bold:true, color:st === 'Expired' ? X.bad : st === 'Expiring soon' ? 'FFB45309' : X.good });
+    fx.forEach((n, k) => xCell(row.getCell(14 + k), (x.extra || {})[n] || '', { h:'left', fill:z })); });
+  const endCol = (n => { let t = ''; while (n > 0){ const m = (n - 1) % 26; t = String.fromCharCode(65 + m) + t; n = Math.floor((n - 1) / 26); } return t; })(13 + fx.length);
+  if (d.lic.length) ws.autoFilter = { from:'A4', to:`${endCol}${4 + d.lic.length}` };
 }
 function pdfLic(P, d, first){
+  const fx = S.d.licFields || [];
   const y = pdfStart(P, 'LIC Policies', `${d.lic.length} policies   |   Generated ${STAMP()}`, 'l', first);
-  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy No.', 'Amount', 'Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status']],
-    body:d.lic.map((x, i) => { const rn = licRenewInfo(x); return [i + 1, x.name, x.policyNo, x.amount ? PM(x.amount) : '—', LIC_FREQ[x.freq] || 'One-time', x.startDate || '—', x.endDate || '—', rn.due || '—', licStatusPlain(x.endDate)].map(PT); }),
-    styles:{ fontSize:8.5 }, columnStyles:{ 0:{ cellWidth:9, halign:'center' }, 1:{ cellWidth:55 }, 2:{ cellWidth:42 }, 3:{ cellWidth:34, halign:'right' }, 4:{ cellWidth:30 }, 5:{ cellWidth:34 }, 6:{ cellWidth:34 }, 7:{ cellWidth:34 }, 8:{ cellWidth:32, halign:'center' } } });
+  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy No.', 'Policy Name', 'Premium', 'Total Policy Amt', 'Nominee', 'Mobile', 'Mode', 'Start', 'End', 'Next Renewal', 'Status', ...(fx.length ? ['More details'] : [])]],
+    body:d.lic.map((x, i) => { const rn = licRenewInfo(x); return [i + 1, x.name, x.policyNo, x.policyName || '—', x.amount ? PM(x.amount) : '—', x.totalAmount ? PM(x.totalAmount) : '—', x.nominee || '—', x.phone || '—', LIC_FREQ[x.freq] || 'One-time', x.startDate || '—', x.endDate || '—', rn.due || '—', licStatusPlain(x.endDate), ...(fx.length ? [fx.filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]).join('; ') || '—'] : [])].map(PT); }),
+    styles:{ fontSize:6.5, cellPadding:1.4 }, columnStyles:{ 0:{ halign:'center', cellWidth:7 }, 4:{ halign:'right' }, 5:{ halign:'right' }, 12:{ halign:'center' } } });
 }
 
 /* ---------- entry point ---------- */
@@ -3486,7 +3608,25 @@ boot();
 const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
 S.chat = chatFresh();
 let chatTimer = null;
-function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); document.body.classList.remove('chat-conv'); chatBadge(); }
+function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); AV = {}; try{ localStorage.removeItem('ks_av_v1'); }catch(e){} document.body.classList.remove('chat-conv'); chatBadge(); }
+/* Keep the open chat exactly as tall as the VISIBLE screen: when the phone keyboard opens the screen no longer gets cut / pushed up. */
+(function chatKeyboardFit(){
+  const vv = window.visualViewport, root = document.documentElement;
+  const fit = () => {
+    const h = vv ? vv.height : window.innerHeight, t = vv ? vv.offsetTop : 0;
+    root.style.setProperty('--vvh', Math.round(h) + 'px'); root.style.setProperty('--vvt', Math.round(t) + 'px');
+    document.body.classList.toggle('kb-open', !!vv && window.innerHeight - vv.height > 120);
+    if (document.body.classList.contains('chat-conv')){
+      if (window.scrollY) window.scrollTo(0, 0);                       // the browser sometimes scrolls the page itself when the keyboard opens
+      const box = $('#chMsgs'); if (box && document.activeElement && document.activeElement.id === 'chInput') box.scrollTop = box.scrollHeight;
+    }
+  };
+  if (vv){ vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); }
+  window.addEventListener('resize', fit); window.addEventListener('orientationchange', () => setTimeout(fit, 250));
+  document.addEventListener('focusin', e => { if (e.target && e.target.id === 'chInput') setTimeout(fit, 120); });
+  document.addEventListener('focusout', e => { if (e.target && e.target.id === 'chInput') setTimeout(fit, 200); });
+  fit();
+})();
 function chatStart(){
   clearInterval(chatTimer);
   chatLoadUsers();                                    // also tells the server "I am online"
@@ -3526,7 +3666,26 @@ function chatStatus(u){
 }
 const CH_COL = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ec4899','#8b5cf6','#14b8a6','#ef4444','#64748b','#84cc16'];
 const chColor = id => CH_COL[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % CH_COL.length];
-const chInit = u => u.isGroup ? '👥' : esc((u.name || u.username || '?').trim().charAt(0).toUpperCase());
+const chInit = u => u.isGroup ? '👥' : (avSrc(u.id) ? `<img class="ch-img" alt="" src="${esc(avSrc(u.id))}">` : '') + esc((u.name || u.username || '?').trim().charAt(0).toUpperCase());
+async function chatSyncAv(users, me, mePv){
+  const list = users.map(u => ({ id:u.id, pv:u.pv || 0 })); if (me) list.push({ id:me, pv:mePv || 0 });
+  let changed = false; const need = [];
+  list.forEach(o => {
+    if (!o.pv){ if (AV[o.id]){ delete AV[o.id]; changed = true; } }
+    else if (!AV[o.id] || AV[o.id].v !== o.pv) need.push(o.id);
+  });
+  if (need.length){
+    try{
+      const r = await chatApi('chatPhotos', { ids:need });
+      need.forEach(id => { const p = r.photos && r.photos[id]; if (p && p.src){ AV[id] = { v:p.pv, src:p.src }; changed = true; } });
+    }catch(e){ chatErr(e); }
+  }
+  if (changed){ avSave(); if (S.view === 'chat'){ chatRenderList(); if (S.chat.with) chatRefreshHeadAv(); } refreshUser(); }
+}
+function chatRefreshHeadAv(){
+  const u = chatPeer(S.chat.with), el = $('#chHAv'); if (!u || !el) return;
+  const dot = el.querySelector('.dot'); el.innerHTML = chInit(u); if (dot) el.appendChild(dot); chatHeader();
+}
 function chClock(t){ return new Date(t).toLocaleTimeString('en-IN', { hour:'numeric', minute:'2-digit' }); }
 function chDayLabel(t){
   const d = new Date(t), n = new Date(), y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
@@ -3588,7 +3747,7 @@ function chatRenderPane(){
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
       <div class="ch-av" id="chHAv" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
       <div class="ch-info"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
-      <div class="ch-calls"><button class="ch-cbtn" id="chLangBtn" onclick="chatLangMenu()" aria-label="Translate chat">🌐</button><button class="ch-cbtn" onclick="ludoDial()" aria-label="Play Ludo">🎲</button>${u.isGroup ? `<button class="ch-cbtn" onclick="groupChatForm('${esc(u.id)}')" aria-label="Group info">ℹ️</button>` : `<button class="ch-cbtn" onclick="vcDial('audio')" aria-label="Voice call">📞</button><button class="ch-cbtn" onclick="vcDial('video')" aria-label="Video call">🎥</button>`}</div>
+      <div class="ch-calls"><button class="ch-cbtn" id="chMore" onclick="chatMoreMenu(event)" aria-label="More options" aria-haspopup="true">⋮</button></div>
     </div>
     <div class="ch-sel" id="chSel" style="display:none"></div>
     <div class="ch-msgs" id="chMsgs"></div>
@@ -3660,6 +3819,7 @@ async function chatLoadUsers(){
     S.chat.users.concat(S.chat.groups).forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
     if (S.chat.with && !chatPeer(S.chat.with)){ S.chat.with = null; document.body.classList.remove('chat-conv'); if (S.view === 'chat') chatRenderPane(); }   // group deleted / permission removed
     S.chat.loaded = true; chatSumUnread();
+    chatSyncAv(S.chat.users, r.me, r.mePv);
     if (incoming){ toast('💬 New message'); chatAlert(); }
     S.chat.err = '';
     if (S.view === 'chat'){ chatRenderList(); chatHeader(); }
@@ -3782,8 +3942,27 @@ async function chatTrRun(items, lang, convId){
   }
 }
 function chatLangBtn(){
-  const b = $('#chLangBtn'); if (!b) return;
-  b.innerHTML = S.chat.lang ? `🌐<span class=\"ch-lg\">${CH_LANGS[S.chat.lang].short}</span>` : '🌐';
+  const b = $('#chMore'); if (!b) return;
+  b.innerHTML = S.chat.lang ? `⋮<span class="ch-lg">${CH_LANGS[S.chat.lang].short}</span>` : '⋮';      // shows which language is on
+}
+/* ⋮ menu in the chat header: Translate, Ludo, voice call, video call (or group info) */
+function chatMoreMenu(ev){
+  if (ev) ev.stopPropagation();
+  const old = $('#chMenu'); if (old){ old.remove(); return; }
+  const u = chatPeer(S.chat.with), head = $('.ch-head'); if (!u || !head) return;
+  const m = document.createElement('div'); m.id = 'chMenu'; m.className = 'ch-menu'; m.setAttribute('role', 'menu');
+  const item = (ic, label, fn, sub) => `<button type="button" role="menuitem" data-fn="${fn}"><span class="ic">${ic}</span><span>${label}${sub ? `<small>${sub}</small>` : ''}</span></button>`;
+  m.innerHTML = item('🌐', 'Translate chat', 'tr', S.chat.lang ? 'On · ' + esc(CH_LANGS[S.chat.lang].name) : 'Off')
+    + item('🎲', 'Play Ludo', 'ludo')
+    + (u.isGroup ? item('ℹ️', 'Group info', 'grp') : item('📞', 'Voice call', 'audio') + item('🎥', 'Video call', 'video'));
+  head.appendChild(m);
+  const close = () => { m.remove(); document.removeEventListener('click', close, true); };
+  m.onclick = e => {
+    const b = e.target.closest('[data-fn]'); if (!b) return;
+    const f = b.dataset.fn; close();
+    if (f === 'tr') chatLangMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
+  };
+  setTimeout(() => document.addEventListener('click', close, true), 0);
 }
 function chatLangMenu(){
   const cur = S.chat.lang;
