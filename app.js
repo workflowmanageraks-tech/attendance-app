@@ -3651,10 +3651,10 @@ boot();
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
    ===================================================================== */
-const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, mu:{}, mBusy:{}, defer:false, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
+const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, peerSeen:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, mu:{}, mBusy:{}, defer:false, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
 S.chat = chatFresh();
 let chatTimer = null;
-function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); AV = {}; try{ localStorage.removeItem('ks_av_v1'); }catch(e){} document.body.classList.remove('chat-conv'); chatBadge(); }
+function chatReset(){ clearInterval(chatTimer); chatTimer = null; clearInterval(chatLiveT); chatLiveT = null; S.chat = chatFresh(); AV = {}; try{ localStorage.removeItem('ks_av_v1'); }catch(e){} document.body.classList.remove('chat-conv'); chatBadge(); }
 /* Keep the open chat exactly as tall as the VISIBLE screen: when the phone keyboard opens the screen no longer gets cut / pushed up. */
 (function chatKeyboardFit(){
   const vv = window.visualViewport, root = document.documentElement;
@@ -3677,6 +3677,7 @@ function chatStart(){
   clearInterval(chatTimer);
   chatLoadUsers();                                    // also tells the server "I am online"
   chatTimer = setInterval(chatTick, 4000);
+  clearInterval(chatLiveT); chatLiveT = setInterval(chatLivePoll, 1500);      // fast lane: new messages + ticks of the open chat
 }
 /* silent request (no top progress bar) — used for polling and sending */
 async function chatApi(action, payload = {}){
@@ -3907,8 +3908,8 @@ function chatHeader(){
 }
 function chatRenderMsgs(toBottom){
   const box = $('#chMsgs'); if (!box) return;
-  const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0;
-  const sig = arr.map(m => m.id + (m.state || '') + (m.mine && m.t <= pr ? 'r' : '')).join(',') + '|' + S.chat.histLoaded[id] + '|' + S.chat.lang + '|' + S.chat.trv;
+  const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0, ps = S.chat.peerSeen[id] || 0;
+  const sig = arr.map(m => m.id + (m.state || '') + (m.mine ? (m.t <= pr ? 'r' : m.t <= ps ? 'd' : '') : '')).join(',') + '|' + S.chat.histLoaded[id] + '|' + S.chat.lang + '|' + S.chat.trv;
   if (sig === S.chat.sig && !toBottom) return;
   if (!toBottom && [...box.querySelectorAll('video')].some(v => !v.paused && !v.ended)){ S.chat.defer = true; return; }   // never rebuild the chat under a playing video
   S.chat.sig = sig;
@@ -3925,7 +3926,8 @@ function chatRenderMsgs(toBottom){
     if (m.mine){
       if (m.state === 'pending') meta = 'Sending…';
       else if (m.state === 'failed') meta = 'Not sent · tap to retry';
-      else meta += ` <span class="tick ${m.t <= pr ? 'read' : ''}">${m.t <= pr ? '✓✓' : '✓'}</span>`;
+      else { const rdn = m.t <= pr, dlv = rdn || m.t <= ps;     // ✓ sent · ✓✓ grey = delivered (they were online) · ✓✓ blue = seen
+        meta += ` <span class="tick ${rdn ? 'read' : dlv ? 'dlv' : ''}">${dlv ? '✓✓' : '✓'}</span>`; }
     }
     const v = chatView(m), sl = S.chat.sel.has(m.id);
     const tg = v.busy ? '<div class="tg">🌐 Translating…</div>' : v.fail ? '<div class="tg bad">🌐 Could not translate · tap to retry</div>' : v.lang ? `<div class="tg">🌐 ${esc(CH_LANGS[v.lang].short)} · tap for options</div>` : '';
@@ -3972,6 +3974,26 @@ async function chatPingNow(){
     S.chat.unread = r.unread; chatBadge();
   }catch(e){ chatErr(e); }
 }
+function chatApplyConv(id, r, first){
+  const c = S.chat;
+  const known = new Set((c.msgs[id] || []).map(m => m.id));
+  const fresh = (r.messages || []).some(m => !m.mine && !m.state && !known.has(m.id));      // really new (not already shown by the other lane)
+  let ch = chatMerge(id, r.messages || []);
+  if (first !== true && c.histLoaded[id] && fresh) chatAlert();   // a new message in the chat I have open
+  if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
+  if ((r.peerRead || 0) > (c.peerRead[id] || 0)){ c.peerRead[id] = r.peerRead; ch = true; }
+  if ((r.peerSeen || 0) > (c.peerSeen[id] || 0)){ c.peerSeen[id] = r.peerSeen; ch = true; }
+  const u = chatPeer(id);
+  if (u && u.isGroup && r.group){ u.name = r.group.name; u.members = r.group.members; }
+  if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
+  if (u && (r.messages || []).some(m => !m.mine)){
+    u.unread = 0; chatSumUnread();
+    const last = r.messages[r.messages.length - 1]; u.lastText = chPrev(last.text); u.lastTime = last.t; u.lastMine = last.mine;
+    chatRenderList();
+  }
+  chatHeader();
+  if (ch || first) chatRenderMsgs(!!first);
+}
 async function chatFetchConv(first){
   const c = S.chat, id = c.with;
   if (!id || c.fetching) return;
@@ -3979,22 +4001,25 @@ async function chatFetchConv(first){
   try{
     const r = await chatApi('chatFetch', { with:id, after:chatAfter(id) });
     if (c.with !== id) return;                                  // the user opened another chat meanwhile
-    let ch = chatMerge(id, r.messages);
-    if (first !== true && c.histLoaded[id] && r.messages.some(m => !m.mine && !m.state)) chatAlert();   // a new message in the chat I have open
-    if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
-    if (r.peerRead !== c.peerRead[id]){ c.peerRead[id] = r.peerRead; ch = true; }
-    const u = chatPeer(id);
-    if (u && u.isGroup && r.group){ u.name = r.group.name; u.members = r.group.members; }
-    if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
-    if (u && r.messages.some(m => !m.mine)){
-      u.unread = 0; chatSumUnread();
-      const last = r.messages[r.messages.length - 1]; u.lastText = chPrev(last.text); u.lastTime = last.t; u.lastMine = last.mine;
-      chatRenderList();
-    }
-    chatHeader();
-    if (ch || first) chatRenderMsgs(!!first);
+    chatApplyConv(id, r, first);
   }catch(e){ chatErr(e); }
   finally{ c.fetching = false; }
+}
+/* Fast lane (every 1.5 s while a chat is open): shows new messages at once, tells the server "I am looking at this chat" (-> blue tick on the
+   sender's phone within a second or two) and brings the sender's ✓ / ✓✓ / blue ✓✓ up to date. It skips the slow sheet queue on the server. */
+let chatLiveT = null, chatLiveBusy = false;
+async function chatLivePoll(){
+  const c = S.chat, id = c.with;
+  if (chatLiveBusy || !id || !S.token || !S.d || document.hidden || S.view !== 'chat' || !c.histLoaded[id]) return;
+  const u = chatPeer(id); if (!u || u.isGroup) return;
+  chatLiveBusy = true;
+  try{
+    const r = await chatApi('chatLive', { with:id, after:chatAfter(id), read:1 });
+    if (r.skip || c.with !== id || document.hidden) return;
+    chatApplyConv(id, r, false);
+    if ((r.messages || []).some(m => !m.mine)) chatFetchConv();       // the slow lane only saves the "read" mark for good
+  }catch(e){ if (e && e.code === 'AUTH') chatErr(e); }
+  finally{ chatLiveBusy = false; }
 }
 function chatOpen(id){
   const c = S.chat; if (!chatPeer(id)) return;
@@ -4378,6 +4403,7 @@ function chatTick(){
   const c = S.chat;
   if (!S.token || !S.d || document.hidden) return;                 // a hidden tab stops pinging, so the person shows as offline
   c.n++;
+  if (c.n % 2 === 0 && !(S.view === 'chat' && c.with)) chatApi('chatLive', {}).catch(() => {});    // tiny "I am online" signal = delivered tick for the sender
   if (S.view === 'chat'){
     if (c.with) chatFetchConv();
     if (c.n % 3 === 0 || !c.loaded) chatLoadUsers();
@@ -4479,11 +4505,30 @@ function vcRoot(){
   el.innerHTML = `<video id="vcRemote" class="vc-remote" autoplay playsinline></video>
     <video id="vcLocal" class="vc-local hidden" autoplay playsinline muted></video>
     <div class="vc-top"><div class="vc-av" id="vcAv"></div><div class="vc-name" id="vcName"></div><div class="vc-stat" id="vcStat"></div></div>
+    <button class="vc-minbtn" id="vcMin" type="button" aria-label="Back to chat" onclick="vcMini(true)">←</button>
     <div class="vc-bar" id="vcBar"></div>`;
-  document.body.appendChild(el); return el;
+  document.body.appendChild(el);
+  let dr = null;                                              // small window: drag it anywhere, tap it to open the call full screen again
+  el.addEventListener('pointerdown', e => {
+    if (!el.classList.contains('vc-mini')){ vcPoke(); return; }   // full screen: any touch shows the buttons again
+    dr = { x:e.clientX, y:e.clientY, l:el.offsetLeft, t:el.offsetTop, moved:false };
+    try { el.setPointerCapture(e.pointerId); } catch {}
+  });
+  el.addEventListener('pointermove', e => {
+    if (!dr) return;
+    const dx = e.clientX - dr.x, dy = e.clientY - dr.y;
+    if (!dr.moved && Math.abs(dx) + Math.abs(dy) < 8) return;
+    dr.moved = true;
+    const l = Math.max(0, Math.min(window.innerWidth - el.offsetWidth, dr.l + dx)), t = Math.max(0, Math.min(window.innerHeight - el.offsetHeight, dr.t + dy));
+    el.style.left = l + 'px'; el.style.top = t + 'px'; el.style.right = 'auto'; el.style.bottom = 'auto';
+  });
+  const dend = () => { if (!dr) return; const was = dr; dr = null; if (!was.moved) vcMini(false); };
+  el.addEventListener('pointerup', dend); el.addEventListener('pointercancel', () => { dr = null; });
+  return el;
 }
 function vcOpen(name, id, stat){
-  const el = vcRoot(); el.classList.remove('hidden', 'vc-live'); el.classList.toggle('vc-audio', VC.kind !== 'video');
+  const el = vcRoot(); el.classList.remove('hidden', 'vc-live', 'vc-mini', 'vc-hide'); el.classList.toggle('vc-audio', VC.kind !== 'video');
+  clearTimeout(vcHideT); el.style.left = el.style.top = el.style.right = el.style.bottom = '';
   document.getElementById('vcName').textContent = name || '';
   const av = document.getElementById('vcAv'); av.textContent = (name || '?').trim().charAt(0).toUpperCase(); av.style.background = chColor(id || name);
   vcStat(stat || '');
@@ -4502,8 +4547,32 @@ function vcBar(mode){
   document.getElementById('vcBar').innerHTML = h;
 }
 function vcClose(){
-  const el = document.getElementById('vcUI'); if (el) el.classList.add('hidden');
+  const el = document.getElementById('vcUI');
+  clearTimeout(vcHideT);
+  if (el){ el.classList.add('hidden'); el.classList.remove('vc-mini', 'vc-hide'); el.style.left = el.style.top = el.style.right = el.style.bottom = ''; }
   document.body.classList.remove('vc-open');
+}
+/* Video call: the buttons (mute / camera / end / back) hide 5 s after the call starts; touch the screen and they come back. */
+let vcHideT = null;
+function vcPoke(){
+  const el = document.getElementById('vcUI'); if (!el) return;
+  el.classList.remove('vc-hide'); clearTimeout(vcHideT);
+  if (VC.kind === 'video' && VC.started && !el.classList.contains('vc-mini') && !el.classList.contains('hidden'))
+    vcHideT = setTimeout(() => { el.classList.add('vc-hide'); }, 5000);
+}
+/* Back button: shrink the call to a small window so you can chat while the call goes on; tap the window to make it big again. */
+function vcMini(on){
+  const el = document.getElementById('vcUI'); if (!el || el.classList.contains('hidden')) return;
+  el.classList.toggle('vc-mini', !!on);
+  el.style.left = el.style.top = el.style.right = el.style.bottom = '';
+  document.body.classList.toggle('vc-open', !on);
+  if (on){
+    clearTimeout(vcHideT); el.classList.remove('vc-hide');
+    const id = VC.peer && VC.peer.id;                                  // show the chat with the person you are talking to
+    if (id && !(S.view === 'chat' && S.chat.with === id)){
+      try { if (S.view !== 'chat') go('chat'); if (chatPeer(id)) chatOpen(id); } catch {}
+    }
+  } else vcPoke();
 }
 
 /* ---------- WebRTC plumbing ---------- */
@@ -4546,7 +4615,7 @@ const vcDesc = pc => ({ type:pc.localDescription.type, sdp:pc.localDescription.s
 function vcConnected(){
   if (VC.started) return;
   VC.started = Date.now(); vcRingStop(); vcBar('call');
-  document.getElementById('vcUI').classList.add('vc-live');
+  document.getElementById('vcUI').classList.add('vc-live'); vcPoke();
   const upd = () => { const s = Math.floor((Date.now() - VC.started) / 1000); vcStat(String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0')); };
   upd(); VC.tick = setInterval(upd, 1000);
 }

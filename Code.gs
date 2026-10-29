@@ -337,6 +337,7 @@ function route_(req) {
       case 'chatMediaTicket':   return chatMediaTicket_(req);
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
+      case 'chatLive':          return chatLive_(req);
       case 'chatTranslate':     return chatTranslate_(req);
       case 'chatSend':          return chatSend_(req);
       case 'chatGroupSave':     return chatGroupSave_(req);
@@ -2706,6 +2707,23 @@ function chatFetch_(req) {
   var ms = seenMap_([w])[w] || 0;
   var pr = ms ? presence_(ms, now) : null;
   return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, peerSeen: ms, now: now, presence: pr };
+}
+// Light version of chatFetch for the open chat (polled every ~1.5 s): new messages + delivered / seen info.
+// req.read = 1 means "the person is looking at this chat right now" -> everything from the other person counts as seen.
+function chatLive_(req) {
+  if (isChatGroupId_(req.with)) return { ok: true, skip: true };
+  var w = chatPeerOk_(req.with).id, after = Number(req.after) || 0, now = Date.now();
+  var rows = chatRows_().filter(function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); });
+  var out = rows.filter(function (r) { return r.t > after; });
+  if (!after && out.length > 300) out = out.slice(-300);
+  var latestIn = 0;
+  rows.forEach(function (r) { if (r.from === w && r.t > latestIn) latestIn = r.t; });
+  if (req.read) {
+    var ptr = readPtr_(CTX.uid);
+    if (latestIn > (ptr[w] || 0)) { ptr[w] = latestIn; PropertiesService.getScriptProperties().setProperty('CR_' + CTX.uid, JSON.stringify(ptr)); }
+  }
+  var ms = seenMap_([w])[w] || 0;
+  return { ok: true, messages: out.map(chatMsgOut_), peerRead: Number(readPtr_(w)[CTX.uid] || 0), peerSeen: ms, now: now, presence: ms ? presence_(ms, now) : null };
 }
 // Translate messages (English / Hindi / Indonesian) with Google Translate built into Apps Script. Results are cached 6 hours.
 var TR_LANGS = { en: 1, hi: 1, id: 1 };

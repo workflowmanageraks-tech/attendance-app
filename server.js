@@ -289,6 +289,27 @@ function makeApp(store, env) {
   }
 
 
+  // ---------- Fast chat ticks: sent / delivered / seen (runs OUTSIDE the sheet queue, like call polling) ----------
+  // The open chat asks this every ~1.5 s: new messages + "has the other person got / seen my messages?".
+  // "Seen" is kept in memory the moment the other person's screen shows the chat, so the blue tick never waits behind slow sheet saves.
+  const rtRead = new Map();                              // 'reader>peer' -> time of the newest message the reader has seen
+  function chatLiveRoute(req) {
+    const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    try { globalThis.touchSeen_(uid); } catch (e) {}      // any request = online (this also gives the sender the double tick)
+    const to = String(req.with || '').trim();
+    if (!to || to === uid || globalThis.isChatGroupId_(to)) return { ok: true, skip: true };
+    if (!globalThis.chatCanSee_(uid, to)) globalThis.fail_('That user was not found.', 'ERR');
+    const now = Date.now(), after = Number(req.after) || 0;
+    const rows = globalThis.chatRows_().filter(r => (r.from === uid && r.to === to) || (r.from === to && r.to === uid));
+    let newestIn = 0; rows.forEach(r => { if (r.from === to && r.t > newestIn) newestIn = r.t; });
+    if (req.read && newestIn > (rtRead.get(uid + '>' + to) || 0)) rtRead.set(uid + '>' + to, newestIn);   // "I am looking at this chat right now"
+    let out = rows.filter(r => r.t > after);
+    if (!after && out.length > 300) out = out.slice(-300);
+    const peerRead = Math.max(Number(globalThis.readPtr_(to)[uid] || 0), rtRead.get(to + '>' + uid) || 0);
+    const ms = globalThis.seenMap_([to])[to] || 0;
+    return { ok: true, messages: out.map(r => ({ id: r.id, t: r.t, mine: r.from === uid, text: r.text })), peerRead, peerSeen: ms, now, presence: ms ? globalThis.presence_(ms, now) : null };
+  }
+
   // ---------- Ludo (2 to 4 players, kept in memory, the server is the referee: dice + rules run here) ----------
   // One-to-one: invite a single user. Group chat: the invite goes to EVERY member of the group; whoever accepts joins (max 4).
   // The host can start as soon as 2 people are in; the game also starts by itself when everybody has answered / the lobby is full / 90 s pass.
@@ -796,7 +817,12 @@ function makeApp(store, env) {
     return Promise.resolve().then(() => LUDO_ACTIONS.has(r.action) ? ludoRoute(r) : callRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
   };
   const errOut = err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' });
-  return { handle: body => fastCall(body) || fastTr(body) || (chain = chain.then(() => run(body), () => run(body))),
+  const fastLive = body => {                           // chat ticks never wait behind slow sheet saves
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || r.action !== 'chatLive') return null;
+    return Promise.resolve().then(() => chatLiveRoute(r)).catch(errOut);
+  };
+  return { handle: body => fastCall(body) || fastLive(body) || fastTr(body) || (chain = chain.then(() => run(body), () => run(body))),
            mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
            updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
