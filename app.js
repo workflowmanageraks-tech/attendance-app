@@ -3799,7 +3799,11 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape'){ if ($('#pvV
 const CH_THEMES = [['', 'Default', ['#efeae2', '#d9fdd3', '#ffffff']], ['dark', 'Dark', ['#0b141a', '#005c4b', '#202c33']], ['midnight', 'Midnight', ['#0a0f24', '#4f46e5', '#1a2145']],
   ['ocean', 'Ocean', ['#d7eefc', '#8fd3ff', '#ffffff']], ['forest', 'Forest', ['#e3f1e0', '#b7e4a8', '#ffffff']], ['sunset', 'Sunset', ['#ffe5d4', '#ffb88a', '#fffaf6']],
   ['rose', 'Rose', ['#fde4ee', '#f9a8c9', '#ffffff']], ['neon', 'Neon', ['#0d0221', '#8b2bff', '#1b0b3a']], ['gold', 'Royal gold', ['#1c1710', '#b8892b', '#2a2218']],
-  ['leather', 'Black leather', ['#16130f', '#6b5326', '#2c2822']], ['glass', 'Gold glass', ['linear-gradient(135deg,#ecdcb9,#cfae76)', 'rgba(255,255,255,.35)', 'rgba(255,255,255,.7)']]];
+  ['leather', 'Black leather', ['#16130f', '#6b5326', '#2c2822']], ['glass', 'Gold glass', ['linear-gradient(135deg,#ecdcb9,#cfae76)', 'rgba(255,255,255,.35)', 'rgba(255,255,255,.7)']],
+  ['ios', 'iPhone light', ['#ffffff', '#0a84ff', '#e9e9eb']], ['iosdark', 'iPhone dark', ['#000000', '#0a84ff', '#26262a']],
+  ['aurora', 'Aurora glass', ['linear-gradient(135deg,#7c3aed,#0ea5e9 60%,#ec4899)', '#a78bfa', 'rgba(255,255,255,.35)']], ['sky', 'Sky glass', ['linear-gradient(135deg,#bfe0ff,#7cc0ff)', '#4aa8ff', 'rgba(255,255,255,.75)']],
+  ['mocha', 'Mocha', ['#2b211b', '#8a5a3b', '#3a2d25']], ['amoled', 'AMOLED black', ['#000000', '#14532d', '#141414']],
+  ['lavender', 'Lavender', ['#ede7fb', '#c9b6f5', '#ffffff']], ['mint', 'Mint', ['#dff5ec', '#a7e8cd', '#ffffff']], ['crimson', 'Crimson night', ['#1a0b0e', '#9f1239', '#2b1217']]];
 const chThemeKey = () => 'ks_chat_theme_' + ((S.me && S.me.id) || 'x');
 function chThemeGet(){ try{ return localStorage.getItem(chThemeKey()) || ''; }catch(e){ return ''; } }
 function chatThemeApply(){
@@ -3813,10 +3817,14 @@ const chCustKey = () => 'ks_chat_thc_' + ((S.me && S.me.id) || 'x'), chWpKey = (
 function chCustGet(){ try{ return JSON.parse(localStorage.getItem(chCustKey()) || '{}') || {}; }catch(e){ return {}; } }
 function chCustSet(o){ try{ localStorage.setItem(chCustKey(), JSON.stringify(o)); }catch(e){} }
 function chWpImg(){ try{ return localStorage.getItem(chWpKey()) || ''; }catch(e){ return ''; } }
-const CH_DEF = { leather:{ bs:'outline', rad:16, wp:'leather', acc:'#d6a24b' }, glass:{ bs:'outline', rad:16, wp:'marble', acc:'#c9962f' } };
+const CH_DEF = { leather:{ bs:'outline', rad:16, wp:'leather', acc:'#d6a24b' }, glass:{ bs:'outline', rad:16, wp:'marble', acc:'#c9962f' },
+  ios:{ rad:18, acc:'#0a84ff' }, iosdark:{ rad:18, acc:'#0a84ff' }, aurora:{ rad:18, wp:'aurora', gl:1, acc:'#a78bfa' }, sky:{ rad:18, wp:'sky', gl:1, acc:'#2a8cf0' } };
 const CH_LEATHER_SVG = encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='a'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' seed='7'/><feColorMatrix values='0 0 0 0 .85 0 0 0 0 .7 0 0 0 0 .45 0 0 0 .20 0'/></filter><filter id='b'><feTurbulence type='fractalNoise' baseFrequency='.012' numOctaves='3' seed='3'/><feColorMatrix values='0 0 0 0 .9 0 0 0 0 .75 0 0 0 0 .5 0 0 0 .16 0'/></filter><rect width='100%' height='100%' filter='url(%23a)'/><rect width='100%' height='100%' filter='url(%23b)'/></svg>");
 const CH_WP = {
   marble:'linear-gradient(118deg,rgba(255,250,235,.6) 0,rgba(255,250,235,0) 26%,rgba(150,105,45,.16) 44%,rgba(255,250,235,0) 60%,rgba(150,105,45,.12) 82%,rgba(255,250,235,.4) 100%) 0 0/100% 100% no-repeat,linear-gradient(140deg,#ecdcb9,#d3b57f 52%,#e6d3a8)',
+  aurora:'radial-gradient(circle at 14% 10%,rgba(168,85,247,.8),transparent 46%) 0 0/100% 100% no-repeat,radial-gradient(circle at 90% 32%,rgba(34,211,238,.62),transparent 46%) 0 0/100% 100% no-repeat,radial-gradient(circle at 38% 94%,rgba(236,72,153,.55),transparent 52%) 0 0/100% 100% no-repeat,linear-gradient(160deg,#1a1240,#0b1b3a)',
+  sky:'radial-gradient(circle at 80% 8%,rgba(255,255,255,.85),transparent 40%) 0 0/100% 100% no-repeat,radial-gradient(circle at 10% 85%,rgba(120,190,255,.8),transparent 55%) 0 0/100% 100% no-repeat,linear-gradient(170deg,#cfe8ff,#8cc6ff 60%,#b9dcff)',
+  sunset:'radial-gradient(circle at 85% 12%,rgba(255,214,102,.85),transparent 42%) 0 0/100% 100% no-repeat,radial-gradient(circle at 12% 88%,rgba(244,63,94,.6),transparent 52%) 0 0/100% 100% no-repeat,linear-gradient(165deg,#ff9a62,#ff5f8f 60%,#7c3aed)',
   wood:'repeating-linear-gradient(92deg,rgba(50,25,8,.14) 0 3px,rgba(0,0,0,0) 3px 12px) 0 0/100% 100%,linear-gradient(180deg,#a1703f,#7d5129 60%,#935f33)',
   leather:'radial-gradient(ellipse at 50% 25%,rgba(255,255,255,.06),rgba(0,0,0,.5) 90%) 0 0/100% 100% no-repeat,url("data:image/svg+xml;utf8,' + CH_LEATHER_SVG + '") 0 0/240px 240px repeat,#17140f'
 };
@@ -3836,6 +3844,7 @@ function chatCustApply(root, t){
   set('--cblur', (C.blur !== undefined ? C.blur : 14) + 'px');
   set('--cfs', C.fs ? String(C.fs / 100) : ''); at('data-cfs', C.fs ? '1' : '');
   at('data-cbs', C.bs || D.bs || '');
+  at('data-cgl', (C.gl === 'on' || (C.gl !== 'off' && D.gl)) ? '1' : '');            // iPhone-style glass on any theme
   const val = chWpCss(C.wp || D.wp || '', C.dim || 0);
   set('--cwp', val); at('data-wp', val ? '1' : '');
 }
@@ -3847,8 +3856,9 @@ function chatThemeCustom(){
     <div class="th-row"><div class="th-lbl"><span>Colours</span></div><div class="th-cols">
       <label class="th-col"><input type="color" data-cc="acc" value="${C.acc || D.acc || '#22c55e'}"><span>Accent / gold</span></label>
       <label class="th-col"><input type="color" data-cc="tx" value="${C.tx || (t === 'glass' ? '#3d2a10' : (t && t !== '' ? '#f3e3c3' : '#0f172a'))}"><span>Message text</span></label></div></div>
+    <div class="th-row"><div class="th-lbl"><span>🍏 iPhone glass effect</span></div>${seg('gl', [['', 'Theme'], ['on', 'On'], ['off', 'Off']])}<div class="th-note" style="margin:6px 0 0">Frosted, see-through bars and bubbles. Looks best with a wallpaper.</div></div>
     <div class="th-row"><div class="th-lbl"><span>My message style</span></div>${seg('bs', [['', 'Theme'], ['outline', 'Outline'], ['filled', 'Filled']])}</div>
-    <div class="th-row"><div class="th-lbl"><span>Wallpaper</span></div>${seg('wp', [['', 'Theme'], ['marble', 'Marble'], ['wood', 'Wood'], ['leather', 'Leather'], ['none', 'Plain'], ['photo', '📷 My photo']])}<input type="file" id="chWpFile" accept="image/*" hidden></div>
+    <div class="th-row"><div class="th-lbl"><span>Wallpaper</span></div>${seg('wp', [['', 'Theme'], ['aurora', 'Aurora'], ['sky', 'Sky'], ['sunset', 'Sunset'], ['marble', 'Marble'], ['wood', 'Wood'], ['leather', 'Leather'], ['none', 'Plain'], ['photo', '📷 My photo']])}<input type="file" id="chWpFile" accept="image/*" hidden></div>
     ${rng('rad', 'Bubble roundness', 4, 28, D.rad !== undefined ? D.rad : 12, 'px')}
     ${rng('blur', 'Glass blur', 0, 24, 14, 'px')}
     ${rng('dim', 'Darken wallpaper', 0, 70, 0, '%')}
@@ -4662,8 +4672,29 @@ async function vcIce(){
   return VC.ice;
 }
 async function vcMedia(kind){
-  const video = kind === 'video' ? { facingMode:'user', width:{ ideal:640 }, height:{ ideal:480 } } : false;
-  VC.local = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true }, video });
+  const audio = { echoCancellation:true, noiseSuppression:true };
+  if (kind !== 'video') VC.local = await navigator.mediaDevices.getUserMedia({ audio, video:false });
+  else {
+    /* Some phones switch their camera into a low-quality mode (wrong, bluish colours) when a small 640x480 picture is forced.
+       So ask for a normal HD picture first and only fall back to simpler requests if the phone refuses. */
+    const tries = [{ facingMode:'user', width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:30, max:30 } }, { facingMode:'user' }, true];
+    let err = null;
+    for (const v of tries){
+      try{ VC.local = await navigator.mediaDevices.getUserMedia({ audio, video:v }); err = null; break; }
+      catch(e){ err = e; if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'NotReadableError')) break; }
+    }
+    if (!VC.local) throw err || new Error('Could not start the camera.');
+    const vt = VC.local.getVideoTracks()[0];                     // switch the camera's own automatic colour balance / exposure / focus on
+    if (vt && vt.getCapabilities){
+      try{
+        const cap = vt.getCapabilities() || {}, adv = {};
+        if (cap.whiteBalanceMode && cap.whiteBalanceMode.includes('continuous')) adv.whiteBalanceMode = 'continuous';
+        if (cap.exposureMode && cap.exposureMode.includes('continuous')) adv.exposureMode = 'continuous';
+        if (cap.focusMode && cap.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+        if (Object.keys(adv).length) await vt.applyConstraints({ advanced:[adv] });
+      }catch(e){}
+    }
+  }
   const lv = document.getElementById('vcLocal');
   if (kind === 'video'){ lv.srcObject = VC.local; lv.classList.remove('hidden'); lv.play && lv.play().catch(() => {}); }
   else lv.classList.add('hidden');
