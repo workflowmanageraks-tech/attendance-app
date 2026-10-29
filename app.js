@@ -3731,13 +3731,16 @@ async function chatSyncAv(users, me, mePv){
 function chatProfile(){
   const u = chatPeer(S.chat.with); if (!u) return;
   if (u.isGroup) return groupChatForm(u.id);
+  if ($('#pfView')) return;
+  profileUnlock(u.id, u.name || u.username || '?', src => chatProfileShow(u, src));      // password first, then the card opens
+}
+function chatProfileShow(u, full){
   closeProfile();
-  const st = chatStatus(u), nm = u.name || u.username || '?', thumb = avSrc(u.id);
+  const st = chatStatus(u), nm = u.name || u.username || '?', pic = full || avSrc(u.id);
   const w = document.createElement('div'); w.className = 'pf-ov'; w.id = 'pfView';
   w.innerHTML = `<div class="pf-bar"><button type="button" class="pf-back" data-x aria-label="Back">←</button></div>
     <div class="pf-scroll">
-      <div class="pf-pic" id="pfPic" style="background:${chColor(u.id)}">${thumb ? `<img id="pfImg" alt="" src="${esc(thumb)}"><i class="pf-lock">🔒</i>` : `<span>${esc(nm.trim().charAt(0).toUpperCase())}</span>`}</div>
-      ${thumb ? '<div class="pf-hint">Tap the picture to view it in full (password needed)</div>' : ''}
+      <div class="pf-pic" id="pfPic" style="background:${chColor(u.id)}">${pic ? `<img id="pfImg" alt="" src="${esc(pic)}">` : `<span>${esc(nm.trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="pf-name">${esc(nm)}</div>
       <div class="ch-stat ${st.cls}" style="text-align:center">${esc(st.txt)}</div>
       <div class="pf-acts">
@@ -3752,17 +3755,17 @@ function chatProfile(){
     if (e.target.closest('[data-x]')) return closeProfile();
     const b = e.target.closest('[data-a]');
     if (b){ const f = b.dataset.a; closeProfile(); if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); return; }
-    if (e.target.closest('#pfPic') && thumb) photoUnlock(u.id, nm);
+    if (e.target.closest('#pfPic') && pic) photoViewer(nm, pic);
   };
 }
 function closeProfile(){ const o = $('#pfView'); if (o) o.remove(); closePhotoViewer(); }
 function closePhotoViewer(){ const o = $('#pvView'); if (o) o.remove(); }
-/* the big picture is only sent by the server after the person types THEIR OWN password */
-function photoUnlock(id, nm){
-  const w = openModal(`<h3>🔒 Enter your password</h3><p class="sub">To view ${esc(nm)}’s profile picture in full, enter the password of your own account.</p>
+/* a profile only opens after the person types THEIR OWN password; the server checks it and only then sends the sharp picture */
+function profileUnlock(id, nm, done){
+  const w = openModal(`<h3>🔒 Enter your password</h3><p class="sub">To open ${esc(nm)}’s profile, enter the password of your own account.</p>
     <div class="field"><label>Your password</label><input class="input" id="pwUnlock" type="password" autocomplete="off" autocapitalize="off" maxlength="200"></div>
     <div id="pwUnlockErr" style="color:#dc2626;font-size:calc(13px*var(--fs));min-height:18px;margin-top:6px"></div>
-    <div class="actions" style="margin-top:10px"><button class="btn ghost" type="button" id="pwUnlockNo">Cancel</button><button class="btn" type="button" id="pwUnlockOk">View photo</button></div>`);
+    <div class="actions" style="margin-top:10px"><button class="btn ghost" type="button" id="pwUnlockNo">Cancel</button><button class="btn" type="button" id="pwUnlockOk">Open profile</button></div>`);
   w.classList.add('pw-over');
   const inp = w.querySelector('#pwUnlock'), err = w.querySelector('#pwUnlockErr'), ok = w.querySelector('#pwUnlockOk');
   setTimeout(() => inp.focus(), 50);
@@ -3771,9 +3774,9 @@ function photoUnlock(id, nm){
     ok.disabled = true; ok.textContent = 'Checking…'; err.textContent = '';
     try{
       const r = await chatApi('chatPhotoFull', { id, password:pw });
-      w.remove(); photoViewer(nm, r.src || avSrc(id));
+      w.remove(); done(r.src || avSrc(id));
     }catch(e){
-      ok.disabled = false; ok.textContent = 'View photo'; inp.value = ''; inp.focus();
+      ok.disabled = false; ok.textContent = 'Open profile'; inp.value = ''; inp.focus();
       if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) { w.remove(); handleErr(e); }
       else err.textContent = (e && e.message) || 'Could not check the password.';
     }

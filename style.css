@@ -859,3 +859,6 @@ body.kb-open .ch-comp{padding-bottom:8px}
 .chat[data-cth="neon"]{--cb:#0d0221;--cm:#8b2bff;--ct:#1b0b3a;--cx:#f5e9ff;--chd:#170633;--cmu:#b79ae0;--ac:#ff2bd6}
 .chat[data-cth="neon"] .ch-b.me{box-shadow:0 0 10px rgba(139,43,255,.6)}
 .chat[data-cth="gold"]{--cb:#1c1710;--cm:#b8892b;--ct:#2a2218;--cx:#fdf3dc;--chd:#241d12;--cmu:#c9b27a;--ac:#d4a017}
+
+/* profile card: big sharp picture (the password was already asked before the card opened) */
+.pf-ov .pf-pic{width:100%;max-width:520px;border-radius:0;margin:0 auto;font-size:calc(96px*var(--fs))}
