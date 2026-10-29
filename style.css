@@ -962,3 +962,29 @@ body.kb-open .ch-comp{padding-bottom:8px}
 /* my own picture in a call is drawn on a canvas (true colours on every Android phone) */
 .vc-lsrc{position:absolute;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none}
 canvas.vc-local{transform:none}
+
+
+/* ---------- SETTINGS HUB (card tiles) ---------- */
+.set-gt{font-size:calc(12px*var(--fs));font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:22px 2px 10px}
+.set-hub .set-gt:first-child{margin-top:2px}
+.set-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--gap)}
+.set-tile{display:flex;align-items:center;gap:14px;text-align:left;width:100%;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;cursor:pointer;font:inherit;transition:.15s}
+.set-tile:hover{border-color:var(--brand);transform:translateY(-1px)}
+.set-tile:active{transform:scale(.985)}
+.set-ic{flex:none;width:46px;height:46px;border-radius:13px;background:var(--brand-soft);display:grid;place-items:center;font-size:calc(22px*var(--fs))}
+.set-tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.set-tx b{font-size:calc(15px*var(--fs))}
+.set-tx small{color:var(--muted);font-size:calc(12.5px*var(--fs));line-height:1.3}
+.set-tx em{font-style:normal;font-size:calc(11.5px*var(--fs));font-weight:700;color:var(--brand-ink);margin-top:2px}
+.set-go{flex:none;font-size:24px;color:var(--muted)}
+.set-bar{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.set-bar b{font-size:calc(16px*var(--fs))}
+.set-detail{max-width:1000px}
+.set-detail>.card{margin-bottom:var(--gap)}
+@media (max-width:640px){
+  .set-tiles{grid-template-columns:1fr 1fr;gap:10px}
+  .set-tile{flex-direction:column;align-items:flex-start;gap:10px;padding:14px}
+  .set-go{display:none}
+  .set-ic{width:40px;height:40px}
+}
+@media (max-width:360px){.set-tiles{grid-template-columns:1fr}}

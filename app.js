@@ -90,7 +90,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; S.setSec = null; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -1521,6 +1521,7 @@ function go(v){
   setMenu(false);
   if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
   if (v !== 'chat') document.body.classList.remove('chat-conv');
+  if (v === 'settings') S.setSec = null;
   S.view = v; applyAccess(); v = S.view; document.body.dataset.view = v;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.v === v));
   $('#pageTitle').textContent = TITLES[v][0];
@@ -3117,7 +3118,67 @@ function vSettings(){
   grid.insertAdjacentHTML('beforeend', bioCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
-  return dom.innerHTML;
+  return settingsHub(grid);
+}
+
+/* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
+const SET_MATCH = [['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['drive','Google Drive'],['activity','Activity log']];
+const SET_DEF = {
+  photo:['🖼','Profile photo','Your picture shown in Chat'],
+  security:['🔐','Login & security','Change username and password'],
+  bio:['👆','Fingerprint / Face','Unlock the app with biometrics'],
+  theme:['🎨','Appearance & layout','Colours, fonts, menu, dashboard look'],
+  general:['⚙️','General','App name, year, currency, e-mail, rounding'],
+  emps:['👥','Employees','Add, edit or remove employees'],
+  users:['🛡️','Users & access','Logins and what each user can see'],
+  groups:['💬','Groups','Chat groups and their members'],
+  status:['🏷️','Attendance codes','Status codes, paid factor and colours'],
+  cats:['💸','Expense categories','Income / expense categories'],
+  export:['📦','Data & export','Download Excel or PDF reports'],
+  drive:['☁️','Google Drive','Where chat photos & videos are stored'],
+  activity:['📋','Activity log','Who did what, and when']
+};
+const SET_GROUPS = [
+  ['Account & security', ['photo','security','bio']],
+  ['Customize', ['theme','general']],
+  ['People & access', ['emps','users','groups']],
+  ['Attendance & expenses', ['status','cats']],
+  ['Data & system', ['export','drive','activity']]
+];
+function setHint(k){
+  try {
+    if (k === 'emps') return (S.d.employees || []).length + ' employees';
+    if (k === 'users' && S.users) return S.users.length + ' users';
+    if (k === 'cats') return (S.d.categories || []).length + ' categories';
+    if (k === 'status') return (S.d.statuses || []).length + ' codes';
+  } catch(e){}
+  return '';
+}
+function setOpen(k){ S.setSec = k; render(); window.scrollTo(0, 0); }
+function setBack(){ S.setSec = null; render(); window.scrollTo(0, 0); }
+function settingsHub(grid){
+  const found = {}, def = {};
+  [...grid.children].forEach((c, i) => {
+    const t = ((c.querySelector('h3') || {}).textContent || '').trim();
+    const m = SET_MATCH.find(x => t.includes(x[1]));
+    const k = m && !found[m[0]] ? m[0] : 'x' + i;
+    found[k] = c; c.dataset.sec = k;
+    def[k] = SET_DEF[k] || [t.split(' ')[0] || '•', t.replace(/^\S+\s*/, '') || 'More', ''];
+  });
+  const open = found[S.setSec] ? S.setSec : null;
+  S.setSec = open;
+  [...grid.children].forEach(c => { c.style.gridColumn = ''; if (c.dataset.sec !== open) c.classList.add('hidden'); });
+  const tile = k => { const d = def[k], h = setHint(k);
+    return `<button type="button" class="set-tile" onclick="setOpen('${k}')"><span class="set-ic">${d[0]}</span><span class="set-tx"><b>${esc(d[1])}</b><small>${esc(d[2])}</small>${h ? `<em>${esc(h)}</em>` : ''}</span><span class="set-go">›</span></button>`; };
+  const used = new Set();
+  let hub = SET_GROUPS.map(([g, keys]) => {
+    const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
+    return ks.length ? `<div class="set-gt">${esc(g)}</div><div class="set-tiles">${ks.map(tile).join('')}</div>` : '';
+  }).join('');
+  const rest = Object.keys(found).filter(k => !used.has(k));
+  if (rest.length) hub += `<div class="set-gt">More</div><div class="set-tiles">${rest.map(tile).join('')}</div>`;
+  const bar = open ? `<div class="set-bar"><button type="button" class="btn ghost sm" onclick="setBack()">← Settings</button><b>${def[open][0]} ${esc(def[open][1])}</b></div>` : '';
+  return `<div class="set-root">${open ? bar : `<div class="set-hub">${hub}</div>`}<div class="set-detail">${grid.innerHTML}</div></div>`;
 }
 function applySettings(r){
   if (r.settings) S.d.settings = { ...S.d.settings, ...r.settings };
