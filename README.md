@@ -67,3 +67,15 @@ Sidebar > **Updates**, right below Deploy. The main admin opens **＋ Upload a n
 - Needs the same `GITHUB_TOKEN` (Contents: Read and write) and `GITHUB_REPO` as the Deploy tab. Nothing new to set up.
 - Downloads go through the server with a 2-minute pass, so the repository can stay private and nobody's login is put in a link.
 - Files only reach the app through the website (not from inside Apps Script).
+
+## Version tab (build an Android APK)
+
+Main admin only. **Version** (above Settings) lists the files of your repository; tick the ones that make up the website (index.html must be ticked), set the app name / package id / version and tap **Build APK**.
+GitHub Actions (`.github/workflows/build-apk.yml`) wraps the files with Capacitor, builds the APK (about 5–8 minutes) and stores it as a GitHub Release (`apk-<number>`). The tab shows progress and a **Download APK** button.
+
+One-time setup:
+1. Upload `.github/workflows/build-apk.yml` to the repository (default branch).
+2. The GITHUB_TOKEN on Render needs, besides Contents: Read and write, also **Actions: Read and write**.
+3. Repo → Settings → Actions → General → Workflow permissions → **Read and write permissions**.
+
+On the phone: open the downloaded .apk and allow "Install unknown apps". The APK is debug-signed, so uninstall the old one before installing a build from another run.

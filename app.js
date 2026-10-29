@@ -420,8 +420,8 @@ function applyAccess(){
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
   const chatOnly = ['att','exp','work','pw','link','lic','vcs','rack','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', p.rack === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary));
-  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', p.rack === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', !(S.me && S.me.primary));
+  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary)) || (S.view === 'version' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
@@ -1041,6 +1041,105 @@ async function depRestore(path, sha){
 const confirmBackendOk = (path, backend) => confirmBox('Restore this version of ' + depBase(path) + '?', backend ? 'This is a server file: the server restarts and a wrong version can take the site down.' : 'It is published as a new commit and the site redeploys.', 'Restore', backend);
 
 /* =====================================================================
+   VIEW: VERSION — choose repository files, GitHub builds an Android APK, download it here
+   ===================================================================== */
+const VER = { files:null, sel:new Set(), builds:[], err:'', ready:true, busy:false, starting:false, lastRun:0, timer:null,
+  name:'KS', id:'com.ks.app', ver:'1.0', seeded:false };
+const VER_SKIP = /^(server\.js|code\.gs|gas-shim\.js|google-store\.js|package(-lock)?\.json|readme\.md)$/i;
+const verWebFile = p => /\.(html|js|css|json|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|webmanifest|mp3|wav|mp4)$/i.test(p) && !VER_SKIP.test(p) && !/^(test|docs|\.github)\//i.test(p);
+async function verLoad(){
+  try {
+    const st = await api('deployStatus'); VER.ready = !!st.configured;
+    if (VER.ready){
+      const r = await api('verFiles'); VER.files = r.files;
+      if (!VER.seeded){ VER.files.filter(f => verWebFile(f.path)).forEach(f => VER.sel.add(f.path)); VER.seeded = true; }
+      await verRefresh(true); VER.err = '';
+    } else VER.files = [];
+  } catch(e){ VER.err = e.message; VER.files = VER.files || []; if (e.code === 'AUTH' || e.code === 'PAYDUE') handleErr(e); }
+  if (S.view === 'version') render();
+  verWatch();
+}
+async function verRefresh(quiet){
+  try { VER.builds = (await api('verList')).builds || []; if (VER.builds[0]) VER.lastRun = Math.max(VER.lastRun, VER.builds[0].id); }
+  catch(e){ if (!quiet) VER.err = e.message; else VER.err = e.message; }
+}
+function verBuildsHtml(){
+  const rows = VER.builds.map(b => {
+    const run = b.status !== 'completed', ok = b.conclusion === 'success';
+    return `<div class="log-item ${!run && !ok ? 'bad' : ''}"><div class="l1"><b style="word-break:break-word">${esc(b.title || ('Build #' + b.no))}</b><span class="muted">${esc(depWhen(b.at))}</span></div>
+      <div class="l2">${run ? '⏳ Building… (about 5–8 minutes)' : ok ? '✅ Ready' : '❌ Build failed — open the log to see why'}${b.asset ? ' · ' + updSize(b.asset.size) : ''}</div>
+      <div class="actions" style="margin-top:6px">${b.asset ? `<button class="btn sm" data-vdl="${esc(b.asset.id)}">⬇ Download APK</button>` : ''}
+        <a class="btn soft sm" href="${esc(b.url)}" target="_blank" rel="noopener">Log ↗</a></div></div>`;
+  }).join('');
+  return (VER.starting ? '<div class="log-item"><div class="l1"><b>⏳ Starting the build…</b></div></div>' : '') + (rows || (VER.starting ? '' : '<div class="empty-state">No builds yet</div>'));
+}
+function vVersion(){
+  if (!VER.files) return '<div class="card"><div class="empty-state">Loading…</div></div>';
+  if (!VER.ready) return `<div class="card"><h3>📱 Connect GitHub first</h3><p class="muted">Open the <b>Deploy</b> tab and connect GitHub (GITHUB_TOKEN + GITHUB_REPO on Render). For this tab the token also needs <b>Actions: Read and write</b>.</p></div>`;
+  const rows = VER.files.map(f => `<label class="log-item" data-vp="${esc(f.path.toLowerCase())}" style="display:flex;gap:10px;align-items:center;cursor:pointer;padding:8px 10px">
+      <input type="checkbox" data-vf="${esc(f.path)}" ${VER.sel.has(f.path) ? 'checked' : ''}><span style="flex:1;min-width:0;word-break:break-all">📄 ${esc(f.path)}</span><span class="muted">${updSize(f.size)}</span></label>`).join('');
+  return `<div class="card" style="margin-bottom:16px"><h3>📱 Make an Android app (.apk)</h3>
+      <p class="muted" style="margin-bottom:10px">Tick the files of your website. GitHub combines them into one Android app; when it is ready, download the <b>.apk</b> here and install it on your phone.
+      Keep <code>index.html</code> ticked. Server files (server.js, Code.gs …) are not needed inside the app — the app talks to your Render server.</p>
+      ${VER.err ? `<div class="log-item bad"><div class="l1"><b>${esc(VER.err)}</b></div></div>` : ''}
+      <div class="form-grid">
+        <div class="field"><label>App name</label><input class="input" id="verName" maxlength="30" value="${esc(VER.name)}"></div>
+        <div class="field"><label>Package id</label><input class="input" id="verId" maxlength="60" value="${esc(VER.id)}" autocapitalize="off"></div>
+        <div class="field"><label>Version</label><input class="input" id="verVer" maxlength="12" value="${esc(VER.ver)}"></div></div>
+      <div class="actions" style="margin:8px 0"><input class="input" id="verQ" placeholder="Search files…" style="flex:1;min-width:140px">
+        <button class="btn soft sm" id="verAll">Select all</button><button class="btn soft sm" id="verNone">Clear</button></div>
+      <div id="verList" style="max-height:340px;overflow:auto;border:1px solid var(--line,#e5e7eb);border-radius:10px">${rows || '<div class="empty-state">No files found</div>'}</div>
+      <div class="actions" style="margin-top:12px"><span class="muted" id="verCnt"></span><button class="btn" id="verGo" ${VER.busy ? 'disabled' : ''}>🔨 Build APK</button></div></div>
+    <div class="card"><h3>📦 Builds <button class="btn ghost sm" id="verRef">↻ Refresh</button></h3><div id="verBuilds">${verBuildsHtml()}</div></div>`;
+}
+function verCount(){ const c = document.getElementById('verCnt'); if (c) c.textContent = VER.sel.size + ' of ' + (VER.files || []).length + ' files selected'; }
+function bindVersion(){
+  const $q = id => document.getElementById(id);
+  verCount();
+  document.querySelectorAll('[data-vf]').forEach(c => c.onchange = () => { c.checked ? VER.sel.add(c.dataset.vf) : VER.sel.delete(c.dataset.vf); verCount(); });
+  const setAll = on => document.querySelectorAll('#verList [data-vf]').forEach(c => { if (c.closest('label').style.display === 'none') return; c.checked = on; on ? VER.sel.add(c.dataset.vf) : VER.sel.delete(c.dataset.vf); });
+  if ($q('verAll')) $q('verAll').onclick = () => { setAll(true); verCount(); };
+  if ($q('verNone')) $q('verNone').onclick = () => { setAll(false); verCount(); };
+  if ($q('verQ')) $q('verQ').oninput = e => { const q = e.target.value.trim().toLowerCase(); document.querySelectorAll('#verList [data-vp]').forEach(l => l.style.display = !q || l.dataset.vp.includes(q) ? '' : 'none'); };
+  ['verName:name', 'verId:id', 'verVer:ver'].forEach(x => { const [i, k] = x.split(':'); if ($q(i)) $q(i).oninput = e => { VER[k] = e.target.value; }; });
+  if ($q('verRef')) $q('verRef').onclick = async () => { await verRefresh(); verDraw(); verWatch(); };
+  if ($q('verGo')) $q('verGo').onclick = verBuild;
+  const bx = $q('verBuilds'); if (bx) bx.onclick = e => { const b = e.target.closest('[data-vdl]'); if (b) verDownload(b.dataset.vdl); };
+}
+function verDraw(){ const el = document.getElementById('verBuilds'); if (S.view === 'version' && el) el.innerHTML = verBuildsHtml(); }
+async function verBuild(){
+  if (VER.busy) return;
+  const files = [...VER.sel]; if (!files.length) return toast('Choose the files first', true);
+  if (!files.includes('index.html')) return toast('index.html must be ticked — it is the first screen of the app', true);
+  VER.busy = true; const btn = document.getElementById('verGo'); if (btn) btn.disabled = true;
+  try {
+    await api('verBuild', { files, appName:VER.name.trim(), appId:VER.id.trim(), version:VER.ver.trim() });
+    toast('Build started — it takes about 5–8 minutes'); VER.starting = true; VER.err = ''; verDraw(); verWatch();
+  } catch(e){ handleErr(e); }
+  VER.busy = false; if (btn) btn.disabled = false;
+}
+function verWatch(){
+  clearInterval(VER.timer); VER.ticks = 0;
+  const need = () => VER.starting || VER.builds.some(b => b.status !== 'completed');
+  if (!need()) return;
+  VER.timer = setInterval(async () => {
+    if (S.view !== 'version' || ++VER.ticks > 120){ clearInterval(VER.timer); return; }
+    const before = VER.lastRun; await verRefresh(true);
+    if (VER.starting && VER.lastRun > before) VER.starting = false;
+    if (VER.starting && VER.ticks > 12) VER.starting = false;
+    verDraw();
+    if (!need()) clearInterval(VER.timer);
+  }, 10000);
+}
+async function verDownload(asset){
+  try {
+    const r = await api('verTicket', { asset });
+    const a = document.createElement('a'); a.href = API_URL + '/updates/download?id=' + encodeURIComponent(r.id) + '&k=' + encodeURIComponent(r.ticket); a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove(); toast('Download started — open the .apk to install');
+  } catch(e){ handleErr(e); }
+}
+
+/* =====================================================================
    VIEW: UPDATES — the main admin uploads app files, every signed-in user can download them
    ===================================================================== */
 const UPD = { items:null, can:false, ready:true, max:40 * 1024 * 1024, err:'', open:false, busy:false };
@@ -1159,6 +1258,7 @@ const TITLES = {
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
+  version:['Version','Pick files from GitHub and build an Android app (.apk) to install on your phone'],
   settings:['Settings','Profile, security, appearance and preferences']
 };
 
@@ -1530,6 +1630,7 @@ function go(v){
   if (v === 'logins') loadLogs();
   if (v === 'deploy') depLoad();
   if (v === 'updates') updLoad();
+  if (v === 'version') verLoad();
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
@@ -1572,12 +1673,12 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, settings:vSettings})[S.view]();
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */

@@ -476,7 +476,7 @@ function makeApp(store, env) {
 
   // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
   // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
-  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress']);
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'verFiles', 'verBuild', 'verList', 'verTicket']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
   const DEP_EXT = /\.(js|css|html|md|json|gs|txt|svg)$/i;
   const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself
@@ -527,6 +527,58 @@ function makeApp(store, env) {
     await gh('PATCH', '/git/refs/heads/' + br, { sha: nc.sha });
     return { sha: String(nc.sha).slice(0, 7), url: nc.html_url, changed: changed.map(f => ({ path: f.path, isNew: !cur.has(f.path) })), skipped };
   }
+
+  // ---------- Version tab: build an Android APK from chosen repository files (GitHub Actions workflow .github/workflows/build-apk.yml) ----------
+  const VER_WF = 'build-apk.yml';
+  function verPathOk(p) {
+    p = String(p || '');
+    return p.length > 0 && p.length < 200 && /^[\w.\-\/]+$/.test(p) && !p.startsWith('/') && !p.includes('..') && !p.includes('//')
+      && p.split('/').every(s => s && !s.startsWith('.') && s !== 'node_modules');
+  }
+  async function verGh(method, url, body) {
+    try { return await gh(method, url, body); }
+    catch (e) {
+      if (e.code === 'GITHUB' && /could not find/i.test(e.message)) globalThis.fail_('The file .github/workflows/' + VER_WF + ' was not found on branch "' + GH.branch + '". Upload it to the repository first.', 'VERWF');
+      if (e.code === 'GITHUB' && /refused/i.test(e.message)) globalThis.fail_('GitHub refused. Give the token “Actions: Read and write” and “Contents: Read and write” permission (Fine-grained token → Repository permissions).', 'GITHUB');
+      throw e;
+    }
+  }
+  async function verRoute(a, req) {
+    if (a === 'verFiles') {
+      const t = await gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
+      return { ok: true, truncated: !!t.truncated, files: (t.tree || []).filter(x => x.type === 'blob' && verPathOk(x.path)).map(x => ({ path: x.path, size: x.size || 0 })) };
+    }
+    if (a === 'verList') {
+      const [rr, rl] = await Promise.all([verGh('GET', '/actions/workflows/' + VER_WF + '/runs?per_page=8'), gh('GET', '/releases?per_page=30')]);
+      const rel = new Map((Array.isArray(rl) ? rl : []).filter(r => /^apk-\d+$/.test(r.tag_name)).map(r => [r.tag_name, r]));
+      return { ok: true, builds: (rr.workflow_runs || []).map(r => {
+        const x = rel.get('apk-' + r.run_number), as = x && (x.assets || []).find(q => /\.apk$/i.test(q.name));
+        return { id: r.id, no: r.run_number, status: r.status, conclusion: r.conclusion, at: r.created_at, url: r.html_url, title: r.display_title || '',
+          asset: as ? { id: as.id, name: as.name, size: as.size } : null };
+      }) };
+    }
+    if (a === 'verBuild') {
+      const files = Array.isArray(req.files) ? [...new Set(req.files.map(String))] : [];
+      if (!files.length || files.length > 400) globalThis.fail_('Choose the files for the app first.', 'VER');
+      if (!files.includes('index.html')) globalThis.fail_('index.html must be selected — it is the first screen of the app.', 'VER');
+      const t = await gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
+      const have = new Set((t.tree || []).filter(x => x.type === 'blob' && verPathOk(x.path)).map(x => x.path));
+      const gone = files.find(f => !have.has(f)); if (gone) globalThis.fail_('"' + gone + '" is not in the repository.', 'VER');
+      const name = String(req.appName || '').trim(), id = String(req.appId || '').trim(), ver = String(req.version || '').trim();
+      if (!/^[\w][\w .\-]{0,29}$/.test(name)) globalThis.fail_('App name: 1–30 letters, numbers, space, dot or dash.', 'VER');
+      if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/i.test(id) || id.length > 60) globalThis.fail_('Package id must look like com.yourname.app', 'VER');
+      if (!/^\d+(\.\d+){0,3}$/.test(ver)) globalThis.fail_('Version must look like 1.0 or 2.3.1', 'VER');
+      const csv = files.join(',');
+      if (csv.length > 30000) globalThis.fail_('Too many files selected.', 'VER');
+      await verGh('POST', '/actions/workflows/' + VER_WF + '/dispatches', { ref: GH.branch, inputs: { files: csv, app_name: name, app_id: id, version: ver } });
+      return { ok: true };
+    }
+    if (a === 'verTicket') {
+      const aid = String(req.asset || ''); if (!/^\d+$/.test(aid)) globalThis.fail_('Invalid file.', 'VER');
+      const exp = Date.now() + 120000;
+      return { ok: true, id: 'apk:' + aid, ticket: exp + '.' + updTicketSig('apk:' + aid, exp) };
+    }
+  }
   async function deployRoute(req) {
     const uid = globalThis.checkToken_(req.token);
     if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
@@ -559,6 +611,7 @@ function makeApp(store, env) {
         at: c.commit && c.commit.author ? c.commit.author.date : '', total: items.length, done, items, limited,
         state: bad ? 'failure' : (items.length && done === items.length ? 'success' : 'pending') };
     }
+    if (a.startsWith('ver')) return verRoute(a, req);
     if (a === 'deployHistory') {
       const path = String(req.path || ''); if (!depPathOk(path)) globalThis.fail_('Invalid file.', 'DEPLOY');
       return { ok: true, commits: depCommits(await gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&path=' + encodeURIComponent(path) + '&per_page=15')) };
@@ -674,6 +727,14 @@ function makeApp(store, env) {
     const id = String(q.id || ''), [exp, sig] = String(q.k || '').split('.'), good = updTicketSig(id, exp);
     if (!sig || sig.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good)) || !(Number(exp) > Date.now()))
       return { code: 403, error: 'This download link expired. Go back to the app and tap Download again.' };
+    if (/^apk:\d+$/.test(id)) {                                    // an APK built by the Version tab (GitHub release asset)
+      if (!updReady()) return { code: 503, error: 'GitHub is not connected on the server.' };
+      const m = await gh('GET', '/releases/assets/' + id.slice(4));
+      const r = await fetch('https://api.github.com/repos/' + GH.repo + '/releases/assets/' + id.slice(4),
+        { headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/octet-stream', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy' } });
+      if (!r.ok || !r.body) return { code: 502, error: 'GitHub could not give this APK (error ' + r.status + ').' };
+      return { code: 200, u: { name: String(m.name || 'app.apk').replace(/[^\w.\-]/g, '_'), size: m.size || 0 }, body: r.body };
+    }
     const u = await withWb(() => updRead().find(x => x.id === id));
     if (!u) return { code: 404, error: 'This update was removed.' };
     if (!updReady()) return { code: 503, error: 'GitHub is not connected on the server.' };
