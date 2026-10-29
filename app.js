@@ -4593,7 +4593,7 @@ function vcRoot(){
   let el = document.getElementById('vcUI'); if (el) return el;
   el = document.createElement('div'); el.id = 'vcUI'; el.className = 'vc hidden';
   el.innerHTML = `<video id="vcRemote" class="vc-remote" autoplay playsinline></video>
-    <video id="vcLocal" class="vc-local hidden" autoplay playsinline muted></video>
+    <video id="vcLocal" class="vc-lsrc" autoplay playsinline muted></video><canvas id="vcLocalCv" class="vc-local hidden" width="208" height="296"></canvas>
     <div class="vc-top"><div class="vc-av" id="vcAv"></div><div class="vc-name" id="vcName"></div><div class="vc-stat" id="vcStat"></div></div>
     <button class="vc-minbtn" id="vcMin" type="button" aria-label="Back to chat" onclick="vcMini(true)">←</button>
     <div class="vc-bar" id="vcBar"></div>`;
@@ -4695,9 +4695,27 @@ async function vcMedia(kind){
       }catch(e){}
     }
   }
-  const lv = document.getElementById('vcLocal');
-  if (kind === 'video'){ lv.srcObject = VC.local; lv.classList.remove('hidden'); lv.play && lv.play().catch(() => {}); }
-  else lv.classList.add('hidden');
+  const lv = document.getElementById('vcLocal'), cv = document.getElementById('vcLocalCv');
+  if (kind === 'video'){ lv.srcObject = VC.local; lv.play && lv.play().catch(() => {}); cv.classList.remove('hidden'); vcLocalDraw(); }
+  else cv.classList.add('hidden');
+}
+/* My own small picture is painted on a canvas (not shown as a <video>): on some Android phones a mirrored, rounded <video> is drawn with red and blue swapped
+   (faces look blue). A canvas always shows the true colours. Double-tap the small picture to swap red/blue by hand if a phone still shows the wrong colours. */
+const vcSwap = () => { try { return localStorage.getItem('ks_vc_swap') === '1'; } catch (e) { return false; } };
+function vcLocalDraw(){
+  const lv = document.getElementById('vcLocal'), cv = document.getElementById('vcLocalCv'); if (!lv || !cv) return;
+  cancelAnimationFrame(VC.lraf);
+  const ctx = cv.getContext('2d', { willReadFrequently:true }); let last = 0;
+  if (!cv._dbl){ cv._dbl = 1; cv.addEventListener('dblclick', () => { try { localStorage.setItem('ks_vc_swap', vcSwap() ? '0' : '1'); } catch (e) {} toast(vcSwap() ? 'Colour fix ON (red/blue swapped)' : 'Colour fix OFF'); }); }
+  const step = ts => {
+    VC.lraf = requestAnimationFrame(step);
+    if (ts - last < 33 || document.hidden || lv.readyState < 2 || !lv.videoWidth) return;
+    last = ts;
+    const cw = cv.width, ch = cv.height, vw = lv.videoWidth, vh = lv.videoHeight, s = Math.max(cw / vw, ch / vh), sw = cw / s, sh = ch / s;
+    ctx.save(); ctx.translate(cw, 0); ctx.scale(-1, 1); ctx.drawImage(lv, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch); ctx.restore();
+    if (vcSwap()){ const im = ctx.getImageData(0, 0, cw, ch), d = im.data; for (let i = 0; i < d.length; i += 4){ const r = d[i]; d[i] = d[i + 2]; d[i + 2] = r; } ctx.putImageData(im, 0, 0); }
+  };
+  VC.lraf = requestAnimationFrame(step);
 }
 function vcMakePc(){
   const pc = new RTCPeerConnection({ iceServers: VC.ice }), remote = new MediaStream(), rv = document.getElementById('vcRemote');
@@ -4737,10 +4755,11 @@ function vcErrText(e){
   return (e && e.message) || 'Could not start the call.';
 }
 function vcCleanup(){
-  vcRingStop(); clearInterval(VC.tick); clearTimeout(VC.lost);
+  vcRingStop(); clearInterval(VC.tick); clearTimeout(VC.lost); cancelAnimationFrame(VC.lraf);
   try { VC.pc && VC.pc.close(); } catch {}
   try { VC.local && VC.local.getTracks().forEach(t => t.stop()); } catch {}
   ['vcRemote', 'vcLocal'].forEach(id => { const v = document.getElementById(id); if (v){ v.srcObject = null; } });
+  const lcv = document.getElementById('vcLocalCv'); if (lcv) lcv.classList.add('hidden');
   Object.assign(VC, { busy:false, cid:null, pc:null, local:null, role:'', peer:null, incoming:null, started:0, tick:null, muted:false, camOff:false, ending:false, answered:false });
   vcClose();
 }

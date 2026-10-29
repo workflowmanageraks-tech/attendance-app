@@ -958,3 +958,7 @@ body.kb-open .ch-comp{padding-bottom:8px}
   .chat[data-cth][data-cgl] .ch-comp textarea{background:color-mix(in srgb,var(--ct) 50%,transparent)}
   .chat[data-cth][data-cgl][data-cbs="outline"] .ch-b.me{background:color-mix(in srgb,#000 22%,transparent);border:1.5px solid var(--ac)}
 }
+
+/* my own picture in a call is drawn on a canvas (true colours on every Android phone) */
+.vc-lsrc{position:absolute;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none}
+canvas.vc-local{transform:none}
