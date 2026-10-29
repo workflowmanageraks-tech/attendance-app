@@ -81,11 +81,21 @@ function makeApp(store, env) {
   function calRun(jobs) {            // background, one by one - never blocks the app's own requests
     jobs.forEach(j => { calChain = calChain.then(() => calDo(j)).catch(e => console.warn('Calendar sync:', e.message)); });
   }
-  const page = (code, msg) => ({ code, html: '<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:32px;max-width:480px;margin:auto"><h2>' +
-    (code === 200 ? '✅ Google Calendar connected' : '⚠️ Could not connect') + '</h2><p>' + String(msg).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + '</p></body>' });
+  globalThis.drvState_ = uid => { const p = uid + '|' + (Date.now() + 600000) + '|' + crypto.randomBytes(6).toString('hex');
+    return Buffer.from(p).toString('base64url') + '.' + sign('drv:' + p); };
+  const drvCheck = st => { const [b, g] = String(st || '').split('.'); if (!b || !g) return '';
+    const p = Buffer.from(b, 'base64url').toString(), good = sign('drv:' + p);
+    if (g.length !== good.length || !crypto.timingSafeEqual(Buffer.from(g), Buffer.from(good))) return '';
+    const [uid, exp] = p.split('|'); return Number(exp) > Date.now() ? uid : ''; };
+  globalThis.mediaSign_ = (id, uid, exp) => sign('media:' + id + '|' + uid + '|' + exp);
+  let drvTok = null;
+  const page = (code, msg, what) => ({ code, html: '<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:32px;max-width:480px;margin:auto"><h2>' +
+    (code === 200 ? '✅ ' + (what || 'Google Calendar') + ' connected' : '⚠️ Could not connect') + '</h2><p>' + String(msg).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + '</p></body>' });
   async function runOauth(q) {
     if (q.error) return page(400, 'Google said: ' + q.error);
-    const uid = calCheck(q.state); if (!uid) return page(400, 'This link expired. Go back to the app and click "Connect Google Calendar" again.');
+    let uid = calCheck(q.state), drv = false;
+    if (!uid){ uid = drvCheck(q.state); drv = !!uid; }
+    if (!uid) return page(400, 'This link expired. Go back to the app and click "Connect" again.');
     if (!globalThis.CAL_CFG_.ready) return page(400, 'Calendar sync is not configured on the server.');
     const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ code: q.code || '', client_id: env.CAL_CLIENT_ID, client_secret: env.CAL_CLIENT_SECRET, redirect_uri: globalThis.CAL_CFG_.redirect, grant_type: 'authorization_code' }) });
@@ -96,6 +106,11 @@ function makeApp(store, env) {
     try { email = (await (await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: 'Bearer ' + j.access_token } })).json()).email || ''; } catch (e) {}
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
     const p = globalThis.PropertiesService.getScriptProperties();
+    if (drv){
+      p.setProperty('DRV_TOK', enc(j.refresh_token)); p.setProperty('DRV_META', JSON.stringify({ email, at: Date.now() })); p.setProperty('DRV_FOLDER', '');
+      await wb.flush(); drvTok = null;
+      return page(200, (email ? email + ' is' : 'Your Drive is') + ' now linked. Photos and videos sent in Chat will be saved in a folder called \"KS Chat Media\". Close this tab and go back to the app.', 'Google Drive');
+    }
     p.setProperty('CAL_TOK_' + uid, enc(j.refresh_token));
     p.setProperty('CAL_META_' + uid, JSON.stringify({ email, at: Date.now() }));
     await wb.flush(); accessCache.delete(uid);
@@ -681,6 +696,68 @@ function makeApp(store, env) {
     return Promise.resolve().then(() => trRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
   };
 
+  // ---------- Chat photos & videos -> the main admin's Google Drive ----------
+  // The main admin connects Drive once (Settings). Files go to a folder "KS Chat Media" (scope drive.file: this app only sees files it made itself).
+  // A photo / video message is created ONLY through this route, so nobody can fake one. Viewing uses short-lived signed links (see chatMediaTicket_).
+  const MEDIA_MAX = 45 * 1048576, MEDIA_RE = /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime|3gpp|x-m4v))$/;
+  const gp = () => globalThis.PropertiesService.getScriptProperties();
+  async function drvAccess() {
+    if (drvTok && drvTok.exp > Date.now() + 60000) return drvTok.v;
+    const refresh = await withWb(() => dec(gp().getProperty('DRV_TOK') || ''));
+    if (!refresh) throw new Error('Google Drive is not connected. Ask the main admin to connect it in Settings.');
+    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: env.CAL_CLIENT_ID || '', client_secret: env.CAL_CLIENT_SECRET || '', refresh_token: refresh, grant_type: 'refresh_token' }) });
+    const j = await r.json().catch(() => ({}));
+    if (!j.access_token) throw new Error('Google Drive login failed (' + (j.error_description || j.error || r.status) + '). Ask the main admin to reconnect Drive in Settings.');
+    drvTok = { v: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 };
+    return drvTok.v;
+  }
+  async function drvFolder(tok) {
+    const id = await withWb(() => gp().getProperty('DRV_FOLDER') || '');
+    if (id) {
+      const c = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?fields=id,trashed', { headers: { Authorization: 'Bearer ' + tok } });
+      const o = c.ok ? await c.json().catch(() => ({})) : {};
+      if (o.id && !o.trashed) return id;
+    }
+    const r = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', { method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'KS Chat Media', mimeType: 'application/vnd.google-apps.folder' }) });
+    const j = await r.json().catch(() => ({}));
+    if (!j.id) throw new Error('Could not create the Drive folder: ' + ((j.error && j.error.message) || r.status));
+    await withWb(() => gp().setProperty('DRV_FOLDER', j.id));
+    return j.id;
+  }
+  async function mediaUpload(token, q, buf) {
+    const uid = globalThis.checkToken_(token);
+    if (!uid) { const e = new Error('Session expired. Please log in again.'); e.code = 'AUTH'; throw e; }
+    const mime = String(q.mime || '').toLowerCase().split(';')[0], vid = mime.indexOf('video/') === 0, to = String(q.to || ''), cid = String(q.cid || '');
+    if (!MEDIA_RE.test(mime)) throw new Error('Only photos and videos can be sent.');
+    if (!buf.length) throw new Error('The file is empty.');
+    if (!vid && buf.length > 15 * 1048576) throw new Error('This photo is too big (max 15 MB).');
+    await withWb(() => globalThis.route_({ action: 'chatMediaCheck', token, to }));          // is this person allowed to write to this chat?
+    let tok = await drvAccess(), folder = await drvFolder(tok);
+    const nm = String(q.name || (vid ? 'video' : 'photo')).replace(/[^\w.\- ]+/g, '_').slice(0, 80);
+    const meta = { name: new Date().toISOString().slice(0, 10) + '_' + uid + '_' + nm, parents: [folder], mimeType: mime, description: 'KS chat media sent by ' + uid };
+    const bnd = 'ksb' + crypto.randomBytes(8).toString('hex');
+    const body = Buffer.concat([Buffer.from('--' + bnd + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(meta) + '\r\n--' + bnd + '\r\nContent-Type: ' + mime + '\r\n\r\n'), buf, Buffer.from('\r\n--' + bnd + '--')]);
+    const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST',
+      headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'multipart/related; boundary=' + bnd }, body });
+    const j = await r.json().catch(() => ({}));
+    if (!j.id) { if (r.status === 401) drvTok = null; throw new Error('Google Drive did not accept the file: ' + ((j.error && j.error.message) || r.status)); }
+    const text = 'ksmedia:' + JSON.stringify({ i: j.id, k: vid ? 'vid' : 'img', n: nm, s: buf.length, c: String(q.c || '').replace(/\s+/g, ' ').trim().slice(0, 300) });
+    return withWb(() => { globalThis.MEDIA_OK_ = true; try { return globalThis.route_({ action: 'chatSend', token, to, cid, text }); } finally { globalThis.MEDIA_OK_ = false; } });
+  }
+  async function mediaOpen(q, range) {
+    const id = String(q.id || ''), uid = String(q.u || ''), exp = String(q.e || ''), k = String(q.k || '');
+    if (!/^[A-Za-z0-9_-]{10,100}$/.test(id)) return { code: 400, error: 'Bad link.' };
+    const good = globalThis.mediaSign_(id, uid, exp);
+    if (k.length !== good.length || !crypto.timingSafeEqual(Buffer.from(k), Buffer.from(good)) || !(Number(exp) > Date.now())) return { code: 403, error: 'This link expired. Reload the chat.' };
+    const tok = await drvAccess(), h = { Authorization: 'Bearer ' + tok, 'Accept-Encoding': 'identity' };
+    if (range && /^bytes=\d*-\d*$/.test(range)) h.Range = range;
+    const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?alt=media', { headers: h });
+    if (!r.ok || !r.body) { if (r.status === 401) drvTok = null; return { code: r.status === 404 ? 404 : 502, error: 'Google Drive could not give this file (error ' + r.status + ').' }; }
+    return { code: r.status, r };
+  }
+
   let chain = Promise.resolve();
   function withWb(fn) {                                                // run fn in the request queue with fresh sheet data, save its changes
     const job = async () => {
@@ -720,6 +797,7 @@ function makeApp(store, env) {
   };
   const errOut = err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' });
   return { handle: body => fastCall(body) || fastTr(body) || (chain = chain.then(() => run(body), () => run(body))),
+           mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
            updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
 }
@@ -751,6 +829,24 @@ function start(app, env) {
       const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
       rq.on('data', c => { n += c.length; if (n > app.updMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
       rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.updMax / 1048576) + ' MB).', code: 'UPD' } : await app.upload(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
+      return;
+    }
+    if (rq.method === 'GET' && url.pathname === '/chat/media' && app.mediaOpen) {           // stream a chat photo / video from Drive (signed link, Range for video seeking)
+      const sp = url.searchParams;
+      return app.mediaOpen(Object.fromEntries(sp), rq.headers.range).then(o => {
+        if (!o.r) { rs.writeHead(o.code, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); return rs.end(String(o.error)); }
+        const ct = String(o.r.headers.get('content-type') || '').toLowerCase().split(';')[0], okType = app.mediaRe.test(ct);
+        const h = { 'Content-Type': okType ? ct : 'application/octet-stream', 'Cache-Control': 'private, max-age=21600', 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', 'Cross-Origin-Resource-Policy': 'cross-origin' };
+        ['content-length', 'content-range'].forEach(n => { const v = o.r.headers.get(n); if (v) h[n] = v; });
+        if (sp.get('dl') || !okType) h['Content-Disposition'] = 'attachment; filename="' + String(sp.get('n') || 'file').replace(/[^\w.\- ]/g, '_') + '"';
+        rs.writeHead(o.code, h);
+        const src = Readable.fromWeb(o.r.body); src.on('error', () => rs.destroy()); rs.on('close', () => src.destroy()); src.pipe(rs);
+      }).catch(() => { rs.writeHead(500); rs.end('Error'); });
+    }
+    if (rq.method === 'POST' && url.pathname === '/chat/media/upload' && app.mediaUp) {     // raw photo / video body, session token in the Authorization header
+      const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
+      rq.on('data', c => { n += c.length; if (n > app.mediaMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
+      rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.mediaMax / 1048576) + ' MB).', code: 'MEDIA' } : await app.mediaUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
       return;
     }
     if (rq.method === 'GET' && rq.url.startsWith('/oauth/google/callback') && app.oauth) {

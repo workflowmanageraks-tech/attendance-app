@@ -163,7 +163,7 @@ var WRITE_ACTIONS = {
   addVcs: 1, updateVcs: 1,
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
-  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1,
+  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, driveDisconnect: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
@@ -182,7 +182,7 @@ var NEED = {
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
-var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1 };
+var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1, driveStatus: 1, driveAuthUrl: 1, driveDisconnect: 1 };
 // Admins, and any user the admin ticked "Can add new users" for. Such a user only ever manages the users HE added.
 var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1 };
 
@@ -328,6 +328,13 @@ function route_(req) {
       case 'chatPhotos':        return chatPhotos_(req);
       case 'chatPhotoFull':     return chatPhotoFull_(req);
       case 'setMyPhoto':        out = setMyPhoto_(req); break;
+      case 'getPhotoPrivacy':   return getPhotoPrivacy_();
+      case 'setPhotoPrivacy':   out = setPhotoPrivacy_(req); break;
+      case 'driveStatus':       return driveStatus_();
+      case 'driveAuthUrl':      return driveAuthUrl_();
+      case 'driveDisconnect':   out = driveDisconnect_(); break;
+      case 'chatMediaCheck':    return chatMediaCheck_(req);
+      case 'chatMediaTicket':   return chatMediaTicket_(req);
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
       case 'chatTranslate':     return chatTranslate_(req);
@@ -2571,15 +2578,15 @@ function chatUsers_() {
     if (!ms && a.lastLogin) { var t = parseDue_(a.lastLogin); if (!isNaN(t)) ms = t; }     // never pinged yet -> last login
     var p = presence_(ms, now), o = info[a.id] || { unread: 0, last: null };
     total += o.unread;
-    return { id: a.id, name: a.name || a.username, username: a.username, role: a.role, online: p.online, ago: p.ago, pv: avVer_(avm[a.id]),
-      unread: o.unread, lastText: o.last ? o.last.text.slice(0, 80) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false };
+    return { id: a.id, name: a.name || a.username, username: a.username, role: a.role, online: p.online, ago: p.ago, pv: avCanSee_(a.id, CTX.uid) ? avVer_(avm[a.id]) : 0,
+      unread: o.unread, lastText: o.last ? chatPreview_(o.last.text) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false };
   });
   var nm = chatNameMap_();
   var groups = myG.map(function (g) {
     var o = ginfo[g.id] || { unread: 0, last: null };
     total += o.unread;
     return { id: g.id, isGroup: true, name: g.name, owner: g.owner, mineOwner: g.owner === CTX.uid, members: chatGroupMemberList_(g, nm),
-      unread: o.unread, lastText: o.last ? o.last.text.slice(0, 80) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false,
+      unread: o.unread, lastText: o.last ? chatPreview_(o.last.text) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false,
       lastFrom: o.last && o.last.from !== CTX.uid ? (nm[o.last.from] || 'Someone') : '' };
   });
   return { ok: true, users: users, groups: groups, unread: total, now: now, me: CTX.uid, mePv: avVer_(avm[CTX.uid]) };
@@ -2605,6 +2612,35 @@ function setMyPhoto_(req) {
   if (f) P.setProperty('AVF_' + CTX.uid, ts + '|' + f); else P.deleteProperty('AVF_' + CTX.uid);
   return { ok: true, pv: ts };
 }
+// ---------- who can see my chat photo ----------
+// AVP_<userId> = {"mode":"all|none|only|except","ids":[...]}.  Default = everybody who can see me in Chat. The main admin always sees every photo.
+function avPriv_(id) {
+  var v = String(PropertiesService.getScriptProperties().getProperty('AVP_' + id) || '');
+  if (!v) return { mode: 'all', ids: [] };
+  try {
+    var o = JSON.parse(v);
+    if (['none', 'only', 'except'].indexOf(o.mode) < 0) return { mode: 'all', ids: [] };
+    return { mode: o.mode, ids: Array.isArray(o.ids) ? o.ids.map(String) : [] };
+  } catch (e) { return { mode: 'all', ids: [] }; }
+}
+function avCanSee_(owner, viewer) {
+  if (owner === viewer || viewer === 'ADMIN') return true;
+  var p = avPriv_(owner);
+  if (p.mode === 'none') return false;
+  if (p.mode === 'only') return p.ids.indexOf(viewer) >= 0;
+  if (p.mode === 'except') return p.ids.indexOf(viewer) < 0;
+  return true;
+}
+function getPhotoPrivacy_() { var p = avPriv_(CTX.uid); return { ok: true, mode: p.mode, ids: p.ids }; }
+function setPhotoPrivacy_(req) {
+  var mode = String(req.mode || 'all'), P = PropertiesService.getScriptProperties();
+  if (['all', 'none', 'only', 'except'].indexOf(mode) < 0) fail_('Choose who can see your photo.');
+  var ok = {}; chatPeers_().forEach(function (a) { ok[a.id] = 1; });
+  var ids = (Array.isArray(req.ids) ? req.ids : []).map(String).filter(function (x, i, a) { return ok[x] && a.indexOf(x) === i; }).slice(0, 200);
+  if ((mode === 'only' || mode === 'except') && !ids.length && mode === 'only') mode = 'none';   // "only these people" with nobody ticked = nobody
+  if (mode === 'all') P.deleteProperty('AVP_' + CTX.uid); else P.setProperty('AVP_' + CTX.uid, JSON.stringify({ mode: mode, ids: ids }));
+  return { ok: true, mode: mode, ids: ids };
+}
 function chatPhotoFull_(req) {
   // the sharp picture is only handed out after the person re-enters THEIR OWN password (5 wrong tries lock it for 5 minutes)
   var cache = CacheService.getScriptCache(), fkey = 'pvfail_' + CTX.uid, fails = Number(cache.get(fkey) || 0);
@@ -2620,7 +2656,7 @@ function chatPhotoFull_(req) {
   if (id === 'me') id = CTX.uid;
   allowed[CTX.uid] = 1;
   chatPeers_().forEach(function (a) { allowed[a.id] = 1; });
-  if (!allowed[id]) return { ok: true, pv: 0, src: '' };
+  if (!allowed[id] || !avCanSee_(id, CTX.uid)) return { ok: true, pv: 0, src: '' };
   var v = String(PropertiesService.getScriptProperties().getProperty('AVF_' + id) || ''), i = v.indexOf('|');
   if (i < 1) return { ok: true, pv: 0, src: '' };
   return { ok: true, pv: Number(v.slice(0, i)) || 0, src: v.slice(i + 1) };
@@ -2631,7 +2667,7 @@ function chatPhotos_(req) {
   chatPeers_().forEach(function (a) { allowed[a.id] = 1; });
   want.forEach(function (id) {
     id = String(id); if (id === 'me') id = CTX.uid;
-    if (!allowed[id] || !m[id]) return;
+    if (!allowed[id] || !m[id] || !avCanSee_(id, CTX.uid)) return;
     var i = m[id].indexOf('|');
     out[id] = { pv: Number(m[id].slice(0, i)) || 0, src: m[id].slice(i + 1) };
   });
@@ -2688,10 +2724,65 @@ function chatTranslate_(req) {
   });
   return { ok: true, translations: out };
 }
+// ---------- chat photos & videos (stored in the main admin's Google Drive by the Node server) ----------
+// A media message is a normal chat row whose text is  ksmedia:{"i":driveFileId,"k":"img|vid","n":name,"s":bytes,"c":caption}
+function chatMediaParse_(text) {
+  if (String(text).indexOf('ksmedia:') !== 0) return null;
+  try { var o = JSON.parse(String(text).slice(8)); return (o && /^[A-Za-z0-9_-]{10,100}$/.test(String(o.i || ''))) ? o : null; } catch (e) { return null; }
+}
+function chatPreview_(text) {
+  var o = chatMediaParse_(text);
+  if (!o) return String(text).slice(0, 80);
+  return ((o.k === 'vid' ? '🎥 Video' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80);
+}
+function chatMediaCheck_(req) {
+  if (isChatGroupId_(req.to)) chatGroupOk_(String(req.to).trim()); else chatPeerOk_(req.to);
+  return { ok: true };
+}
+// Hands out short-lived signed links, only for files that sit in a conversation this person belongs to.
+function chatMediaTicket_(req) {
+  if (typeof mediaSign_ === 'undefined') fail_('Photos and videos need the Node server.');
+  var want = Array.isArray(req.ids) ? req.ids.slice(0, 40).map(String) : [], out = {}, rows = chatRows_(), mine = null;
+  var exp = (Math.floor(Date.now() / 21600000) + 2) * 21600000;
+  want.forEach(function (id) {
+    if (!/^[A-Za-z0-9_-]{10,100}$/.test(id)) return;
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var r = rows[i], o = chatMediaParse_(r.text);
+      if (!o || o.i !== id) continue;
+      var ok = r.from === CTX.uid || r.to === CTX.uid;
+      if (!ok && isChatGroupId_(r.to)) { if (mine === null) mine = myChatGroups_().map(function (g) { return g.id; }); ok = mine.indexOf(r.to) >= 0; }
+      if (ok) out[id] = { u: CTX.uid, e: exp, k: mediaSign_(id, CTX.uid, exp) };
+      return;
+    }
+  });
+  return { ok: true, tickets: out };
+}
+function drvMeta_() { var v = PropertiesService.getScriptProperties().getProperty('DRV_META'); if (!v) return null; try { return JSON.parse(v); } catch (e) { return null; } }
+function driveStatus_() {
+  if (!CTX.primary) fail_('Only the main admin can manage Google Drive.', 'PERM');
+  var m = drvMeta_();
+  return { ok: true, configured: typeof CAL_CFG_ !== 'undefined' && !!CAL_CFG_.ready && typeof drvState_ !== 'undefined', connected: !!m, email: m ? m.email : '', at: m ? m.at : 0 };
+}
+function driveAuthUrl_() {
+  if (!CTX.primary) fail_('Only the main admin can connect Google Drive.', 'PERM');
+  if (typeof CAL_CFG_ === 'undefined' || !CAL_CFG_.ready || typeof drvState_ === 'undefined') fail_('Google sign-in is not set up on the server yet (CAL_CLIENT_ID / CAL_CLIENT_SECRET / PUBLIC_URL).');
+  var url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(CAL_CFG_.clientId) +
+    '&redirect_uri=' + encodeURIComponent(CAL_CFG_.redirect) + '&response_type=code&access_type=offline&prompt=consent' +
+    '&scope=' + encodeURIComponent('https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email') +
+    '&state=' + encodeURIComponent(drvState_(CTX.uid));
+  return { ok: true, url: url };
+}
+function driveDisconnect_() {
+  if (!CTX.primary) fail_('Only the main admin can disconnect Google Drive.', 'PERM');
+  var p = PropertiesService.getScriptProperties();
+  p.setProperty('DRV_META', ''); p.setProperty('DRV_TOK', ''); p.setProperty('DRV_FOLDER', '');
+  return { ok: true };
+}
 function chatSend_(req) {
   var peer = isChatGroupId_(req.to) ? chatGroupOk_(String(req.to).trim()) : chatPeerOk_(req.to);
   var text = String(req.text === undefined || req.text === null ? '' : req.text).replace(/\r\n?/g, '\n').trim();
   if (!text) fail_('Type a message first.');
+  if (text.indexOf('ksmedia:') === 0 && !(typeof MEDIA_OK_ !== 'undefined' && MEDIA_OK_)) fail_('Use the 📎 button to send photos and videos.');
   if (text.length > CHAT_MAX_LEN) text = text.slice(0, CHAT_MAX_LEN);
   var cid = String(req.cid || '');
   var id = /^[A-Za-z0-9]{8,24}$/.test(cid) ? cid : Utilities.getUuid().replace(/-/g, '').slice(0, 12);

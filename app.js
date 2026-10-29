@@ -1309,7 +1309,7 @@ function photoCard(){
   return `<div class="card" id="phCard"><h3>🖼 Profile photo</h3>
     <p class="muted" style="margin-bottom:12px">This picture is shown next to your name in Chat, to the people who can see you.</p>
     <div class="ph-row"><div class="ch-av ph-big" style="background:${chColor(id || 'x')}">${src ? `<img class="ch-img" alt="" src="${esc(src)}">` : ''}${esc(nm.charAt(0).toUpperCase())}</div>
-      <div class="ph-btns"><label class="btn" for="phFile">📷 ${src ? 'Change photo' : 'Choose photo'}</label><input type="file" id="phFile" accept="image/*" hidden onchange="photoPick(this)">${src ? '<button class="btn ghost" type="button" onclick="photoRemove()">Remove</button>' : ''}</div></div></div>`;
+      <div class="ph-btns"><label class="btn" for="phFile">📷 ${src ? 'Change photo' : 'Choose photo'}</label><input type="file" id="phFile" accept="image/*" hidden onchange="photoPick(this)">${src ? '<button class="btn ghost" type="button" onclick="photoRemove()">Remove</button>' : ''}<button class="btn ghost" type="button" onclick="photoPrivacy()">🔒 Who can see it</button></div></div></div>`;
 }
 async function photoPick(inp){
   const f = inp.files && inp.files[0]; inp.value = ''; if (!f) return;
@@ -1576,7 +1576,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -3115,6 +3115,7 @@ function vSettings(){
   grid.insertAdjacentHTML('afterbegin', themeCard());
   grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
+  if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return dom.innerHTML;
 }
@@ -3650,7 +3651,7 @@ boot();
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
    ===================================================================== */
-const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
+const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, mu:{}, mBusy:{}, defer:false, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
 S.chat = chatFresh();
 let chatTimer = null;
 function chatReset(){ clearInterval(chatTimer); chatTimer = null; S.chat = chatFresh(); AV = {}; try{ localStorage.removeItem('ks_av_v1'); }catch(e){} document.body.classList.remove('chat-conv'); chatBadge(); }
@@ -3888,7 +3889,7 @@ function chatRenderPane(){
     </div>
     <div class="ch-sel" id="chSel" style="display:none"></div>
     <div class="ch-msgs" id="chMsgs"></div>
-    <div class="ch-comp"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
+    <div class="ch-comp"><button class="ch-att" type="button" onclick="document.getElementById('chFile').click()" aria-label="Send photo or video">📎</button><input type="file" id="chFile" accept="image/*,video/*" multiple hidden onchange="chatAttach(this)"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
       <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
   const ta = $('#chInput');
   ta.value = S.chat.drafts[u.id] || '';
@@ -3909,6 +3910,7 @@ function chatRenderMsgs(toBottom){
   const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0;
   const sig = arr.map(m => m.id + (m.state || '') + (m.mine && m.t <= pr ? 'r' : '')).join(',') + '|' + S.chat.histLoaded[id] + '|' + S.chat.lang + '|' + S.chat.trv;
   if (sig === S.chat.sig && !toBottom) return;
+  if (!toBottom && [...box.querySelectorAll('video')].some(v => !v.paused && !v.ended)){ S.chat.defer = true; return; }   // never rebuild the chat under a playing video
   S.chat.sig = sig;
   const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90, keepTop = box.scrollTop;
   if (!arr.length){
@@ -3927,11 +3929,11 @@ function chatRenderMsgs(toBottom){
     }
     const v = chatView(m), sl = S.chat.sel.has(m.id);
     const tg = v.busy ? '<div class="tg">🌐 Translating…</div>' : v.fail ? '<div class="tg bad">🌐 Could not translate · tap to retry</div>' : v.lang ? `<div class="tg">🌐 ${esc(CH_LANGS[v.lang].short)} · tap for options</div>` : '';
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}<div class="tx">${esc(v.text)}</div>${tg}<div class="mt">${meta}</div></div>`;
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${v.text ? tg : ''}<div class="mt">${meta}</div></div>`;
   });
   box.innerHTML = html;
   if (toBottom || near) box.scrollTop = box.scrollHeight; else box.scrollTop = keepTop;
-  chatNeedTr();
+  chatNeedTr(); chatNeedMedia();
 }
 function chatMerge(id, list){
   const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
@@ -3986,7 +3988,7 @@ async function chatFetchConv(first){
     if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
     if (u && r.messages.some(m => !m.mine)){
       u.unread = 0; chatSumUnread();
-      const last = r.messages[r.messages.length - 1]; u.lastText = last.text.slice(0, 80); u.lastTime = last.t; u.lastMine = last.mine;
+      const last = r.messages[r.messages.length - 1]; u.lastText = chPrev(last.text); u.lastTime = last.t; u.lastMine = last.mine;
       chatRenderList();
     }
     chatHeader();
@@ -4048,19 +4050,19 @@ function chatLangOf(m){
   return l === 'orig' ? '' : (l || '');
 }
 function chatView(m){
-  const l = chatLangOf(m); if (!l || m.state) return { text:m.text };
+  const l = chatLangOf(m); if (!l || m.state) return { text:chTxt(m) };
   const k = l + '|' + m.id;
   if (S.chat.tr[k] != null) return { text:S.chat.tr[k], lang:l };
-  if (S.chat.trFail[k]) return { text:m.text, fail:true, lang:l };
-  return { text:m.text, busy:true, lang:l };
+  if (S.chat.trFail[k]) return { text:chTxt(m), fail:true, lang:l };
+  return { text:chTxt(m), busy:true, lang:l };
 }
 function chatNeedTr(){
   const c = S.chat, id = c.with; if (!id) return;
   const arr = (c.msgs[id] || []).slice(-60), by = {};
   arr.forEach(m => {
-    const l = chatLangOf(m); if (!l || m.state || !String(m.text).trim()) return;
+    const l = chatLangOf(m); if (!l || m.state || !String(chTxt(m)).trim()) return;
     const k = l + '|' + m.id; if (c.tr[k] != null || c.trFail[k] || c.trBusy[k]) return;
-    (by[l] = by[l] || []).push({ id:m.id, text:m.text });
+    (by[l] = by[l] || []).push({ id:m.id, text:chTxt(m) });
   });
   Object.keys(by).forEach(l => chatTrRun(by[l], l, id));
 }
@@ -4124,11 +4126,12 @@ function chatMsgMenu(id){
     <div class=\"ch-opts\">
       ${Object.keys(CH_LANGS).map(k => `<button class=\"btn ${cur === k ? '' : 'ghost'}\" data-l=\"${k}\">🌐 ${cur === k ? '✓ ' : ''}${esc(CH_LANGS[k].name)}</button>`).join('')}
       <button class=\"btn ghost\" data-l=\"orig\">↩ Show original</button>
-      <button class=\"btn ghost\" data-copy>📋 Copy</button>
+      ${v.text ? '<button class=\"btn ghost\" data-copy>📋 Copy</button>' : ''}
+      ${chMediaUrl(m) ? `<a class=\"btn ghost\" href=\"${esc(chMediaUrl(m, true))}\" download>⬇ Download</a>` : ''}
       <button class=\"btn ghost\" data-pick>☑ Select</button>
     </div><div class=\"foot\"><button class=\"btn ghost\" data-x>Close</button></div>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
-  w.querySelector('[data-copy]').onclick = () => { w.remove(); chatCopyText(v.text); };
+  const cb = w.querySelector('[data-copy]'); if (cb) cb.onclick = () => { w.remove(); chatCopyText(v.text); };
   w.querySelector('[data-pick]').onclick = () => { w.remove(); chatTogglePick(id); };
   w.querySelectorAll('[data-l]').forEach(b => b.onclick = () => {
     const l = b.dataset.l; S.chat.ov[id] = l; delete S.chat.trFail[l + '|' + id];
@@ -4154,7 +4157,8 @@ function chatSelAll(){ (S.chat.msgs[S.chat.with] || []).forEach(m => { if (!m.st
 function chatSelCopy(){
   const u = chatPeer(S.chat.with), arr = (S.chat.msgs[S.chat.with] || []).filter(m => S.chat.sel.has(m.id));
   if (!arr.length) return;
-  const t = arr.length === 1 ? chatView(arr[0]).text : arr.map(m => (m.mine ? 'Me' : (m.from || (u && (u.name || u.username)) || '')) + ': ' + chatView(m).text).join('\n');
+  const tx = m => chatView(m).text || (chMedia(m) ? (chMedia(m).k === 'vid' ? '[Video]' : '[Photo]') : '');
+  const t = arr.length === 1 ? tx(arr[0]) : arr.map(m => (m.mine ? 'Me' : (m.from || (u && (u.name || u.username)) || '')) + ': ' + tx(m)).join('\n');
   chatCopyText(t); chatSelClear();
 }
 function chatSelTr(){
@@ -4176,21 +4180,167 @@ function chatBindMsgs(){
   const stop = () => { clearTimeout(tm); tm = null; };
   box.addEventListener('pointerdown', e => {
     const b = bub(e); if (!b || b.classList.contains('failed')) return;
+    if (e.target.closest('video')) return;
     long = false; x0 = e.clientX; y0 = e.clientY; stop();
     tm = setTimeout(() => { long = true; tm = null; if (navigator.vibrate) try{ navigator.vibrate(15); }catch(_){}; chatTogglePick(b.dataset.mid); }, 450);
   });
   box.addEventListener('pointermove', e => { if (tm && (Math.abs(e.clientX - x0) > 8 || Math.abs(e.clientY - y0) > 8)) stop(); });
   ['pointerup', 'pointercancel', 'pointerleave', 'scroll'].forEach(ev => box.addEventListener(ev, stop, true));
   box.addEventListener('contextmenu', e => { if (bub(e)) e.preventDefault(); });
+  ['pause', 'ended'].forEach(ev => box.addEventListener(ev, () => { if (S.chat.defer){ S.chat.defer = false; chatRenderMsgs(); } }, true));
   box.addEventListener('click', e => {
     const b = bub(e); if (!b || b.classList.contains('failed')) return;
     if (long){ long = false; return; }
     const id = b.dataset.mid, m = chatMsg(id); if (!m) return;
+    if (e.target.closest('video')) return;
+    const er = e.target.closest('.ph.err'); if (er){ const o = chMedia(m); if (o){ delete S.chat.mu[o.i]; S.chat.trv++; chatRenderMsgs(); } return; }
+    if (e.target.closest('.ch-mimg') && !S.chat.sel.size) return chMediaView(id);
     if (S.chat.sel.size) return chatTogglePick(id);
     const v = chatView(m);
     if (v.fail){ delete S.chat.trFail[v.lang + '|' + id]; S.chat.trv++; chatRenderMsgs(); return; }
     chatMsgMenu(id);
   });
+}
+
+/* ---------- chat photos & videos (saved to the main admin's Google Drive) ---------- */
+const CH_MEDIA_MAX = 40 * 1048576;
+function chMedia(m){
+  const t = m && m.text; if (typeof t !== 'string' || t.indexOf('ksmedia:') !== 0) return null;
+  try{ const o = JSON.parse(t.slice(8)); return o && typeof o === 'object' ? o : null; }catch(e){ return null; }
+}
+const chTxt = m => { const o = chMedia(m); return o ? String(o.c || '') : m.text; };
+const chPrev = t => { const o = chMedia({ text:t }); return o ? ((o.k === 'vid' ? '🎥 Video' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80) : String(t).slice(0, 80); };
+function chMediaUrl(m, dl){
+  const o = chMedia(m), u = o && o.i && S.chat.mu[o.i]; if (!u) return '';
+  return dl ? u + '&dl=1&n=' + encodeURIComponent(o.n || (o.k === 'vid' ? 'video' : 'photo')) : u;
+}
+function chMediaHtml(m){
+  const o = chMedia(m); if (!o) return '';
+  const vid = o.k === 'vid', ic = vid ? '🎥' : '📷';
+  if (!o.i) return `<div class=\"mm ph\">${ic} ${esc(o.n || '')}<br><b>${m.state === 'failed' ? '⚠️ Not sent' : '⏫ ' + (m.up != null ? m.up + '%' : 'Uploading…')}</b></div>`;
+  const u = S.chat.mu[o.i];
+  if (u === undefined) return `<div class=\"mm ph\">${ic} Loading…</div>`;
+  if (u === null) return `<div class=\"mm ph err\">⚠️ Could not load · tap to retry</div>`;
+  return vid ? `<video class=\"mm ch-mvid\" src=\"${esc(u)}\" controls preload=\"metadata\" playsinline></video>`
+    : `<img class=\"mm ch-mimg\" src=\"${esc(u)}\" alt=\"\" loading=\"lazy\" onerror=\"chMediaErr('${esc(o.i)}')\">`;
+}
+function chMediaErr(i){ if (S.chat.mu[i] === null) return; S.chat.mu[i] = null; S.chat.trv++; chatRenderMsgs(); }
+async function chatNeedMedia(){
+  const c = S.chat, id = c.with; if (!id) return;
+  const ids = [];
+  (c.msgs[id] || []).slice(-80).forEach(m => { const o = chMedia(m); if (o && o.i && c.mu[o.i] === undefined && !c.mBusy[o.i]) ids.push(o.i); });
+  if (!ids.length) return;
+  ids.forEach(i => c.mBusy[i] = 1);
+  try{
+    const r = await chatApi('chatMediaTicket', { ids });
+    ids.forEach(i => { const t = r.tickets && r.tickets[i]; c.mu[i] = t ? API_URL + '/chat/media?' + new URLSearchParams({ id:i, u:t.u, e:t.e, k:t.k }).toString() : null; });
+  }catch(e){ chatErr(e); ids.forEach(i => c.mu[i] = null); }
+  ids.forEach(i => delete c.mBusy[i]);
+  c.trv++; if (S.view === 'chat' && c.with === id) chatRenderMsgs();
+}
+function chMediaView(id){
+  const m = chatMsg(id), url = chMediaUrl(m); if (!url) return;
+  const w = document.createElement('div'); w.className = 'ch-view';
+  w.innerHTML = `<div class=\"cv-bar\"><button class=\"ch-sbtn\" data-x type=\"button\">✕</button><a class=\"ch-sbtn\" href=\"${esc(chMediaUrl(m, true))}\" download>⬇ Save</a></div><img src=\"${esc(url)}\" alt=\"\">`;
+  w.onclick = e => { if (e.target === w || e.target.closest('[data-x]')) w.remove(); };
+  document.body.appendChild(w);
+}
+function chImgShrink(f){          // phone photos are 3-8 MB: shrink to ~1600 px JPEG before sending (saves data and Drive space)
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(f), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight)), cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round(img.naturalWidth * k)); cv.height = Math.max(1, Math.round(img.naturalHeight * k));
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
+      cv.toBlob(b => b ? resolve(b) : reject(new Error('Could not prepare this photo.')), 'image/jpeg', 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('This photo format is not supported. Try a JPG or PNG.')); };
+    img.src = url;
+  });
+}
+async function chatAttach(inp){
+  const to = S.chat.with, files = [...(inp.files || [])].slice(0, 5); inp.value = '';
+  if (!to || !files.length) return;
+  const ta = $('#chInput'); let cap = ta ? ta.value.trim() : '';
+  if (cap && ta){ ta.value = ''; S.chat.drafts[to] = ''; ta.style.height = 'auto'; }        // what you typed becomes the caption of the first file
+  for (const f of files){ await chatUpload(to, f, cap); cap = ''; }
+}
+async function chatUpload(to, f, cap, again){
+  const c = S.chat, vid = /^video\//.test(f.type), img = /^image\//.test(f.type);
+  if (!vid && !img) return toast('Only photos and videos can be sent', true);
+  if (vid && f.size > CH_MEDIA_MAX) return toast('This video is too big (max ' + Math.round(CH_MEDIA_MAX / 1048576) + ' MB). Trim it and try again.', true);
+  let m = again;
+  if (!m){
+    const cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
+    m = { id:cid, t:Date.now(), mine:true, text:'ksmedia:' + JSON.stringify({ k:vid ? 'vid' : 'img', n:f.name || (vid ? 'video' : 'photo'), c:cap }), state:'pending', up:0, _file:f };
+    (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
+  } else { m.state = 'pending'; m.up = 0; }
+  chatRenderMsgs(true);
+  try{
+    let blob = f, mime = f.type || (vid ? 'video/mp4' : 'image/jpeg'), name = f.name || (vid ? 'video.mp4' : 'photo.jpg');
+    if (img && f.type !== 'image/gif'){ blob = await chImgShrink(f); mime = 'image/jpeg'; name = name.replace(/\.\w+$/, '') + '.jpg'; }
+    const q = new URLSearchParams({ to, cid:m.id, name, mime, c:(chMedia(m) || {}).c || '' });
+    const r = await new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest(); x.open('POST', API_URL + '/chat/media/upload?' + q.toString());
+      x.setRequestHeader('Authorization', 'Bearer ' + S.token); x.setRequestHeader('Content-Type', 'application/octet-stream');
+      x.upload.onprogress = e => {
+        if (!e.lengthComputable) return;
+        m.up = Math.min(100, Math.round(e.loaded * 100 / e.total));
+        const b = document.querySelector('.ch-b[data-mid=\"' + m.id + '\"] .ph b'); if (b) b.textContent = m.up < 100 ? '⏫ ' + m.up + '%' : '☁️ Saving to Drive…';
+      };
+      x.onload = () => { try{ resolve(JSON.parse(x.responseText)); }catch{ reject(new Error('Unexpected server response.')); } };
+      x.onerror = x.ontimeout = () => reject(new Error('Upload failed — check your internet connection.'));
+      x.send(blob);
+    });
+    if (!r.ok){ const e = new Error(r.error || 'Upload failed'); e.code = r.code; throw e; }
+    const arr = c.msgs[to] || [], i = arr.findIndex(x => x.id === m.id);
+    if (i >= 0) arr[i] = r.message; else arr.push(r.message);
+    arr.sort((x, y) => x.t - y.t);
+    const u = chatPeer(to); if (u){ u.lastText = chPrev(r.message.text); u.lastTime = r.message.t; u.lastMine = true; }
+  }catch(e){ m.state = 'failed'; chatErr(e); toast(e.message || 'Upload failed', true); }
+  if (c.with === to) chatRenderMsgs(true);
+  chatRenderList();
+}
+
+/* ---------- who can see my profile photo ---------- */
+async function photoPrivacy(){
+  let cur; try{ cur = await api('getPhotoPrivacy'); }catch(e){ return handleErr(e); }
+  if (!S.chat.loaded) await chatLoadUsers();
+  const peers = (S.chat.users || []).filter(u => !u.isGroup), sel = new Set(cur.ids || []);
+  const opts = [['all', 'Everyone I can chat with'], ['none', 'Nobody'], ['only', 'Only the people I choose'], ['except', 'Everyone except the people I choose']];
+  const w = openModal(`<h3>🔒 Who can see my profile photo</h3><p class=\"sub\">The main admin can always see it. Everyone else follows this choice; people who can’t see it just see your first letter.</p>
+    <div class=\"ch-opts\" id=\"ppModes\">${opts.map(([v, l]) => `<label class=\"tog\"><input type=\"radio\" name=\"ppm\" value=\"${v}\" ${cur.mode === v ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+    <div id=\"ppList\" style=\"max-height:240px;overflow:auto;margin:6px 0\">${peers.length ? peers.map(u => `<label class=\"tog\"><input type=\"checkbox\" value=\"${esc(u.id)}\" ${sel.has(u.id) ? 'checked' : ''}> ${esc(u.name || u.username)}</label>`).join('') : '<div class=\"muted\">No chat contacts yet.</div>'}</div>
+    <div class=\"foot\"><button class=\"btn ghost\" type=\"button\" data-x>Cancel</button><button class=\"btn\" type=\"button\" data-ok>Save</button></div>`);
+  const mode = () => (w.querySelector('input[name=ppm]:checked') || {}).value || 'all';
+  const sync = () => { w.querySelector('#ppList').style.display = (mode() === 'only' || mode() === 'except') ? '' : 'none'; };
+  w.querySelectorAll('input[name=ppm]').forEach(r => r.onchange = sync); sync();
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-ok]').onclick = async () => {
+    const ids = [...w.querySelectorAll('#ppList input:checked')].map(x => x.value);
+    try{ const r = await api('setPhotoPrivacy', { mode:mode(), ids }); w.remove(); toast(r.mode === 'all' ? 'Your photo is visible to everyone' : r.mode === 'none' ? 'Your photo is hidden from everyone' : 'Photo privacy saved'); }
+    catch(e){ handleErr(e); }
+  };
+}
+
+/* ---------- Settings: connect Google Drive for chat media (main admin) ---------- */
+function driveCard(){
+  return `<div class=\"card\" id=\"drvCard\"><h3>☁️ Chat photos & videos → Google Drive</h3>
+    <p class=\"muted\" style=\"margin-bottom:12px\">Every photo and video sent in Chat is saved in a folder called <b>KS Chat Media</b> in the Google Drive you connect here. Only the main admin can connect it.</p>
+    <div id=\"drvBody\"><div class=\"empty-state\">Loading…</div></div></div>`;
+}
+async function bindDrive(){
+  const el = document.querySelector('#drvBody'); if (!el) return;
+  const draw = r => {
+    el.innerHTML = !r.configured ? '<div class=\"muted\">Google sign-in is not set up on the server yet (CAL_CLIENT_ID / CAL_CLIENT_SECRET / PUBLIC_URL), and it also needs the Drive scope — see the instructions.</div>'
+      : r.connected ? `<div style=\"margin-bottom:10px\">✅ Connected${r.email ? ' as <b>' + esc(r.email) + '</b>' : ''}</div><button class=\"btn ghost\" type=\"button\" id=\"drvOff\">Disconnect</button>`
+      : `<div style=\"margin-bottom:10px\" class=\"muted\">Not connected — photos and videos can’t be sent until you connect.</div><button class=\"btn\" type=\"button\" id=\"drvOn\">Connect Google Drive</button> <button class=\"btn ghost\" type=\"button\" id=\"drvRef\">I connected — refresh</button>`;
+    const on = el.querySelector('#drvOn'), off = el.querySelector('#drvOff'), ref = el.querySelector('#drvRef');
+    if (on) on.onclick = async () => { try{ const u = await api('driveAuthUrl'); window.open(u.url, '_blank'); }catch(e){ handleErr(e); } };
+    if (ref) ref.onclick = async () => { try{ draw(await api('driveStatus')); }catch(e){ handleErr(e); } };
+    if (off) off.onclick = async () => { if (!await confirmBox('Disconnect Google Drive?', 'New photos and videos can’t be sent until you connect again. Files already in Drive stay there, but chats won’t be able to show them.', 'Disconnect', true)) return; try{ await api('driveDisconnect'); draw(await api('driveStatus')); }catch(e){ handleErr(e); } };
+  };
+  try{ draw(await api('driveStatus')); }catch(e){ el.textContent = ''; }
 }
 function chatBack(){
   S.chat.sel.clear(); S.chat.with = null; document.body.classList.remove('chat-conv');
@@ -4213,7 +4363,7 @@ async function chatDeliver(to, m){
     const arr = c.msgs[to] || [], i = arr.findIndex(x => x.id === m.id);
     if (i >= 0) arr[i] = r.message; else arr.push(r.message);
     arr.sort((x, y) => x.t - y.t);
-    const u = chatPeer(to); if (u){ u.lastText = m.text.slice(0, 80); u.lastTime = r.message.t; u.lastMine = true; }
+    const u = chatPeer(to); if (u){ u.lastText = chPrev(m.text); u.lastTime = r.message.t; u.lastMine = true; }
   }catch(e){ m.state = 'failed'; chatErr(e); if (!e.code || e.code === 'ERR') toast(e.message || 'Message not sent', true); }
   if (c.with === to) chatRenderMsgs(true);
   chatRenderList();
@@ -4221,7 +4371,8 @@ async function chatDeliver(to, m){
 function chatRetry(id){
   const to = S.chat.with, m = (S.chat.msgs[to] || []).find(x => x.id === id);
   if (!m || m.state !== 'failed') return;
-  m.state = 'pending'; chatRenderMsgs(); chatDeliver(to, m);
+  m.state = 'pending'; chatRenderMsgs();
+  if (m._file) chatUpload(to, m._file, '', m); else chatDeliver(to, m);
 }
 function chatTick(){
   const c = S.chat;

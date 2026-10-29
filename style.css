@@ -862,3 +862,15 @@ body.kb-open .ch-comp{padding-bottom:8px}
 
 /* profile card: big sharp picture (the password was already asked before the card opened) */
 .pf-ov .pf-pic{width:100%;max-width:520px;border-radius:0;margin:0 auto;font-size:calc(96px*var(--fs))}
+
+/* chat photos & videos */
+.ch-att{flex:none;width:42px;height:42px;border-radius:50%;border:0;background:transparent;font-size:calc(22px*var(--fs));display:grid;place-items:center;color:var(--muted,#64748b)}
+.ch-b .mm{display:block;max-width:100%;border-radius:10px;margin:0 0 4px}
+.ch-mimg{width:240px;max-height:320px;object-fit:cover;cursor:zoom-in;background:rgba(0,0,0,.06)}
+.ch-mvid{width:260px;max-height:340px;background:#000}
+.ch-b .ph{padding:18px 14px;background:rgba(0,0,0,.06);text-align:center;font-size:calc(13px*var(--fs));min-width:150px;line-height:1.5}
+.ch-b .ph.err{cursor:pointer}
+.ch-view{position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:9999;display:flex;align-items:center;justify-content:center}
+.ch-view img{max-width:100%;max-height:100%;object-fit:contain}
+.cv-bar{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;padding:calc(12px + env(safe-area-inset-top)) 12px 12px}
+.cv-bar .ch-sbtn{text-decoration:none}
