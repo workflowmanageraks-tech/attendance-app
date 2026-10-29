@@ -326,6 +326,7 @@ function route_(req) {
       case 'setActivityAccess': out = setActivityAccess_(req); break;
       case 'chatUsers':         return chatUsers_();
       case 'chatPhotos':        return chatPhotos_(req);
+      case 'chatPhotoFull':     return chatPhotoFull_(req);
       case 'setMyPhoto':        out = setMyPhoto_(req); break;
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
@@ -2593,12 +2594,26 @@ function avMap_() {
 }
 function avVer_(v) { var i = String(v || '').indexOf('|'); return i > 0 ? (Number(String(v).slice(0, i)) || 0) : 0; }
 function setMyPhoto_(req) {
-  var d = String(req.photo || ''), P = PropertiesService.getScriptProperties();
-  if (!d) { P.deleteProperty('AVT_' + CTX.uid); return { ok: true, pv: 0 }; }
-  if (d.length > 8500 || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(d)) fail_('That photo is too big or not a valid picture. Try another one.');
+  var d = String(req.photo || ''), f = String(req.full || ''), P = PropertiesService.getScriptProperties();
+  if (!d) { P.deleteProperty('AVT_' + CTX.uid); P.deleteProperty('AVF_' + CTX.uid); return { ok: true, pv: 0 }; }
+  var rx = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/;
+  if (d.length > 8500 || !rx.test(d)) fail_('That photo is too big or not a valid picture. Try another one.');
+  // optional full-size copy (one sheet cell holds up to 50,000 characters) - shown in the big profile view, not in lists
+  if (f && (f.length > 48000 || !rx.test(f))) fail_('That photo is too big or not a valid picture. Try another one.');
   var ts = Date.now();
   P.setProperty('AVT_' + CTX.uid, ts + '|' + d);
+  if (f) P.setProperty('AVF_' + CTX.uid, ts + '|' + f); else P.deleteProperty('AVF_' + CTX.uid);
   return { ok: true, pv: ts };
+}
+function chatPhotoFull_(req) {
+  var id = String(req.id || ''), allowed = {};
+  if (id === 'me') id = CTX.uid;
+  allowed[CTX.uid] = 1;
+  chatPeers_().forEach(function (a) { allowed[a.id] = 1; });
+  if (!allowed[id]) return { ok: true, pv: 0, src: '' };
+  var v = String(PropertiesService.getScriptProperties().getProperty('AVF_' + id) || ''), i = v.indexOf('|');
+  if (i < 1) return { ok: true, pv: 0, src: '' };
+  return { ok: true, pv: Number(v.slice(0, i)) || 0, src: v.slice(i + 1) };
 }
 function chatPhotos_(req) {
   var want = Array.isArray(req.ids) ? req.ids.slice(0, 80) : [], allowed = {}, out = {}, m = avMap_();

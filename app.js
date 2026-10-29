@@ -389,6 +389,16 @@ function enterApp(){
 let AV = (function(){ try{ return JSON.parse(localStorage.getItem('ks_av_v1') || '{}') || {}; }catch(e){ return {}; } })();
 const avSave = () => { try{ localStorage.setItem('ks_av_v1', JSON.stringify(AV)); }catch(e){} };
 const avSrc = id => (AV[id] && AV[id].src) || '';
+const FAV = {};                                   // full-size profile pictures, kept in memory only (loaded when a profile is opened)
+async function avFull(id){
+  const v = AV[id] && AV[id].v; if (!v) return '';
+  if (FAV[id] && FAV[id].v === v) return FAV[id].src;
+  try{
+    const r = await chatApi('chatPhotoFull', { id });
+    if (r && r.src){ FAV[id] = { v:r.pv, src:r.src }; return r.src; }
+  }catch(e){}
+  return '';
+}
 async function boot(){
   await bioDetect();
   const t = store.get(TK);
@@ -1320,22 +1330,67 @@ async function photoPick(inp){
     img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('read')); i.src = url; });
     URL.revokeObjectURL(url);
   }catch(e){ return toast('Could not read this picture. Try a JPG or PNG photo.', true); }
-  const side = Math.min(img.naturalWidth, img.naturalHeight), sx = (img.naturalWidth - side) / 2, sy = (img.naturalHeight - side) / 2;
-  let out = '';
-  for (const [px, q] of [[128, .72], [112, .65], [96, .6], [96, .45], [80, .4]]){      // small enough to be saved in one sheet cell
-    const c = document.createElement('canvas'); c.width = c.height = px;
-    c.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, px, px);
-    out = c.toDataURL('image/jpeg', q); if (out.length <= 7500) break;
-  }
-  if (out.length > 8000) return toast('Could not shrink this picture enough. Try another one.', true);
-  try{
-    const r = await api('setMyPhoto', { photo:out });
-    AV[S.me.id] = { v:r.pv, src:out }; avSave(); refreshUser(); render(); toast('Profile photo saved');
-  }catch(e){ handleErr(e); }
+  photoCropOpen(img);
+}
+/* crop screen: drag the picture, zoom with the slider or pinch; the round window shows exactly what the profile picture will contain */
+function photoCropOpen(img){
+  const V = 280, nw = img.naturalWidth, nh = img.naturalHeight, m = Math.min(nw, nh);
+  const C = { z:1, cx:nw / 2, cy:nh / 2 };
+  const w = openModal(`<h3>Adjust profile photo</h3><p class="sub">Drag to move, use the slider to zoom. The circle is what people will see.</p>
+    <div class="crop-box" style="width:${V}px;height:${V}px"><canvas id="cpCv" width="${V * 2}" height="${V * 2}" style="width:${V}px;height:${V}px"></canvas><div class="crop-ring"></div></div>
+    <input type="range" id="cpZ" min="1" max="4" step="0.01" value="1" class="crop-z" aria-label="Zoom">
+    <div class="actions" style="margin-top:14px"><button class="btn ghost" type="button" id="cpNo">Cancel</button><button class="btn" type="button" id="cpOk">Save photo</button></div>`);
+  const cv = w.querySelector('#cpCv'), cx2 = cv.getContext('2d');
+  const rect = () => {
+    const s = m / C.z;
+    C.cx = Math.max(s / 2, Math.min(nw - s / 2, C.cx)); C.cy = Math.max(s / 2, Math.min(nh - s / 2, C.cy));
+    return { s, sx:C.cx - s / 2, sy:C.cy - s / 2 };
+  };
+  const draw = () => { const r = rect(); cx2.clearRect(0, 0, cv.width, cv.height); cx2.drawImage(img, r.sx, r.sy, r.s, r.s, 0, 0, cv.width, cv.height); };
+  draw();
+  const pts = new Map(); let pinch = 0;
+  cv.style.touchAction = 'none';
+  cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x:e.clientX, y:e.clientY }); pinch = 0; };
+  cv.onpointermove = e => {
+    const p = pts.get(e.pointerId); if (!p) return;
+    if (pts.size === 2){                                               // two fingers: pinch to zoom
+      pts.set(e.pointerId, { x:e.clientX, y:e.clientY });
+      const [a1, b1] = [...pts.values()], d = Math.hypot(a1.x - b1.x, a1.y - b1.y);
+      if (pinch) { C.z = Math.max(1, Math.min(4, C.z * d / pinch)); w.querySelector('#cpZ').value = C.z; }
+      pinch = d; draw(); return;
+    }
+    const s = rect().s; C.cx -= (e.clientX - p.x) * s / V; C.cy -= (e.clientY - p.y) * s / V;
+    pts.set(e.pointerId, { x:e.clientX, y:e.clientY }); draw();
+  };
+  const up = e => { pts.delete(e.pointerId); pinch = 0; };
+  cv.onpointerup = up; cv.onpointercancel = up;
+  cv.addEventListener('wheel', e => { e.preventDefault(); C.z = Math.max(1, Math.min(4, C.z * (e.deltaY < 0 ? 1.08 : 0.93))); w.querySelector('#cpZ').value = C.z; draw(); }, { passive:false });
+  w.querySelector('#cpZ').oninput = e => { C.z = Number(e.target.value); draw(); };
+  w.querySelector('#cpNo').onclick = () => w.remove();
+  w.querySelector('#cpOk').onclick = async () => {
+    const r = rect();
+    const enc = (steps, max) => {
+      for (const [px, q] of steps){
+        const side = Math.min(px, Math.round(r.s)), c = document.createElement('canvas'); c.width = c.height = side;
+        c.getContext('2d').drawImage(img, r.sx, r.sy, r.s, r.s, 0, 0, side, side);
+        const out = c.toDataURL('image/jpeg', q); if (out.length <= max) return out;
+      }
+      return '';
+    };
+    const thumb = enc([[128, .72], [112, .65], [96, .6], [96, .45], [80, .4]], 7500);      // small copy for the chat list
+    const full = enc([[512, .82], [512, .7], [440, .72], [380, .7], [320, .65], [256, .6]], 46000);   // big copy for the profile view
+    if (!thumb) return toast('Could not shrink this picture enough. Try another one.', true);
+    const btn = w.querySelector('#cpOk'); btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      const res = await api('setMyPhoto', { photo:thumb, full });
+      AV[S.me.id] = { v:res.pv, src:thumb }; avSave(); if (full) FAV[S.me.id] = { v:res.pv, src:full }; else delete FAV[S.me.id];
+      w.remove(); refreshUser(); render(); toast('Profile photo saved');
+    }catch(e){ btn.disabled = false; btn.textContent = 'Save photo'; handleErr(e); }
+  };
 }
 async function photoRemove(){
   if (!await confirmBox('Remove your profile photo?', 'Chat will show your first letter again.', 'Remove', true)) return;
-  try{ await api('setMyPhoto', { photo:'' }); delete AV[S.me.id]; avSave(); refreshUser(); render(); toast('Photo removed'); }catch(e){ handleErr(e); }
+  try{ await api('setMyPhoto', { photo:'' }); delete AV[S.me.id]; delete FAV[S.me.id]; avSave(); refreshUser(); render(); toast('Photo removed'); }catch(e){ handleErr(e); }
 }
 function themeCard(){
   const seg = (k, opts) => `<div class="seg" data-k="${k}">${opts.map(([v, l]) => `<button type="button" data-val="${v}" class="${String(T[k]) === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
@@ -3682,6 +3737,45 @@ async function chatSyncAv(users, me, mePv){
   }
   if (changed){ avSave(); if (S.view === 'chat'){ chatRenderList(); if (S.chat.with) chatRefreshHeadAv(); } refreshUser(); }
 }
+/* ---------- profile screen (tap the name / picture at the top of a chat) ---------- */
+function chatProfile(){
+  const u = chatPeer(S.chat.with); if (!u) return;
+  if (u.isGroup) return groupChatForm(u.id);
+  closeProfile();
+  const st = chatStatus(u), nm = u.name || u.username || '?', thumb = avSrc(u.id);
+  const w = document.createElement('div'); w.className = 'pf-ov'; w.id = 'pfView';
+  w.innerHTML = `<div class="pf-bar"><button type="button" class="pf-back" data-x aria-label="Back">←</button></div>
+    <div class="pf-scroll">
+      <div class="pf-pic" id="pfPic" style="background:${chColor(u.id)}">${thumb ? `<img id="pfImg" alt="" src="${esc(thumb)}">` : `<span>${esc(nm.trim().charAt(0).toUpperCase())}</span>`}</div>
+      <div class="pf-name">${esc(nm)}</div>
+      <div class="ch-stat ${st.cls}" style="text-align:center">${esc(st.txt)}</div>
+      <div class="pf-acts">
+        <button type="button" data-a="msg"><b>💬</b><span>Message</span></button>
+        <button type="button" data-a="audio"><b>📞</b><span>Call</span></button>
+        <button type="button" data-a="video"><b>🎥</b><span>Video</span></button>
+      </div>
+      <div class="pf-card"><div class="pf-k">Username</div><div class="pf-v">${esc(u.username || '')}</div></div>
+    </div>`;
+  document.body.appendChild(w);
+  w.onclick = e => {
+    if (e.target.closest('[data-x]')) return closeProfile();
+    const b = e.target.closest('[data-a]');
+    if (b){ const f = b.dataset.a; closeProfile(); if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); return; }
+    if (e.target.closest('#pfPic') && thumb) photoViewer(u.id, nm);
+  };
+  if (thumb) avFull(u.id).then(src => { const im = $('#pfImg'); if (src && im && $('#pfView')) im.src = src; });      // swap the small copy for the sharp one
+}
+function closeProfile(){ const o = $('#pfView'); if (o) o.remove(); closePhotoViewer(); }
+function closePhotoViewer(){ const o = $('#pvView'); if (o) o.remove(); }
+function photoViewer(id, nm){
+  closePhotoViewer();
+  const w = document.createElement('div'); w.className = 'pv-ov'; w.id = 'pvView';
+  w.innerHTML = `<div class="pv-bar"><button type="button" class="pf-back" aria-label="Close">←</button><span>${esc(nm)}</span></div><img alt="" src="${esc((FAV[id] && FAV[id].src) || avSrc(id))}">`;
+  w.onclick = closePhotoViewer;
+  document.body.appendChild(w);
+  avFull(id).then(src => { const im = w.querySelector('img'); if (src && im && $('#pvView')) im.src = src; });
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape'){ if ($('#pvView')) closePhotoViewer(); else if ($('#pfView')) closeProfile(); } });
 function chatRefreshHeadAv(){
   const u = chatPeer(S.chat.with), el = $('#chHAv'); if (!u || !el) return;
   const dot = el.querySelector('.dot'); el.innerHTML = chInit(u); if (dot) el.appendChild(dot); chatHeader();
@@ -3745,8 +3839,8 @@ function chatRenderPane(){
   $('#chatRoot').classList.add('in-conv');
   pane.innerHTML = `<div class="ch-head">
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
-      <div class="ch-av" id="chHAv" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
-      <div class="ch-info"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
+      <div class="ch-av pf-hit" id="chHAv" onclick="chatProfile()" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
+      <div class="ch-info pf-hit" onclick="chatProfile()"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
       <div class="ch-calls"><button class="ch-cbtn" id="chMore" onclick="chatMoreMenu(event)" aria-label="More options" aria-haspopup="true">⋮</button></div>
     </div>
     <div class="ch-sel" id="chSel" style="display:none"></div>
