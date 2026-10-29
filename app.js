@@ -389,16 +389,6 @@ function enterApp(){
 let AV = (function(){ try{ return JSON.parse(localStorage.getItem('ks_av_v1') || '{}') || {}; }catch(e){ return {}; } })();
 const avSave = () => { try{ localStorage.setItem('ks_av_v1', JSON.stringify(AV)); }catch(e){} };
 const avSrc = id => (AV[id] && AV[id].src) || '';
-const FAV = {};                                   // full-size profile pictures, kept in memory only (loaded when a profile is opened)
-async function avFull(id){
-  const v = AV[id] && AV[id].v; if (!v) return '';
-  if (FAV[id] && FAV[id].v === v) return FAV[id].src;
-  try{
-    const r = await chatApi('chatPhotoFull', { id });
-    if (r && r.src){ FAV[id] = { v:r.pv, src:r.src }; return r.src; }
-  }catch(e){}
-  return '';
-}
 async function boot(){
   await bioDetect();
   const t = store.get(TK);
@@ -1383,14 +1373,14 @@ function photoCropOpen(img){
     const btn = w.querySelector('#cpOk'); btn.disabled = true; btn.textContent = 'Saving…';
     try{
       const res = await api('setMyPhoto', { photo:thumb, full });
-      AV[S.me.id] = { v:res.pv, src:thumb }; avSave(); if (full) FAV[S.me.id] = { v:res.pv, src:full }; else delete FAV[S.me.id];
+      AV[S.me.id] = { v:res.pv, src:thumb }; avSave();
       w.remove(); refreshUser(); render(); toast('Profile photo saved');
     }catch(e){ btn.disabled = false; btn.textContent = 'Save photo'; handleErr(e); }
   };
 }
 async function photoRemove(){
   if (!await confirmBox('Remove your profile photo?', 'Chat will show your first letter again.', 'Remove', true)) return;
-  try{ await api('setMyPhoto', { photo:'' }); delete AV[S.me.id]; delete FAV[S.me.id]; avSave(); refreshUser(); render(); toast('Photo removed'); }catch(e){ handleErr(e); }
+  try{ await api('setMyPhoto', { photo:'' }); delete AV[S.me.id]; avSave(); refreshUser(); render(); toast('Photo removed'); }catch(e){ handleErr(e); }
 }
 function themeCard(){
   const seg = (k, opts) => `<div class="seg" data-k="${k}">${opts.map(([v, l]) => `<button type="button" data-val="${v}" class="${String(T[k]) === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
@@ -3746,7 +3736,8 @@ function chatProfile(){
   const w = document.createElement('div'); w.className = 'pf-ov'; w.id = 'pfView';
   w.innerHTML = `<div class="pf-bar"><button type="button" class="pf-back" data-x aria-label="Back">←</button></div>
     <div class="pf-scroll">
-      <div class="pf-pic" id="pfPic" style="background:${chColor(u.id)}">${thumb ? `<img id="pfImg" alt="" src="${esc(thumb)}">` : `<span>${esc(nm.trim().charAt(0).toUpperCase())}</span>`}</div>
+      <div class="pf-pic" id="pfPic" style="background:${chColor(u.id)}">${thumb ? `<img id="pfImg" alt="" src="${esc(thumb)}"><i class="pf-lock">🔒</i>` : `<span>${esc(nm.trim().charAt(0).toUpperCase())}</span>`}</div>
+      ${thumb ? '<div class="pf-hint">Tap the picture to view it in full (password needed)</div>' : ''}
       <div class="pf-name">${esc(nm)}</div>
       <div class="ch-stat ${st.cls}" style="text-align:center">${esc(st.txt)}</div>
       <div class="pf-acts">
@@ -3761,21 +3752,70 @@ function chatProfile(){
     if (e.target.closest('[data-x]')) return closeProfile();
     const b = e.target.closest('[data-a]');
     if (b){ const f = b.dataset.a; closeProfile(); if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); return; }
-    if (e.target.closest('#pfPic') && thumb) photoViewer(u.id, nm);
+    if (e.target.closest('#pfPic') && thumb) photoUnlock(u.id, nm);
   };
-  if (thumb) avFull(u.id).then(src => { const im = $('#pfImg'); if (src && im && $('#pfView')) im.src = src; });      // swap the small copy for the sharp one
 }
 function closeProfile(){ const o = $('#pfView'); if (o) o.remove(); closePhotoViewer(); }
 function closePhotoViewer(){ const o = $('#pvView'); if (o) o.remove(); }
-function photoViewer(id, nm){
-  closePhotoViewer();
+/* the big picture is only sent by the server after the person types THEIR OWN password */
+function photoUnlock(id, nm){
+  const w = openModal(`<h3>🔒 Enter your password</h3><p class="sub">To view ${esc(nm)}’s profile picture in full, enter the password of your own account.</p>
+    <div class="field"><label>Your password</label><input class="input" id="pwUnlock" type="password" autocomplete="off" autocapitalize="off" maxlength="200"></div>
+    <div id="pwUnlockErr" style="color:#dc2626;font-size:calc(13px*var(--fs));min-height:18px;margin-top:6px"></div>
+    <div class="actions" style="margin-top:10px"><button class="btn ghost" type="button" id="pwUnlockNo">Cancel</button><button class="btn" type="button" id="pwUnlockOk">View photo</button></div>`);
+  w.classList.add('pw-over');
+  const inp = w.querySelector('#pwUnlock'), err = w.querySelector('#pwUnlockErr'), ok = w.querySelector('#pwUnlockOk');
+  setTimeout(() => inp.focus(), 50);
+  const go = async () => {
+    const pw = inp.value; if (!pw){ err.textContent = 'Please enter your password.'; return; }
+    ok.disabled = true; ok.textContent = 'Checking…'; err.textContent = '';
+    try{
+      const r = await chatApi('chatPhotoFull', { id, password:pw });
+      w.remove(); photoViewer(nm, r.src || avSrc(id));
+    }catch(e){
+      ok.disabled = false; ok.textContent = 'View photo'; inp.value = ''; inp.focus();
+      if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) { w.remove(); handleErr(e); }
+      else err.textContent = (e && e.message) || 'Could not check the password.';
+    }
+  };
+  ok.onclick = go; inp.onkeydown = e => { if (e.key === 'Enter') go(); };
+  w.querySelector('#pwUnlockNo').onclick = () => w.remove();
+}
+function photoViewer(nm, src){
+  closePhotoViewer(); if (!src) return;
   const w = document.createElement('div'); w.className = 'pv-ov'; w.id = 'pvView';
-  w.innerHTML = `<div class="pv-bar"><button type="button" class="pf-back" aria-label="Close">←</button><span>${esc(nm)}</span></div><img alt="" src="${esc((FAV[id] && FAV[id].src) || avSrc(id))}">`;
+  w.innerHTML = `<div class="pv-bar"><button type="button" class="pf-back" aria-label="Close">←</button><span>${esc(nm)}</span></div><img alt="" src="${esc(src)}">`;
   w.onclick = closePhotoViewer;
   document.body.appendChild(w);
-  avFull(id).then(src => { const im = w.querySelector('img'); if (src && im && $('#pvView')) im.src = src; });
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape'){ if ($('#pvView')) closePhotoViewer(); else if ($('#pfView')) closeProfile(); } });
+
+/* ---------- chat themes (each user picks their own; saved on this phone) ---------- */
+const CH_THEMES = [['', 'Default', ['#efeae2', '#d9fdd3', '#ffffff']], ['dark', 'Dark', ['#0b141a', '#005c4b', '#202c33']], ['midnight', 'Midnight', ['#0a0f24', '#4f46e5', '#1a2145']],
+  ['ocean', 'Ocean', ['#d7eefc', '#8fd3ff', '#ffffff']], ['forest', 'Forest', ['#e3f1e0', '#b7e4a8', '#ffffff']], ['sunset', 'Sunset', ['#ffe5d4', '#ffb88a', '#fffaf6']],
+  ['rose', 'Rose', ['#fde4ee', '#f9a8c9', '#ffffff']], ['neon', 'Neon', ['#0d0221', '#8b2bff', '#1b0b3a']], ['gold', 'Royal gold', ['#1c1710', '#b8892b', '#2a2218']]];
+const chThemeKey = () => 'ks_chat_theme_' + ((S.me && S.me.id) || 'x');
+function chThemeGet(){ try{ return localStorage.getItem(chThemeKey()) || ''; }catch(e){ return ''; } }
+function chatThemeApply(){
+  const root = $('#chatRoot'); if (!root) return;
+  const t = chThemeGet();
+  if (t && CH_THEMES.some(x => x[0] === t)) root.setAttribute('data-cth', t); else root.removeAttribute('data-cth');
+}
+function chatThemeMenu(){
+  const cur = chThemeGet();
+  const w = openModal(`<h3>🎨 Chat theme</h3><p class="sub">Choose how your chats look. Only you see this.</p>
+    <div class="cth-grid">${CH_THEMES.map(([k, n, c]) => `<button type="button" class="cth-it ${k === cur ? 'on' : ''}" data-t="${k}">
+      <span class="cth-pv" style="background:${c[0]}"><i style="background:${c[2]}"></i><i class="me" style="background:${c[1]}"></i></span><span class="cth-n">${esc(n)}</span></button>`).join('')}</div>
+    <div class="actions" style="margin-top:14px"><button class="btn ghost" type="button" id="cthClose">Close</button></div>`);
+  w.classList.add('pw-over');
+  w.querySelector('#cthClose').onclick = () => w.remove();
+  w.querySelector('.cth-grid').onclick = e => {
+    const b = e.target.closest('[data-t]'); if (!b) return;
+    try{ localStorage.setItem(chThemeKey(), b.dataset.t); }catch(x){}
+    chatThemeApply();
+    w.querySelectorAll('.cth-it').forEach(x => x.classList.toggle('on', x === b));
+  };
+}
 function chatRefreshHeadAv(){
   const u = chatPeer(S.chat.with), el = $('#chHAv'); if (!u || !el) return;
   const dot = el.querySelector('.dot'); el.innerHTML = chInit(u); if (dot) el.appendChild(dot); chatHeader();
@@ -3836,7 +3876,7 @@ function chatRenderPane(){
     pane.innerHTML = '<div class="ch-empty"><div><div class="big">💬</div><b>Select a user to start chatting</b><div style="margin-top:4px">Your messages will appear here.</div></div></div>';
     $('#chatRoot').classList.remove('in-conv'); return;
   }
-  $('#chatRoot').classList.add('in-conv');
+  $('#chatRoot').classList.add('in-conv'); chatThemeApply();
   pane.innerHTML = `<div class="ch-head">
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
       <div class="ch-av pf-hit" id="chHAv" onclick="chatProfile()" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
@@ -4047,6 +4087,7 @@ function chatMoreMenu(ev){
   const m = document.createElement('div'); m.id = 'chMenu'; m.className = 'ch-menu'; m.setAttribute('role', 'menu');
   const item = (ic, label, fn, sub) => `<button type="button" role="menuitem" data-fn="${fn}"><span class="ic">${ic}</span><span>${label}${sub ? `<small>${sub}</small>` : ''}</span></button>`;
   m.innerHTML = item('🌐', 'Translate chat', 'tr', S.chat.lang ? 'On · ' + esc(CH_LANGS[S.chat.lang].name) : 'Off')
+    + item('🎨', 'Chat theme', 'theme', chThemeGet() ? esc((CH_THEMES.find(x => x[0] === chThemeGet()) || [0, ''])[1]) : 'Default')
     + item('🎲', 'Play Ludo', 'ludo')
     + (u.isGroup ? item('ℹ️', 'Group info', 'grp') : item('📞', 'Voice call', 'audio') + item('🎥', 'Video call', 'video'));
   head.appendChild(m);
@@ -4054,7 +4095,7 @@ function chatMoreMenu(ev){
   m.onclick = e => {
     const b = e.target.closest('[data-fn]'); if (!b) return;
     const f = b.dataset.fn; close();
-    if (f === 'tr') chatLangMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
+    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
 }

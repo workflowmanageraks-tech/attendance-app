@@ -2606,6 +2606,16 @@ function setMyPhoto_(req) {
   return { ok: true, pv: ts };
 }
 function chatPhotoFull_(req) {
+  // the sharp picture is only handed out after the person re-enters THEIR OWN password (5 wrong tries lock it for 5 minutes)
+  var cache = CacheService.getScriptCache(), fkey = 'pvfail_' + CTX.uid, fails = Number(cache.get(fkey) || 0);
+  if (fails >= MAX_FAILS) fail_('Too many wrong attempts. Please try again in 5 minutes.', 'LOCKED');
+  var me = getAccount_(CTX.uid, readSettings_().values);
+  if (!me || !passMatch_(me.password, req.password)) {
+    cache.put(fkey, String(fails + 1), LOCK_SECS);
+    Utilities.sleep(700);
+    fail_('Incorrect password.', 'BADPW');
+  }
+  cache.remove(fkey);
   var id = String(req.id || ''), allowed = {};
   if (id === 'me') id = CTX.uid;
   allowed[CTX.uid] = 1;
