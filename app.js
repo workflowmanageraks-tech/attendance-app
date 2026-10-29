@@ -3798,22 +3798,102 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape'){ if ($('#pvV
 /* ---------- chat themes (each user picks their own; saved on this phone) ---------- */
 const CH_THEMES = [['', 'Default', ['#efeae2', '#d9fdd3', '#ffffff']], ['dark', 'Dark', ['#0b141a', '#005c4b', '#202c33']], ['midnight', 'Midnight', ['#0a0f24', '#4f46e5', '#1a2145']],
   ['ocean', 'Ocean', ['#d7eefc', '#8fd3ff', '#ffffff']], ['forest', 'Forest', ['#e3f1e0', '#b7e4a8', '#ffffff']], ['sunset', 'Sunset', ['#ffe5d4', '#ffb88a', '#fffaf6']],
-  ['rose', 'Rose', ['#fde4ee', '#f9a8c9', '#ffffff']], ['neon', 'Neon', ['#0d0221', '#8b2bff', '#1b0b3a']], ['gold', 'Royal gold', ['#1c1710', '#b8892b', '#2a2218']]];
+  ['rose', 'Rose', ['#fde4ee', '#f9a8c9', '#ffffff']], ['neon', 'Neon', ['#0d0221', '#8b2bff', '#1b0b3a']], ['gold', 'Royal gold', ['#1c1710', '#b8892b', '#2a2218']],
+  ['leather', 'Black leather', ['#16130f', '#6b5326', '#2c2822']], ['glass', 'Gold glass', ['linear-gradient(135deg,#ecdcb9,#cfae76)', 'rgba(255,255,255,.35)', 'rgba(255,255,255,.7)']]];
 const chThemeKey = () => 'ks_chat_theme_' + ((S.me && S.me.id) || 'x');
 function chThemeGet(){ try{ return localStorage.getItem(chThemeKey()) || ''; }catch(e){ return ''; } }
 function chatThemeApply(){
   const root = $('#chatRoot'); if (!root) return;
   const t = chThemeGet();
   if (t && CH_THEMES.some(x => x[0] === t)) root.setAttribute('data-cth', t); else root.removeAttribute('data-cth');
+  chatCustApply(root, t);
+}
+/* ---------- chat theme: your own changes (accent colour, bubble style, roundness, wallpaper, blur, text) ---------- */
+const chCustKey = () => 'ks_chat_thc_' + ((S.me && S.me.id) || 'x'), chWpKey = () => 'ks_chat_wp_' + ((S.me && S.me.id) || 'x');
+function chCustGet(){ try{ return JSON.parse(localStorage.getItem(chCustKey()) || '{}') || {}; }catch(e){ return {}; } }
+function chCustSet(o){ try{ localStorage.setItem(chCustKey(), JSON.stringify(o)); }catch(e){} }
+function chWpImg(){ try{ return localStorage.getItem(chWpKey()) || ''; }catch(e){ return ''; } }
+const CH_DEF = { leather:{ bs:'outline', rad:16, wp:'leather', acc:'#d6a24b' }, glass:{ bs:'outline', rad:16, wp:'marble', acc:'#c9962f' } };
+const CH_LEATHER_SVG = encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='a'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' seed='7'/><feColorMatrix values='0 0 0 0 .85 0 0 0 0 .7 0 0 0 0 .45 0 0 0 .20 0'/></filter><filter id='b'><feTurbulence type='fractalNoise' baseFrequency='.012' numOctaves='3' seed='3'/><feColorMatrix values='0 0 0 0 .9 0 0 0 0 .75 0 0 0 0 .5 0 0 0 .16 0'/></filter><rect width='100%' height='100%' filter='url(%23a)'/><rect width='100%' height='100%' filter='url(%23b)'/></svg>");
+const CH_WP = {
+  marble:'linear-gradient(118deg,rgba(255,250,235,.6) 0,rgba(255,250,235,0) 26%,rgba(150,105,45,.16) 44%,rgba(255,250,235,0) 60%,rgba(150,105,45,.12) 82%,rgba(255,250,235,.4) 100%) 0 0/100% 100% no-repeat,linear-gradient(140deg,#ecdcb9,#d3b57f 52%,#e6d3a8)',
+  wood:'repeating-linear-gradient(92deg,rgba(50,25,8,.14) 0 3px,rgba(0,0,0,0) 3px 12px) 0 0/100% 100%,linear-gradient(180deg,#a1703f,#7d5129 60%,#935f33)',
+  leather:'radial-gradient(ellipse at 50% 25%,rgba(255,255,255,.06),rgba(0,0,0,.5) 90%) 0 0/100% 100% no-repeat,url("data:image/svg+xml;utf8,' + CH_LEATHER_SVG + '") 0 0/240px 240px repeat,#17140f'
+};
+function chWpCss(wp, dim){
+  const dm = dim > 0 ? `linear-gradient(rgba(0,0,0,${dim / 100}),rgba(0,0,0,${dim / 100})) 0 0/100% 100% no-repeat,` : '';
+  if (wp === 'photo'){ const img = chWpImg(); return img ? dm + `url("${img}") center/cover no-repeat,#000` : ''; }
+  return CH_WP[wp] ? dm + CH_WP[wp] : '';
+}
+function chatCustApply(root, t){
+  const C = chCustGet(), D = CH_DEF[t] || {};
+  const set = (k, v) => { if (v === undefined || v === null || v === '') root.style.removeProperty(k); else root.style.setProperty(k, v); };
+  const at = (n, v) => { if (v === undefined || v === null || v === '') root.removeAttribute(n); else root.setAttribute(n, v); };
+  set('--ac', C.acc); at('data-cac', C.acc ? '1' : '');
+  set('--cx', C.tx); at('data-ctx', C.tx ? '1' : '');
+  const rad = C.rad !== undefined ? C.rad : D.rad;
+  set('--crad', rad !== undefined ? rad + 'px' : ''); at('data-crad', rad !== undefined ? '1' : '');
+  set('--cblur', (C.blur !== undefined ? C.blur : 14) + 'px');
+  set('--cfs', C.fs ? String(C.fs / 100) : ''); at('data-cfs', C.fs ? '1' : '');
+  at('data-cbs', C.bs || D.bs || '');
+  const val = chWpCss(C.wp || D.wp || '', C.dim || 0);
+  set('--cwp', val); at('data-wp', val ? '1' : '');
+}
+function chatThemeCustom(){
+  const t = chThemeGet(), D = CH_DEF[t] || {}, C = chCustGet();
+  const seg = (k, opts) => `<div class="seg" data-ck="${k}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${(C[k] || '') === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const rng = (k, label, min, max, def, unit) => `<div class="th-row"><div class="th-lbl"><span>${label}</span><b id="chc_${k}">${C[k] !== undefined ? C[k] : def}${unit}</b></div><input type="range" data-cr="${k}" data-u="${unit}" min="${min}" max="${max}" step="1" value="${C[k] !== undefined ? C[k] : def}"></div>`;
+  const w = openModal(`<h3>✨ Customise chat theme</h3><p class="sub">Changes show at once and are saved on this phone. Only you see them.</p>
+    <div class="th-row"><div class="th-lbl"><span>Colours</span></div><div class="th-cols">
+      <label class="th-col"><input type="color" data-cc="acc" value="${C.acc || D.acc || '#22c55e'}"><span>Accent / gold</span></label>
+      <label class="th-col"><input type="color" data-cc="tx" value="${C.tx || (t === 'glass' ? '#3d2a10' : (t && t !== '' ? '#f3e3c3' : '#0f172a'))}"><span>Message text</span></label></div></div>
+    <div class="th-row"><div class="th-lbl"><span>My message style</span></div>${seg('bs', [['', 'Theme'], ['outline', 'Outline'], ['filled', 'Filled']])}</div>
+    <div class="th-row"><div class="th-lbl"><span>Wallpaper</span></div>${seg('wp', [['', 'Theme'], ['marble', 'Marble'], ['wood', 'Wood'], ['leather', 'Leather'], ['none', 'Plain'], ['photo', '📷 My photo']])}<input type="file" id="chWpFile" accept="image/*" hidden></div>
+    ${rng('rad', 'Bubble roundness', 4, 28, D.rad !== undefined ? D.rad : 12, 'px')}
+    ${rng('blur', 'Glass blur', 0, 24, 14, 'px')}
+    ${rng('dim', 'Darken wallpaper', 0, 70, 0, '%')}
+    ${rng('fs', 'Message text size', 85, 130, 100, '%')}
+    <div class="actions" style="margin-top:10px"><button class="btn ghost" type="button" id="chcReset">↺ Reset</button><button class="btn" type="button" id="chcDone">Done</button></div>`);
+  w.classList.add('pw-over');
+  const save = () => { chCustSet(C); chatThemeApply(); };
+  w.querySelector('#chcDone').onclick = () => w.remove();
+  w.querySelector('#chcReset').onclick = () => { Object.keys(C).forEach(k => delete C[k]); try{ localStorage.removeItem(chWpKey()); }catch(e){} save(); w.remove(); chatThemeCustom(); };
+  w.addEventListener('input', e => {
+    const r = e.target.closest('[data-cr]'), c = e.target.closest('[data-cc]');
+    if (r){ C[r.dataset.cr] = +r.value; const b = w.querySelector('#chc_' + r.dataset.cr); if (b) b.textContent = r.value + r.dataset.u; save(); }
+    else if (c){ C[c.dataset.cc] = c.value; save(); }
+  });
+  w.addEventListener('click', e => {
+    const b = e.target.closest('.seg button'); if (!b) return;
+    const sg = b.closest('.seg'), k = sg.dataset.ck, v = b.dataset.v;
+    if (k === 'wp' && v === 'photo'){ w.querySelector('#chWpFile').click(); return; }
+    if (v === '') delete C[k]; else C[k] = v;
+    sg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); save();
+  });
+  w.querySelector('#chWpFile').onchange = async e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    try{
+      const url = URL.createObjectURL(f);
+      const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('read')); i.src = url; });
+      URL.revokeObjectURL(url);
+      const s = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight)), cv = document.createElement('canvas');
+      cv.width = Math.round(img.naturalWidth * s); cv.height = Math.round(img.naturalHeight * s);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      localStorage.setItem(chWpKey(), cv.toDataURL('image/jpeg', .65));
+      C.wp = 'photo'; save();
+      w.querySelectorAll('[data-ck="wp"] button').forEach(x => x.classList.toggle('on', x.dataset.v === 'photo'));
+    }catch(x){ toast('Could not use this picture. Try another one.', true); }
+  };
 }
 function chatThemeMenu(){
   const cur = chThemeGet();
   const w = openModal(`<h3>🎨 Chat theme</h3><p class="sub">Choose how your chats look. Only you see this.</p>
     <div class="cth-grid">${CH_THEMES.map(([k, n, c]) => `<button type="button" class="cth-it ${k === cur ? 'on' : ''}" data-t="${k}">
       <span class="cth-pv" style="background:${c[0]}"><i style="background:${c[2]}"></i><i class="me" style="background:${c[1]}"></i></span><span class="cth-n">${esc(n)}</span></button>`).join('')}</div>
-    <div class="actions" style="margin-top:14px"><button class="btn ghost" type="button" id="cthClose">Close</button></div>`);
+    <div class="actions" style="margin-top:14px"><button class="btn ghost" type="button" id="cthClose">Close</button><button class="btn" type="button" id="cthCust">✨ Customise</button></div>`);
   w.classList.add('pw-over');
   w.querySelector('#cthClose').onclick = () => w.remove();
+  w.querySelector('#cthCust').onclick = () => { w.remove(); chatThemeCustom(); };
   w.querySelector('.cth-grid').onclick = e => {
     const b = e.target.closest('[data-t]'); if (!b) return;
     try{ localStorage.setItem(chThemeKey(), b.dataset.t); }catch(x){}
