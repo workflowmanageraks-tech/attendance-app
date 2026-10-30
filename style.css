@@ -1116,3 +1116,121 @@ body[data-nav="icons"] .nav button.grp-start::before{content:"";left:12px;right:
   .set-tile{min-height:0}
   .set-bt small{display:none}
 }
+
+/* ================= MOTION & POLISH LAYER (works with ui-plus.js) ================= */
+:root{--ease:cubic-bezier(.22,.8,.3,1)}
+body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.kpi .val,td.n,th.n,.set-tx em,.nbadge{font-variant-numeric:tabular-nums}
+
+/* page + card entrance */
+@keyframes rise{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes viewIn{from{opacity:.0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes popIn{from{opacity:0;transform:scale(.92) translateY(10px)}to{opacity:1;transform:none}}
+@keyframes growY{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes growX{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes shimmer{from{background-position:-200% 0}to{background-position:200% 0}}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes slideL{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
+@keyframes toastIn{from{opacity:0;transform:translateY(16px) scale(.95)}to{opacity:1;transform:none}}
+@keyframes toastOut{to{opacity:0;transform:translateY(10px) scale(.96)}}
+@keyframes gradMove{0%{background-position:0 50%}50%{background-position:100% 50%}100%{background-position:0 50%}}
+@keyframes ringPulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.55)}100%{box-shadow:0 0 0 12px rgba(239,68,68,0)}}
+.vw-in{animation:viewIn .32s var(--ease)}
+.rv{animation:rise .5s var(--ease) both;animation-delay:calc(var(--i,0)*45ms)}
+.bars .col{transform-origin:bottom;animation:growY .8s var(--ease) both}
+.bars .b:nth-child(2) .col{animation-delay:.04s}.bars .b:nth-child(3) .col{animation-delay:.08s}.bars .b:nth-child(4) .col{animation-delay:.12s}
+.bars .b:nth-child(5) .col{animation-delay:.16s}.bars .b:nth-child(6) .col{animation-delay:.2s}.bars .b:nth-child(7) .col{animation-delay:.24s}
+.bars .b:nth-child(8) .col{animation-delay:.28s}.bars .b:nth-child(9) .col{animation-delay:.32s}.bars .b:nth-child(10) .col{animation-delay:.36s}
+.bars .b:nth-child(11) .col{animation-delay:.4s}.bars .b:nth-child(12) .col{animation-delay:.44s}
+.hbar .fill{transform-origin:left;animation:growX .9s var(--ease) both}
+.donut{animation:popIn .7s var(--ease) both}
+.card{transition:transform .2s var(--ease),box-shadow .2s var(--ease)}
+.kpi:hover{transform:translateY(-3px);box-shadow:0 14px 30px rgba(15,23,42,.12)}
+.kpi::after{content:"";position:absolute;right:-26px;top:-26px;width:90px;height:90px;border-radius:50%;background:var(--brand-soft);opacity:.55;pointer-events:none}
+
+/* sidebar entrance + active indicator */
+#app:not(.hidden) .nav button:not(.hidden){animation:slideL .45s var(--ease) both}
+#app:not(.hidden) .nav button:nth-child(2){animation-delay:.03s}#app:not(.hidden) .nav button:nth-child(3){animation-delay:.06s}
+#app:not(.hidden) .nav button:nth-child(4){animation-delay:.09s}#app:not(.hidden) .nav button:nth-child(5){animation-delay:.12s}
+#app:not(.hidden) .nav button:nth-child(6){animation-delay:.15s}#app:not(.hidden) .nav button:nth-child(7){animation-delay:.18s}
+#app:not(.hidden) .nav button:nth-child(8){animation-delay:.21s}#app:not(.hidden) .nav button:nth-child(9){animation-delay:.24s}
+#app:not(.hidden) .nav button:nth-child(n+10){animation-delay:.27s}
+.nav button{transition:background .2s,color .2s,transform .2s var(--ease)}
+.nav button:hover{transform:translateX(3px)}
+.nav button.active::after{content:"";position:absolute;left:-2px;top:22%;bottom:22%;width:4px;border-radius:0 4px 4px 0;background:var(--brand-2);animation:growY .35s var(--ease)}
+.nav button{position:relative}
+.nav .nbadge{animation:ringPulse 1.6s infinite}
+
+/* buttons: press, ripple, loading */
+.btn{transition:transform .15s var(--ease),box-shadow .2s,background .2s,opacity .2s}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:scale(.96)}
+.rip-host{position:relative;overflow:hidden}
+.rip{position:absolute;border-radius:50%;background:currentColor;opacity:.22;transform:scale(0);animation:ripple .6s ease-out forwards;pointer-events:none}
+@keyframes ripple{to{transform:scale(1);opacity:0}}
+.btn.is-loading{pointer-events:none;opacity:.8;position:relative}
+.btn.is-loading::after{content:"";width:14px;height:14px;margin-left:8px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin .7s linear infinite;display:inline-block;vertical-align:-2px}
+
+/* modal + toast */
+.overlay{animation:fade .18s}
+.modal{animation:popIn .28s var(--ease)}
+.toast{display:flex;align-items:center;gap:9px;animation:toastIn .3s var(--ease);position:relative;overflow:hidden}
+.toast::before{content:"✓";flex:none;width:20px;height:20px;border-radius:50%;background:#16a34a;display:grid;place-items:center;font-size:12px;font-weight:800}
+.toast.bad::before{content:"!";background:rgba(255,255,255,.25)}
+.toast::after{content:"";position:absolute;left:0;bottom:0;height:3px;width:100%;background:rgba(255,255,255,.55);transform-origin:left;animation:growX 2.6s linear reverse forwards}
+.toast.out{animation:toastOut .25s ease forwards}
+
+/* skeleton + empty states */
+.skel-box{padding:6px 2px;display:grid;gap:12px}
+.skel{display:block;height:14px;border-radius:8px;width:100%;background:linear-gradient(90deg,var(--soft2) 25%,var(--line) 37%,var(--soft2) 63%);background-size:200% 100%;animation:shimmer 1.3s linear infinite}
+.skel.w80{width:80%}.skel.w60{width:60%}.skel.w40{width:40%}
+.skel-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--gap,16px);margin-bottom:16px}
+.skel-kpis .skel{height:92px;border-radius:var(--radius)}
+.empty-state::before{content:"🗂️";display:block;font-size:38px;margin-bottom:6px;animation:floaty 3s ease-in-out infinite}
+
+/* tables */
+table.stk tbody tr:nth-child(even),.wk tbody tr:nth-child(even){background:rgba(100,116,139,.06)}
+table.stk tbody tr,.wk tbody tr{transition:background .15s}
+table.stk tbody tr:hover,.wk tbody tr:hover{background:var(--brand-soft)}
+.q-off{display:none!important}
+.tbl-q{position:relative;margin:0 0 10px;max-width:340px}
+.tbl-q span{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:13px;opacity:.6;pointer-events:none}
+.tbl-q .input{padding-left:34px;border-radius:11px;height:38px}
+
+/* floating + button and phone bottom tab bar */
+.fab{position:fixed;right:18px;bottom:calc(86px + env(safe-area-inset-bottom));z-index:120;width:56px;height:56px;border-radius:50%;border:0;color:var(--on-brand,#fff);font-size:28px;line-height:1;display:none;place-items:center;
+  background:linear-gradient(135deg,var(--brand),var(--brand-2));box-shadow:0 10px 26px rgba(79,70,229,.45);animation:popIn .4s var(--ease);cursor:pointer;overflow:hidden}
+.fab:active{transform:scale(.9)}
+#btabs{display:none}
+@media (max-width:860px){
+  .fab:not(.hidden){display:grid}
+  main{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
+  #btabs{display:flex;position:fixed;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:110;height:62px;padding:6px;gap:2px;
+    background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 12px 34px rgba(15,23,42,.18);animation:rise .5s var(--ease) both}
+  #btabs button{flex:1;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border:0;background:none;color:var(--muted);border-radius:15px;font:inherit;font-size:11px;font-weight:700;transition:.2s var(--ease)}
+  #btabs .bt-i{font-size:20px;line-height:1;transition:transform .25s var(--ease)}
+  #btabs button.on{background:var(--brand-soft);color:var(--brand-ink)}
+  #btabs button.on .bt-i{transform:translateY(-2px) scale(1.12)}
+  #btabs .bt-b{position:absolute;top:4px;right:calc(50% - 22px);min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:#ef4444;color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center}
+  body:has(.chat.in-conv) #btabs,body:has(.chat.in-conv) .fab,body.menu-open #btabs,body.menu-open .fab{display:none!important}
+  body.th-kbd #btabs{display:none}
+}
+
+/* login: branded, animated */
+#login{background:linear-gradient(135deg,var(--brand),var(--brand-2),#0ea5e9,var(--brand));background-size:300% 300%;animation:gradMove 14s ease infinite}
+.login-card{animation:popIn .55s var(--ease) both;box-shadow:0 30px 80px rgba(15,23,42,.35)}
+.login-card .logo{animation:floaty 3.4s ease-in-out infinite}
+.login-card .field{animation:rise .5s var(--ease) both}
+.login-card .field:nth-of-type(1){animation-delay:.12s}.login-card .field:nth-of-type(2){animation-delay:.2s}
+.login-card .input{transition:box-shadow .2s,border-color .2s,transform .2s}
+.login-card .input:focus{transform:translateY(-1px);box-shadow:0 0 0 4px var(--brand-soft)}
+.input:focus,.select:focus{box-shadow:0 0 0 3px var(--brand-soft);border-color:var(--brand);outline:none}
+
+/* dark mode polish */
+html[data-mode="dark"] .card,html[data-mode="dark"] .set-tile,html[data-mode="dark"] #btabs{border:1px solid rgba(148,163,184,.14);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+html[data-mode="dark"] .kpi::after{opacity:.25}
+html[data-mode="dark"] table.stk tbody tr:nth-child(even),html[data-mode="dark"] .wk tbody tr:nth-child(even){background:rgba(255,255,255,.035)}
+
+/* respect "Animations: Off" and the phone's reduce-motion setting */
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}

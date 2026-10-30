@@ -1,7 +1,7 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
 const CACHE = 'ks-shell-v1';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.json', 'icon-192.png'];
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'manifest.json', 'icon-192.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => {})))).then(() => self.skipWaiting()));
@@ -16,12 +16,20 @@ self.addEventListener('fetch', e => {
   if (r.method !== 'GET') return;
   const u = new URL(r.url);
   if (u.origin !== self.location.origin) return;           // the API on Render is never touched here
+  // versioned files (?v=) never change under the same URL -> serve them from the saved copy instantly; pages stay network-first
+  if (u.search.indexOf('v=') > -1 && r.mode !== 'navigate') return e.respondWith(cacheFirst(r, u));
   e.respondWith(netFirst(r, u));
 });
+async function cacheFirst(req, u) {
+  const cache = await caches.open(CACHE);
+  const hit = await cache.match(req);
+  if (hit) return hit;
+  return netFirst(req, u);
+}
 async function netFirst(req, u) {
   const cache = await caches.open(CACHE);
   try {
-    const res = await Promise.race([fetch(req), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 6000))]);
+    const res = await Promise.race([fetch(req), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 3500))]);
     if (res && res.ok && res.type === 'basic') {
       const copy = res.clone();
       cache.keys().then(async ks => {                       // keep one copy per file (drop older ?v= versions)

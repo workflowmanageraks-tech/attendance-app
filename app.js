@@ -24,7 +24,7 @@ let busyN = 0;
 function busy(on){ busyN += on ? 1 : -1; $('#bar').classList.toggle('on', busyN > 0); }
 function toast(msg, bad){
   const t = document.createElement('div'); t.className = 'toast' + (bad ? ' bad' : ''); t.textContent = msg;
-  $('#toasts').appendChild(t); setTimeout(() => t.remove(), 2600);
+  $('#toasts').appendChild(t); setTimeout(() => t.classList.add('out'), 2350); setTimeout(() => t.remove(), 2650);
 }
 function openModal(html, cls=''){
   const w = document.createElement('div'); w.className = 'overlay';
@@ -394,16 +394,20 @@ let AV = (function(){ try{ return JSON.parse(localStorage.getItem('ks_av_v1') ||
 const avSave = () => { try{ localStorage.setItem('ks_av_v1', JSON.stringify(AV)); }catch(e){} };
 const avSrc = id => (AV[id] && AV[id].src) || '';
 async function boot(){
-  await bioDetect();
   const t = store.get(TK);
+  const bioP = bioDetect();                       // runs while the network call below is already in flight
+  if (t){
+    S.token = t;                                  // returning user: show the app frame at once, then load the data
+    $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
+    $('#view').innerHTML = '<div class="skel-kpis"><i class="skel"></i><i class="skel"></i><i class="skel"></i><i class="skel"></i></div><div class="card"><div class="skel-box"><i class="skel w60"></i><i class="skel"></i><i class="skel w80"></i><i class="skel w40"></i></div></div>';
+    try { await loadAll(); enterApp(); return; } catch { clearToken(); $('#app').classList.add('hidden'); }
+  } else showLogin(false);                        // new visitor: the sign-in card appears instantly (no waiting for the server)
   let st;
   try { st = await api('status'); }
-  catch(e){ showLogin(false, 'Cannot reach the server: ' + e.message); return; }
-  if (t && !st.needsSetup){
-    S.token = t;
-    try { await loadAll(); enterApp(); return; } catch { clearToken(); }
-  }
-  showLogin(st.needsSetup, '', st.needsSetupCode);
+  catch(e){ showLogin(false, 'Cannot reach the server: ' + e.message); await bioP; bioShowBtn(); return; }
+  await bioP;
+  if (st.needsSetup || t) showLogin(st.needsSetup, '', st.needsSetupCode);   // a new visitor already sees the sign-in card
+  bioShowBtn();
   if (BIO.ok && bioSaved() && !st.needsSetup) bioLoginGo(true);
 }
 
