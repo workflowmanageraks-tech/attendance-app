@@ -1388,6 +1388,30 @@ function thApply(){
   thMenu();
 }
 thApply();
+/* ---------- sidebar: neat section labels (Overview / Workspace / Tools / System) ---------- */
+const NAV_GRP = { dashboard:'Overview', attendance:'Overview', expenses:'Overview', work:'Overview', timetable:'Overview',
+  chat:'Workspace', vcs:'Workspace', rack:'Workspace', passwords:'Workspace', links:'Workspace', lic:'Workspace',
+  logins:'Tools', deploy:'Tools', updates:'Tools', version:'Tools', settings:'System' };
+function navGroups(){
+  const nav = document.getElementById('nav'); if (!nav) return;
+  let prev = '';
+  [...nav.children].forEach(b => {
+    const off = b.classList.contains('hidden') || b.classList.contains('th-off');
+    let start = false, gl = '';
+    if (!off){
+      const g = NAV_GRP[b.dataset.v] || prev || 'Overview';
+      start = g !== prev; gl = start ? g : ''; prev = g;
+    }
+    if (b.classList.contains('grp-start') !== start) b.classList.toggle('grp-start', start);
+    if ((b.dataset.gl || '') !== gl){ if (gl) b.dataset.gl = gl; else delete b.dataset.gl; }
+  });
+}
+(function navGroupsInit(){
+  const nav = document.getElementById('nav'); if (!nav) return;
+  let t = 0; const run = () => { cancelAnimationFrame(t); t = requestAnimationFrame(navGroups); };
+  new MutationObserver(run).observe(nav, { childList:true, subtree:true, attributes:true, attributeFilter:['class'] });
+  navGroups();
+})();
 if (window.matchMedia) { try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (T.mode === 'auto') thApply(); }); } catch(e){} }
 
 /* ---------- the Settings card ---------- */
@@ -3338,16 +3362,27 @@ function settingsHub(grid){
   S.setSec = open;
   [...grid.children].forEach(c => { c.style.gridColumn = ''; if (c.dataset.sec !== open) c.classList.add('hidden'); });
   const tile = k => { const d = def[k], h = setHint(k);
-    return `<button type="button" class="set-tile" onclick="setOpen('${k}')"><span class="set-ic">${d[0]}</span><span class="set-tx"><b>${esc(d[1])}</b><small>${esc(d[2])}</small>${h ? `<em>${esc(h)}</em>` : ''}</span><span class="set-go">›</span></button>`; };
+    return `<button type="button" class="set-tile" data-q="${esc((d[1] + ' ' + d[2]).toLowerCase())}" onclick="setOpen('${k}')"><span class="set-ic">${d[0]}</span><span class="set-tx"><b>${esc(d[1])}</b><small>${esc(d[2])}</small>${h ? `<em>${esc(h)}</em>` : ''}</span><span class="set-go">›</span></button>`; };
   const used = new Set();
-  let hub = SET_GROUPS.map(([g, keys]) => {
+  const sec = (g, ks, gi) => `<section class="set-grp" data-g="${gi}"><div class="set-gt"><span>${esc(g)}</span><i>${ks.length}</i></div><div class="set-tiles">${ks.map(tile).join('')}</div></section>`;
+  let hub = SET_GROUPS.map(([g, keys], gi) => {
     const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
-    return ks.length ? `<div class="set-gt">${esc(g)}</div><div class="set-tiles">${ks.map(tile).join('')}</div>` : '';
+    return ks.length ? sec(g, ks, gi) : '';
   }).join('');
   const rest = Object.keys(found).filter(k => !used.has(k));
-  if (rest.length) hub += `<div class="set-gt">More</div><div class="set-tiles">${rest.map(tile).join('')}</div>`;
-  const bar = open ? `<div class="set-bar"><button type="button" class="btn ghost sm" onclick="setBack()">← Settings</button><b>${def[open][0]} ${esc(def[open][1])}</b></div>` : '';
-  return `<div class="set-root">${open ? bar : `<div class="set-hub">${hub}</div>`}<div class="set-detail">${grid.innerHTML}</div></div>`;
+  if (rest.length) hub += sec('More', rest, 9);
+  const search = `<div class="set-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>`;
+  const bar = open ? `<div class="set-bar"><button type="button" class="btn ghost sm" onclick="setBack()">← Settings</button><span class="set-bic">${def[open][0]}</span><div class="set-bt"><b>${esc(def[open][1])}</b>${def[open][2] ? `<small>${esc(def[open][2])}</small>` : ''}</div></div>` : '';
+  return `<div class="set-root">${open ? bar : `<div class="set-hub">${search}${hub}<div class="empty-state hidden" id="setNone">No setting matches your search</div></div>`}<div class="set-detail">${grid.innerHTML}</div></div>`;
+}
+function setFilter(q){
+  q = (q || '').trim().toLowerCase(); let any = false;
+  document.querySelectorAll('.set-hub .set-grp').forEach(g => {
+    let n = 0;
+    g.querySelectorAll('.set-tile').forEach(t => { const ok = !q || t.dataset.q.includes(q); t.classList.toggle('hidden', !ok); if (ok) n++; });
+    g.classList.toggle('hidden', !n); if (n) any = true;
+  });
+  const none = document.getElementById('setNone'); if (none) none.classList.toggle('hidden', any);
 }
 function applySettings(r){
   if (r.settings) S.d.settings = { ...S.d.settings, ...r.settings };
