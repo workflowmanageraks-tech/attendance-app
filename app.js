@@ -1258,7 +1258,7 @@ const TITLES = {
   links:['Links','Save movie, web series and anime links and copy them in one tap'],
   lic:['LIC','Customer policies — amount, dates and how long each one runs'],
   vcs:['VCS Complaint Manage','Log complaints, assign them to a user and track Open / Pending / Closed'],
-  rack:['Rack Mapping','Racks 1–100, rows A–D — Carton, Inner, Box, Scheme, INS No. in every row (customizable)'],
+  rack:['Rack Mapping','Left side, racks 1–11, rows A–D — Carton, Inner, Box, Scheme, INS No. in every row (customizable)'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
@@ -2439,10 +2439,13 @@ async function vcsUpdate(id){ if (!can('vcs')) return deny();
 }
 
 /* =====================================================================
-   VIEW: RACK MAPPING  (racks 1–100 — every rack has the same customisable fields: Carton, Inner, Box, Scheme, INS No. …)
+   VIEW: RACK MAPPING  (racks Left 1–11 — every rack has the same customisable fields: Carton, Inner, Box, Scheme, INS No. …)
    Each field is a box you can type in and save. Fields can be renamed, added and removed with “Customize fields”.
    ===================================================================== */
-const RACK_MAX = 100, RACK_DEF_ROWS = ['a','b','c','d'], RACK_DEF_FIELDS = ['Carton','Inner','Box','Scheme','INS No.'];
+/* Racks are on the LEFT side and numbered 1 to 11. To change the numbers, edit RACK_LIST (e.g. [1,2,3,4,5,6,7,8,11] to skip 9 and 10); to name another side, change RACK_SIDE. */
+const RACK_SIDE = 'Left', RACK_LIST = [1,2,3,4,5,6,7,8,9,10,11];
+const rackName = n => RACK_SIDE + ' ' + n;
+const RACK_DEF_ROWS = ['a','b','c','d'], RACK_DEF_FIELDS = ['Carton','Inner','Box','Scheme','INS No.'];
 function rackState(){ return S.rackUi = S.rackUi || { q:'', show:'all' }; }
 function rackCfg(){ const c = S.d.rackCfg || {}; return { fields:(c.fields && c.fields.length) ? c.fields : RACK_DEF_FIELDS, rows:c.rows || { '*':RACK_DEF_ROWS }, data:c.data || {} }; }
 function rackRowsOf(n){ const c = rackCfg(); return c.rows[String(n)] || c.rows['*'] || RACK_DEF_ROWS; }
@@ -2454,31 +2457,31 @@ function rackVals(n){
 }
 function rackFilled(n){ const v = rackVals(n); return Object.keys(v).some(r => Object.keys(v[r] || {}).some(f => String(v[r][f] || '').trim() !== '')); }
 function rackHay(n, v){          // only what you typed (+ rack number and row names) — so a search never matches every rack
-  return (n + ' ' + Object.keys(v).map(r => { const o = v[r] || {}, vals = Object.keys(o).map(f => o[f]).filter(x => String(x || '').trim() !== ''); return vals.length ? r + ' ' + n + r + ' ' + vals.join(' ') : ''; }).join(' ')).toLowerCase();
+  return (n + ' ' + RACK_SIDE + ' ' + Object.keys(v).map(r => { const o = v[r] || {}, vals = Object.keys(o).map(f => o[f]).filter(x => String(x || '').trim() !== ''); return vals.length ? r + ' ' + n + r + ' ' + vals.join(' ') : ''; }).join(' ')).toLowerCase();
 }
 function rackSummaryHtml(n, fields){
   const v = rackVals(n), rows = [...rackRowsOf(n), ...Object.keys(v).filter(r => !rackRowsOf(n).includes(r))];
   const parts = rows.map(r => { const o = v[r] || {}, bits = fields.filter(f => String(o[f] || '').trim() !== '').map(f => `<span class="rk-bit"><i>${esc(f)}</i> ${esc(o[f])}</span>`).join('');
-    return bits ? `<div class="rk-sumrow"><b>${esc(n)}${esc(String(r).toUpperCase())}</b>${bits}</div>` : ''; }).join('');
+    return bits ? `<div class="rk-sumrow"><b>${esc(rackName(n))} · ${esc(String(r).toUpperCase())}</b>${bits}</div>` : ''; }).join('');
   return parts || '<div class="rk-empty">Nothing filled yet</div>';
 }
 function vRack(){
   const R = rackState(), cfg = rackCfg(), ro = !can('rack'), q = (R.q || '').trim().toLowerCase();
-  let filled = 0; for (let n = 1; n <= RACK_MAX; n++) if (rackFilled(n)) filled++;
-  const stats = `<div class="rk-stats"><div><b>${RACK_MAX}</b><span>Racks</span></div><div><b>${filled}</b><span>Racks filled</span></div><div><b>${cfg.fields.length}</b><span>Fields per row</span></div></div>`;
+  let filled = 0; RACK_LIST.forEach(n => { if (rackFilled(n)) filled++; });
+  const stats = `<div class="rk-stats"><div><b>${RACK_LIST.length}</b><span>Racks (${RACK_SIDE})</span></div><div><b>${filled}</b><span>Racks filled</span></div><div><b>${cfg.fields.length}</b><span>Fields per row</span></div></div>`;
   const bar = `<div class="card" style="margin-bottom:16px"><div class="actions">
       <input class="input" id="rkq" style="flex:1;min-width:200px" placeholder="🔍 Search anything you filled — item, INS no., scheme, 12b …" value="${esc(R.q)}" oninput="rackSearch(this.value)">
       <button class="btn soft" onclick="rackCalc()">🧮 Calculator</button>
       ${ro ? '' : `<button class="btn ghost" onclick="rackFieldsEdit()">✏️ Customize fields</button><button class="btn ghost" onclick="rackRowsEdit()">☰ Customize rows</button>`}</div></div>`;
   let body;
   if (q){
-    const hits = []; for (let n = 1; n <= RACK_MAX; n++) if (rackHay(n, rackVals(n)).includes(q)) hits.push(n);
+    const hits = []; RACK_LIST.forEach(n => { if (rackHay(n, rackVals(n)).includes(q)) hits.push(n); });
     hits.sort((a, b) => (String(b) === q) - (String(a) === q) || a - b);
     body = `<div class="card"><h3>Search results <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${hits.length} rack${hits.length === 1 ? '' : 's'}</span></h3>
-      ${hits.length ? hits.map(n => `<div class="rk-hit" onclick="rackOpen(${n})" role="button" tabindex="0"><div class="rk-hit-h"><span class="rk-loc" style="margin:0">Rack ${n}</span><span class="muted">Open ›</span></div>${rackSummaryHtml(n, cfg.fields)}</div>`).join('') : '<div class="empty-state">Nothing found in any rack.</div>'}</div>`;
+      ${hits.length ? hits.map(n => `<div class="rk-hit" onclick="rackOpen(${n})" role="button" tabindex="0"><div class="rk-hit-h"><span class="rk-loc" style="margin:0">${esc(rackName(n))}</span><span class="muted">Open ›</span></div>${rackSummaryHtml(n, cfg.fields)}</div>`).join('') : '<div class="empty-state">Nothing found in any rack.</div>'}</div>`;
   } else {
-    const cells = []; for (let n = 1; n <= RACK_MAX; n++) cells.push(`<button type="button" class="rk-day ${rackFilled(n) ? 'has' : ''}" onclick="rackOpen(${n})" aria-label="Rack ${n}">${n}</button>`);
-    body = `<div class="card"><h3 style="margin:0 0 10px">Racks <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· tap a number to open it and fill rows A, B, C, D</span></h3>
+    const cells = []; RACK_LIST.forEach(n => cells.push(`<button type="button" class="rk-day ${rackFilled(n) ? 'has' : ''}" onclick="rackOpen(${n})" aria-label="${esc(rackName(n))}">${n}</button>`));
+    body = `<div class="card"><h3 style="margin:0 0 10px">${RACK_SIDE} side racks <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· tap a number to open it and fill rows A, B, C, D</span></h3>
       <div class="rk-cal">${cells.join('')}</div></div>`;
   }
   return stats + bar + body + `<p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📦 Coloured numbers already have something saved. Saved in the “Rack Config” tab of your Google Sheet.</p>`;
@@ -2491,9 +2494,9 @@ function rackSearch(v){
 function rackOpen(n){
   n = +n; const fields = rackCfg().fields, ro = !can('rack'), v = rackVals(n), rows = rackRowsOf(n);
   const extra = Object.keys(v).filter(r => !rows.includes(r) && Object.keys(v[r] || {}).length);
-  const secs = [...rows, ...extra].map(r => `<div class="rk-row" data-row="${esc(r)}"><div class="rk-row-h"><span class="rk-loc" style="margin:0">${n}${esc(String(r).toUpperCase())}</span><span class="muted" style="font-size:calc(12px*var(--fs))">Row ${esc(String(r).toUpperCase())}</span></div>
+  const secs = [...rows, ...extra].map(r => `<div class="rk-row" data-row="${esc(r)}"><div class="rk-row-h"><span class="rk-loc" style="margin:0">${esc(rackName(n))} · ${esc(String(r).toUpperCase())}</span><span class="muted" style="font-size:calc(12px*var(--fs))">Row ${esc(String(r).toUpperCase())}</span></div>
       <div class="rk-fields">${fields.map((f, i) => `<label class="rk-fld"><span>${esc(f)}</span><input class="input" data-f="${i}" maxlength="200" value="${esc(((v[r] || {})[f]) || '')}" ${ro ? 'disabled' : ''} autocomplete="off"></label>`).join('')}</div></div>`).join('');
-  const w = openModal(`<h3>Rack ${n}</h3><p class="sub">What is kept in each row of this rack.</p>${secs}
+  const w = openModal(`<h3>${esc(rackName(n))}</h3><p class="sub">What is kept in each row of this rack.</p>${secs}
     <div class="foot"><button type="button" class="btn ghost" data-x>${ro ? 'Close' : 'Cancel'}</button>${ro ? '' : '<button class="btn" type="button" data-save>Save</button>'}</div>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
   const sv = w.querySelector('[data-save]'); if (!sv) return;
@@ -2505,7 +2508,7 @@ function rackOpen(n){
       const r = await api('saveRackData', { rack:String(n), values });
       S.d.rackCfg = S.d.rackCfg || {}; S.d.rackCfg.data = S.d.rackCfg.data || {};
       if (r.values && Object.keys(r.values).length) S.d.rackCfg.data[String(n)] = r.values; else delete S.d.rackCfg.data[String(n)];
-      w.remove(); render(); toast('Saved rack ' + n);
+      w.remove(); render(); toast('Saved ' + rackName(n));
     }catch(e){ sv.disabled = false; handleErr(e); }
   };
 }
@@ -2679,7 +2682,7 @@ function rackRowsEdit(){ if (!can('rack')) return deny();
 /* ---- customise the fields (rename / add / remove) ---- */
 function rackFieldsEdit(){ if (!can('rack')) return deny();
   let list = rackCfg().fields.map(f => ({ o:f, n:f }));
-  const w = openModal(`<h3>Customize fields</h3><p class="sub">Rename, add or remove the boxes shown on every rack (1–${RACK_MAX}). Renaming keeps what you already typed. Removing a field deletes its saved values.</p>
+  const w = openModal(`<h3>Customize fields</h3><p class="sub">Rename, add or remove the boxes shown on every rack (${rackName(RACK_LIST[0])} – ${rackName(RACK_LIST[RACK_LIST.length - 1])}). Renaming keeps what you already typed. Removing a field deletes its saved values.</p>
     <div id="rkF"></div>
     <div class="actions" style="flex-wrap:nowrap;margin:10px 0 4px"><input class="input" id="rkNew" maxlength="40" placeholder="New field name (e.g. Pouch)" autocomplete="off"><button class="btn soft" type="button" data-add>＋ Add</button></div>
     <div class="actions" style="margin:6px 0 0"><button class="btn ghost sm" type="button" data-reset>↺ Reset to default</button></div>
