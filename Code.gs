@@ -47,6 +47,7 @@ const SHEET_KEYS = {
   TT: ['timetable', 'time table'],
   CHAT: ['chat'],
   CGRP: ['group conversations'],
+  TRASH: ['trash bin'],
   ACT: ['activity log', 'activity'],
   LPH: ['login security photos', 'security photos', 'login photos'],
   LIC: ['lic', 'lic policies', 'policies'],
@@ -54,7 +55,7 @@ const SHEET_KEYS = {
   RACK: ['rack mapping'],
   RACKCFG: ['rack config']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -91,7 +92,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'RACK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'CGRP', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'RACK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'CGRP', 'TRASH', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -164,7 +165,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, setActivityAccess: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -324,6 +325,7 @@ function route_(req) {
       case 'saveGroup':         out = saveGroup_(req); break;
       case 'deleteGroup':       out = deleteGroup_(req); break;
       case 'setActivityAccess': out = setActivityAccess_(req); break;
+      case 'chatDelete':        out = chatDelete_(req); break;
       case 'chatUsers':         return chatUsers_();
       case 'chatPhotos':        return chatPhotos_(req);
       case 'chatPhotoFull':     return chatPhotoFull_(req);
@@ -338,6 +340,8 @@ function route_(req) {
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
       case 'chatLive':          return chatLive_(req);
+      case 'trashList':         return trashList_();
+      case 'trashMediaTicket':  return trashMediaTicket_(req);
       case 'chatTranslate':     return chatTranslate_(req);
       case 'chatSend':          return chatSend_(req);
       case 'chatGroupSave':     return chatGroupSave_(req);
@@ -1147,6 +1151,10 @@ function createSheet_(k) {
   } else if (k === 'CHAT') {
     sh.getRange(1, 1, 1, 6).setValues([['ID', 'Time (ms)', 'From (user ID)', 'To (user ID)', 'Message', 'Sent at']]);
     sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:F').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
+    sh.setFrozenRows(1);
+  } else if (k === 'TRASH') {
+    sh.getRange(1, 1, 1, 12).setValues([['Trash ID', 'Deleted at (ms)', 'Deleted by (user ID)', 'Deleted by (name)', 'From (user ID)', 'From (name)', 'To (user ID / group)', 'To (name)', 'Message', 'Sent at (ms)', 'Sent at', 'Original message ID']]);
+    sh.getRange('A:L').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0'); sh.getRange('J:J').setNumberFormat('0');
     sh.setFrozenRows(1);
   } else if (k === 'CGRP') {
     sh.getRange(1, 1, 1, 5).setValues([['ID', 'Group name', 'Member user IDs (comma separated)', 'Created by (user ID)', 'Created']]);
@@ -2706,7 +2714,7 @@ function chatFetch_(req) {
   var peerRead = Number(readPtr_(w)[CTX.uid] || 0);
   var ms = seenMap_([w])[w] || 0;
   var pr = ms ? presence_(ms, now) : null;
-  return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, peerSeen: ms, now: now, presence: pr };
+  return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, peerSeen: ms, now: now, presence: pr, gone: chatGone_(req, function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); }) };
 }
 // Light version of chatFetch for the open chat (polled every ~1.5 s): new messages + delivered / seen info.
 // req.read = 1 means "the person is looking at this chat right now" -> everything from the other person counts as seen.
@@ -2723,7 +2731,8 @@ function chatLive_(req) {
     if (latestIn > (ptr[w] || 0)) { ptr[w] = latestIn; PropertiesService.getScriptProperties().setProperty('CR_' + CTX.uid, JSON.stringify(ptr)); }
   }
   var ms = seenMap_([w])[w] || 0;
-  return { ok: true, messages: out.map(chatMsgOut_), peerRead: Number(readPtr_(w)[CTX.uid] || 0), peerSeen: ms, now: now, presence: ms ? presence_(ms, now) : null };
+  return { ok: true, messages: out.map(chatMsgOut_), peerRead: Number(readPtr_(w)[CTX.uid] || 0), peerSeen: ms, now: now, presence: ms ? presence_(ms, now) : null,
+    gone: chatGone_(req, function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); }) };
 }
 // Translate messages (English / Hindi / Indonesian) with Google Translate built into Apps Script. Results are cached 6 hours.
 var TR_LANGS = { en: 1, hi: 1, id: 1 };
@@ -2816,6 +2825,87 @@ function chatSend_(req) {
   rng.setValues([[id, t, CTX.uid, peer.id, text, nowStr_()]]);
   if (sh.getLastRow() > 20000) sh.deleteRows(2, 2000);              // keep the sheet from growing forever
   return { ok: true, message: { id: id, t: t, mine: true, text: text } };
+}
+
+// ---------- CHAT TRASH (deleted messages / photos / videos vanish for EVERYBODY in the chat, but are kept for the main admin) ----------
+// Sheet "Trash Bin": Trash ID | Deleted at (ms) | Deleted by ID | Deleted by name | From ID | From name | To ID | To name | Message | Sent at (ms) | Sent at | Original message ID
+// A deleted message is MOVED out of the Chat sheet: nobody sees a "message deleted" note, so the other person cannot tell it is still stored.
+// Photos / videos stay in Google Drive (only the chat row moves). Who may delete: your own messages; the main admin may delete any message.
+var TRASH_READ = 1500;
+function trashRows_(n) {
+  var sh = getSheet_('TRASH'), last = sh.getLastRow();
+  if (last < 2) return [];
+  var cnt = Math.min(last - 1, n || TRASH_READ);
+  return sh.getRange(last - cnt + 1, 1, cnt, 12).getValues().map(function (r) {
+    return { id: String(r[0]), at: Number(r[1]) || 0, byId: String(r[2]), by: String(r[3]), fromId: String(r[4]), from: String(r[5]),
+      toId: String(r[6]), to: String(r[7]), text: String(r[8]), sentMs: Number(r[9]) || 0, sent: tsStr_(r[10]), oid: String(r[11]) };
+  });
+}
+// ids deleted since the time the app last heard from the server (so the other phone drops them too)
+function chatGone_(req, match) {
+  var since = Number(req.gs) || 0;
+  if (!since) return [];
+  try {
+    if (since >= Number(PropertiesService.getScriptProperties().getProperty('TR_LAST') || 0)) return [];
+    var out = [];
+    trashRows_(300).forEach(function (r) { if (r.at > since && match({ from: r.fromId, to: r.toId })) out.push(r.oid); });
+    return out;
+  } catch (e) { return []; }
+}
+function chatDelete_(req) {
+  var conv = String(req.with || '').trim(), isG = isChatGroupId_(conv);
+  var peer = isG ? chatGroupOk_(conv) : chatPeerOk_(conv);
+  var ids = Array.isArray(req.ids) ? req.ids.slice(0, 100).map(String) : [];
+  if (!ids.length) fail_('Select a message first.');
+  var want = {}; ids.forEach(function (i) { want[i] = 1; });
+  var sh = getSheet_('CHAT'), last = sh.getLastRow();
+  if (last < 2) return { ok: true, gone: [] };
+  var n = Math.min(last - 1, CHAT_SCAN), top = last - n + 1;
+  var vals = sh.getRange(top, 1, n, 6).getValues(), hit = [], denied = 0;
+  vals.forEach(function (r, i) {
+    var id = String(r[0]); if (!want[id]) return;
+    var from = String(r[2]), to = String(r[3]);
+    var inConv = isG ? to === conv : ((from === CTX.uid && to === peer.id) || (from === peer.id && to === CTX.uid));
+    if (!inConv) return;
+    if (from !== CTX.uid && !CTX.primary) { denied++; return; }
+    hit.push({ row: top + i, id: id, t: Number(r[1]) || 0, from: from, to: to, text: String(r[4]), sent: tsStr_(r[5]) });
+  });
+  if (!hit.length) { if (denied) fail_('You can delete only your own messages.', 'PERM'); return { ok: true, gone: [] }; }
+  var nm = chatNameMap_(), now = Date.now(), byName = nm[CTX.uid] || CTX.name || CTX.username || 'User';
+  var rows = hit.map(function (h) {
+    return [Utilities.getUuid().replace(/-/g, '').slice(0, 12), now, CTX.uid, byName, h.from, nm[h.from] || h.from, h.to, isG ? peer.name : (nm[h.to] || h.to), h.text, h.t, h.sent, h.id];
+  });
+  var tsh = getSheet_('TRASH'), start = tsh.getLastRow() + 1;
+  var rng = tsh.getRange(start, 1, rows.length, 12);
+  rng.setNumberFormat('@');
+  tsh.getRange(start, 2, rows.length, 1).setNumberFormat('0');
+  tsh.getRange(start, 10, rows.length, 1).setNumberFormat('0');
+  rng.setValues(rows);                                              // saved in the Trash FIRST, then removed from the chat
+  hit.slice().sort(function (a, b) { return b.row - a.row; }).forEach(function (h) { sh.deleteRow(h.row); });
+  PropertiesService.getScriptProperties().setProperty('TR_LAST', String(now));
+  return { ok: true, gone: hit.map(function (h) { return h.id; }) };
+}
+// Main admin only: the Trash card in Settings
+function trashList_() {
+  if (!CTX.primary) fail_('Only the main admin can open the Trash.', 'PERM');
+  var rows = trashRows_(TRASH_READ).reverse().slice(0, 400);
+  return { ok: true, total: Math.max(0, getSheet_('TRASH').getLastRow() - 1), items: rows.map(function (r) {
+    return { id: r.id, at: r.at, by: r.by, byId: r.byId, from: r.from, to: r.to, text: r.text, sentMs: r.sentMs, sent: r.sent };
+  }) };
+}
+function trashMediaTicket_(req) {
+  if (!CTX.primary) fail_('Only the main admin can open the Trash.', 'PERM');
+  if (typeof mediaSign_ === 'undefined') fail_('Photos and videos need the Node server.');
+  var want = Array.isArray(req.ids) ? req.ids.slice(0, 40).map(String) : [], out = {}, rows = trashRows_(TRASH_READ);
+  var exp = (Math.floor(Date.now() / 21600000) + 2) * 21600000;
+  want.forEach(function (id) {
+    if (!/^[A-Za-z0-9_-]{10,100}$/.test(id)) return;
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var o = chatMediaParse_(rows[i].text);
+      if (o && o.i === id) { out[id] = { u: CTX.uid, e: exp, k: mediaSign_(id, CTX.uid, exp) }; return; }
+    }
+  });
+  return { ok: true, tickets: out };
 }
 
 // ---------- CHAT GROUPS (group chat + Ludo for everybody in it) ----------
@@ -2927,7 +3017,7 @@ function chatGroupFetch_(gid, req) {
   rows.forEach(function (r) { if (r.from !== CTX.uid && r.t > latestIn) latestIn = r.t; });
   var ptr = readPtr_(CTX.uid);
   if (latestIn > (ptr[gid] || 0)) { ptr[gid] = latestIn; PropertiesService.getScriptProperties().setProperty('CR_' + CTX.uid, JSON.stringify(ptr)); }
-  return { ok: true, peerRead: 0, peerSeen: 0, now: now, presence: null, group: { id: g.id, name: g.name, members: chatGroupMemberList_(g, nm) },
+  return { ok: true, peerRead: 0, peerSeen: 0, now: now, presence: null, gone: chatGone_(req, function (r) { return r.to === gid; }), group: { id: g.id, name: g.name, members: chatGroupMemberList_(g, nm) },
     messages: out.map(function (r) { return { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text, from: r.from === CTX.uid ? '' : (nm[r.from] || 'Someone') }; }) };
 }
 

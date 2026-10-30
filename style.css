@@ -988,3 +988,13 @@ canvas.vc-local{transform:none}
   .set-ic{width:40px;height:40px}
 }
 @media (max-width:360px){.set-tiles{grid-template-columns:1fr}}
+
+/* Trash (Settings, main admin) */
+.tr-item{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;background:var(--soft)}
+.tr-top{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline}
+.tr-top b{color:var(--ink)}
+.tr-top span{font-size:calc(12px*var(--fs));color:var(--bad);font-weight:700}
+.tr-meta{font-size:calc(12px*var(--fs));color:var(--muted);margin:2px 0 8px;word-break:break-word}
+.tr-tx{white-space:pre-wrap;word-break:break-word;margin-top:6px}
+.tr-media{display:block;width:100%;max-width:320px;max-height:260px;object-fit:contain;border-radius:10px;background:#000;cursor:pointer}
+.tr-ph{padding:18px 12px;border-radius:10px;background:var(--soft2);color:var(--muted);text-align:center}

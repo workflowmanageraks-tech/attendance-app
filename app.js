@@ -1678,7 +1678,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindTrash(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
 }
 
 /* ---------- calculations ---------- */
@@ -3218,12 +3218,13 @@ function vSettings(){
   grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
+  if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', trashCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return settingsHub(grid);
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['drive','Google Drive'],['activity','Activity log']];
+const SET_MATCH = [['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash']];
 const SET_DEF = {
   photo:['🖼','Profile photo','Your picture shown in Chat'],
   security:['🔐','Login & security','Change username and password'],
@@ -3237,14 +3238,15 @@ const SET_DEF = {
   cats:['💸','Expense categories','Income / expense categories'],
   export:['📦','Data & export','Download Excel or PDF reports'],
   drive:['☁️','Google Drive','Where chat photos & videos are stored'],
-  activity:['📋','Activity log','Who did what, and when']
+  activity:['📋','Activity log','Who did what, and when'],
+  trash:['🗑️','Trash','Deleted chat messages, photos & videos']
 };
 const SET_GROUPS = [
   ['Account & security', ['photo','security','bio']],
   ['Customize', ['theme','general']],
   ['People & access', ['emps','users','groups']],
   ['Attendance & expenses', ['status','cats']],
-  ['Data & system', ['export','drive','activity']]
+  ['Data & system', ['export','drive','activity','trash']]
 ];
 function setHint(k){
   try {
@@ -3813,7 +3815,7 @@ boot();
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
    ===================================================================== */
-const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, peerSeen:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, mu:{}, mBusy:{}, defer:false, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
+const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, peerSeen:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, mu:{}, mBusy:{}, gs:{}, defer:false, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
 S.chat = chatFresh();
 let chatTimer = null;
 function chatReset(){ clearInterval(chatTimer); chatTimer = null; clearInterval(chatLiveT); chatLiveT = null; S.chat = chatFresh(); AV = {}; try{ localStorage.removeItem('ks_av_v1'); }catch(e){} document.body.classList.remove('chat-conv'); chatBadge(); }
@@ -4231,6 +4233,13 @@ function chatApplyConv(id, r, first){
   const known = new Set((c.msgs[id] || []).map(m => m.id));
   const fresh = (r.messages || []).some(m => !m.mine && !m.state && !known.has(m.id));      // really new (not already shown by the other lane)
   let ch = chatMerge(id, r.messages || []);
+  if (r.gone && r.gone.length){                                  // somebody deleted these: they vanish from this chat too, no trace
+    const before = (c.msgs[id] || []).length;
+    c.msgs[id] = (c.msgs[id] || []).filter(m => !r.gone.includes(m.id));
+    r.gone.forEach(x => c.sel.delete(x));
+    if (c.msgs[id].length !== before){ ch = true; c.trv++; chatSelBar(); chatLoadUsers(); }
+  }
+  if (r.now) c.gs[id] = Math.max(c.gs[id] || 0, r.now);
   if (first !== true && c.histLoaded[id] && fresh) chatAlert();   // a new message in the chat I have open
   if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
   if ((r.peerRead || 0) > (c.peerRead[id] || 0)){ c.peerRead[id] = r.peerRead; ch = true; }
@@ -4251,7 +4260,7 @@ async function chatFetchConv(first){
   if (!id || c.fetching) return;
   c.fetching = true;
   try{
-    const r = await chatApi('chatFetch', { with:id, after:chatAfter(id) });
+    const r = await chatApi('chatFetch', { with:id, after:chatAfter(id), gs:c.gs[id] || 0 });
     if (c.with !== id) return;                                  // the user opened another chat meanwhile
     chatApplyConv(id, r, first);
   }catch(e){ chatErr(e); }
@@ -4266,7 +4275,7 @@ async function chatLivePoll(){
   const u = chatPeer(id); if (!u || u.isGroup) return;
   chatLiveBusy = true;
   try{
-    const r = await chatApi('chatLive', { with:id, after:chatAfter(id), read:1 });
+    const r = await chatApi('chatLive', { with:id, after:chatAfter(id), read:1, gs:c.gs[id] || 0 });
     if (r.skip || c.with !== id || document.hidden) return;
     chatApplyConv(id, r, false);
     if ((r.messages || []).some(m => !m.mine)) chatFetchConv();       // the slow lane only saves the "read" mark for good
@@ -4406,14 +4415,39 @@ function chatMsgMenu(id){
       ${v.text ? '<button class=\"btn ghost\" data-copy>📋 Copy</button>' : ''}
       ${chMediaUrl(m) ? `<a class=\"btn ghost\" href=\"${esc(chMediaUrl(m, true))}\" download>⬇ Download</a>` : ''}
       <button class=\"btn ghost\" data-pick>☑ Select</button>
+      ${chatCanDel(m) ? '<button class="btn ghost" data-del>🗑 Delete</button>' : ''}
     </div><div class=\"foot\"><button class=\"btn ghost\" data-x>Close</button></div>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
   const cb = w.querySelector('[data-copy]'); if (cb) cb.onclick = () => { w.remove(); chatCopyText(v.text); };
   w.querySelector('[data-pick]').onclick = () => { w.remove(); chatTogglePick(id); };
+  const dlb = w.querySelector('[data-del]'); if (dlb) dlb.onclick = () => { w.remove(); chatDeleteIds([id]); };
   w.querySelectorAll('[data-l]').forEach(b => b.onclick = () => {
     const l = b.dataset.l; S.chat.ov[id] = l; delete S.chat.trFail[l + '|' + id];
     w.remove(); S.chat.trv++; chatRenderMsgs();
   });
+}
+/* ---------- delete messages / photos / videos (they vanish for everybody; the main admin keeps them in Settings → Trash) ---------- */
+const chatCanDel = m => !!m && !m.state && (m.mine || !!(S.me && S.me.primary));
+function chatSelDelOk(){
+  const c = S.chat, arr = c.msgs[c.with] || [];
+  return c.sel.size > 0 && [...c.sel].every(i => chatCanDel(arr.find(m => m.id === i)));
+}
+function chatSelDel(){ chatDeleteIds([...S.chat.sel]); }
+async function chatDeleteIds(ids){
+  const c = S.chat, conv = c.with; if (!conv) return;
+  const arr = c.msgs[conv] || [], list = ids.map(i => arr.find(m => m.id === i)).filter(Boolean);
+  const real = list.filter(m => !m.state), local = list.filter(m => m.state === 'failed');     // a message that never reached the server is just dropped here
+  const n = real.length + local.length; if (!n) return;
+  const adm = !!(S.me && S.me.primary);
+  if (!await confirmBox('Delete ' + (n > 1 ? n + ' messages' : 'this message') + '?', adm ? 'It disappears from this chat for everyone and is saved in Settings → Trash.' : 'It will be removed from this chat for everyone. This cannot be undone.', 'Delete', true)) return;
+  try{
+    let gone = local.map(m => m.id);
+    if (real.length){ const r = await chatApi('chatDelete', { with:conv, ids:real.map(m => m.id) }); gone = gone.concat(r.gone || []); }
+    c.msgs[conv] = (c.msgs[conv] || []).filter(m => !gone.includes(m.id));
+    gone.forEach(i => c.sel.delete(i));
+    c.trv++; chatSelBar(); chatRenderMsgs(); chatLoadUsers();
+    toast(n > 1 ? 'Messages deleted' : 'Message deleted');
+  }catch(e){ chatErr(e); toast((e && e.message) || 'Could not delete', true); }
 }
 async function chatCopyText(t){
   try{ await navigator.clipboard.writeText(t); }
@@ -4427,7 +4461,7 @@ function chatTogglePick(id){
 function chatSelBar(){
   const b = $('#chSel'); if (!b) return;
   const n = S.chat.sel.size; b.style.display = n ? 'flex' : 'none';
-  if (n) b.innerHTML = `<button class=\"ch-sbtn\" onclick=\"chatSelClear()\" aria-label=\"Cancel\">✕</button><b>${n} selected</b><span style=\"flex:1\"></span><button class=\"ch-sbtn\" onclick=\"chatSelAll()\">☑ All</button><button class=\"ch-sbtn\" onclick=\"chatSelTr()\">🌐</button><button class=\"ch-sbtn\" onclick=\"chatSelCopy()\">📋 Copy</button>`;
+  if (n) b.innerHTML = `<button class=\"ch-sbtn\" onclick=\"chatSelClear()\" aria-label=\"Cancel\">✕</button><b>${n} selected</b><span style=\"flex:1\"></span><button class=\"ch-sbtn\" onclick=\"chatSelAll()\">☑ All</button><button class=\"ch-sbtn\" onclick=\"chatSelTr()\">🌐</button><button class=\"ch-sbtn\" onclick=\"chatSelCopy()\">📋 Copy</button>${chatSelDelOk() ? '<button class="ch-sbtn" onclick="chatSelDel()">🗑 Delete</button>' : ''}`;
 }
 function chatSelClear(){ S.chat.sel.clear(); S.chat.trv++; chatSelBar(); chatRenderMsgs(); }
 function chatSelAll(){ (S.chat.msgs[S.chat.with] || []).forEach(m => { if (!m.state) S.chat.sel.add(m.id); }); S.chat.trv++; chatSelBar(); chatRenderMsgs(); }
@@ -4601,6 +4635,66 @@ async function photoPrivacy(){
 }
 
 /* ---------- Settings: connect Google Drive for chat media (main admin) ---------- */
+/* ---------- Trash (main admin only): chat messages / photos / videos that users deleted ---------- */
+S.trash = { items:null, total:0, mu:{}, q:'', busy:false, err:'' };
+function trashCard(){
+  return `<div class="card" id="trCard"><h3>🗑️ Trash <span><button class="btn ghost sm" type="button" onclick="trashLoad()">↻ Refresh</button></span></h3>
+    <p class="muted" style="margin-bottom:12px">Every chat message, photo or video a user deletes disappears from the chat for everyone (nobody sees a “deleted” note) and is kept here with the date, time and the name of the person who deleted it. Only you can see this.</p>
+    <input class="input" id="trQ" placeholder="Search name or text…" style="margin-bottom:12px" value="${esc(S.trash.q)}">
+    <div id="trList"><div class="empty-state">Loading…</div></div></div>`;
+}
+function bindTrash(){
+  if (!(S.me && S.me.primary) || S.setSec !== 'trash') return;
+  const q = document.querySelector('#trQ'); if (q) q.oninput = e => { S.trash.q = e.target.value; trashDraw(); };
+  trashLoad();
+}
+async function trashLoad(){
+  const T = S.trash; if (T.busy) return; T.busy = true;
+  try{
+    const r = await api('trashList'); T.items = r.items || []; T.total = r.total || 0; T.err = ''; T.mu = {};
+    trashDraw();
+    const ids = []; T.items.forEach(x => { const o = chMedia({ text:x.text }); if (o && o.i && !ids.includes(o.i)) ids.push(o.i); });
+    for (let i = 0; i < ids.length; i += 40){
+      const part = ids.slice(i, i + 40);
+      try{
+        const t = await api('trashMediaTicket', { ids:part });
+        part.forEach(id => { const k = t.tickets && t.tickets[id]; T.mu[id] = k ? API_URL + '/chat/media?' + new URLSearchParams({ id, u:k.u, e:k.e, k:k.k }).toString() : null; });
+      }catch(e){ part.forEach(id => T.mu[id] = null); }
+      trashDraw();
+    }
+  }catch(e){ T.err = (e && e.message) || 'Could not load the Trash'; trashDraw(); if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
+  finally{ T.busy = false; }
+}
+const trWhen = ms => ms ? new Date(ms).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true }) : '';
+function trashItem(x){
+  const o = chMedia({ text:x.text }); let body;
+  if (o){
+    const ic = o.k === 'vid' ? '🎥' : '📷', u = S.trash.mu[o.i];
+    const med = u === undefined ? `<div class="tr-ph">${ic} Loading…</div>` : u === null ? `<div class="tr-ph">⚠️ ${ic} Could not load</div>`
+      : o.k === 'vid' ? `<video class="tr-media" src="${esc(u)}" controls preload="metadata" playsinline></video>`
+      : `<img class="tr-media" src="${esc(u)}" alt="" loading="lazy" onclick="trashView('${esc(o.i)}')">`;
+    body = med + (o.c ? `<div class="tr-tx">${esc(o.c)}</div>` : '');
+  } else body = `<div class="tr-tx">${esc(x.text)}</div>`;
+  return `<div class="tr-item"><div class="tr-top"><b>${esc(x.by || 'User')}</b><span>deleted ${esc(trWhen(x.at))}</span></div>
+    <div class="tr-meta">${esc(x.from)} → ${esc(x.to)} · sent ${esc(trWhen(x.sentMs) || x.sent)}</div>${body}</div>`;
+}
+function trashDraw(){
+  const el = document.querySelector('#trList'); if (!el) return;
+  const T = S.trash;
+  if (T.err){ el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">${esc(T.err)}</b></div>`; return; }
+  if (!T.items){ el.innerHTML = '<div class="empty-state">Loading…</div>'; return; }
+  const q = (T.q || '').trim().toLowerCase();
+  const list = T.items.filter(x => { if (!q) return true; const o = chMedia({ text:x.text }); return [x.by, x.from, x.to, o ? (o.c || o.n || '') : x.text].join(' ').toLowerCase().includes(q); });
+  if (!list.length){ el.innerHTML = `<div class="empty-state">${T.items.length ? 'Nothing matches your search.' : 'The Trash is empty.'}</div>`; return; }
+  el.innerHTML = list.map(trashItem).join('') + (T.total > T.items.length ? `<div class="muted" style="text-align:center;margin-top:8px">Showing the latest ${T.items.length} of ${T.total}. Older ones are in the “Trash Bin” sheet.</div>` : '');
+}
+function trashView(i){
+  const u = S.trash.mu[i]; if (!u) return;
+  const w = document.createElement('div'); w.className = 'ch-view';
+  w.innerHTML = `<div class="cv-bar"><button class="ch-sbtn" data-x type="button">✕</button><a class="ch-sbtn" href="${esc(u + '&dl=1&n=photo')}" download>⬇ Save</a></div><img src="${esc(u)}" alt="">`;
+  w.onclick = e => { if (e.target === w || e.target.closest('[data-x]')) w.remove(); };
+  document.body.appendChild(w);
+}
 function driveCard(){
   return `<div class=\"card\" id=\"drvCard\"><h3>☁️ Chat photos & videos → Google Drive</h3>
     <p class=\"muted\" style=\"margin-bottom:12px\">Every photo and video sent in Chat is saved in a folder called <b>KS Chat Media</b> in the Google Drive you connect here. Only the main admin can connect it.</p>
