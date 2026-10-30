@@ -15,6 +15,8 @@ function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
   wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, lic:{ q:'' }, groups:null, sig:'' };
 
+const LV = { rows:new Map(), cli:new Map(), hist:[], dest:{}, stats:null, hello:null, conn:'off', since:0, retry:0, cn:0, f:{ q:'', mode:'all', poll:false }, open:new Set(), paused:false, ctl:null, rt:null, tick:null, dt:null, err:'', hcAt:0, c0:0, fatal:false };
+
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -55,11 +57,13 @@ function callServer(body){
         .apiCall(JSON.stringify(body));
     });
   }
+  const rid = liveCliStart(body.action); body._rid = rid; let http = 0;      // _rid lets the VCS Processing card match browser and server
   return fetch(API_URL, {
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},   // avoids CORS pre-flight
     body: JSON.stringify(body)
-  }).then(r => r.json()).catch(() => { throw new Error('Cannot reach the server. Check the Apps Script deployment (Anyone can access).'); });
+  }).then(r => { http = r.status; return r.json(); }).then(j => { liveCliEnd(rid, true, { http }); return j; })
+    .catch(e => { liveCliEnd(rid, false, { http, kind:(e && e.name === 'SyntaxError') ? 'parse' : 'net', err:(e && e.message) || 'failed' }); throw new Error('Cannot reach the server. Check the Apps Script deployment (Anyone can access).'); });
 }
 async function api(action, payload = {}){
   busy(true);
@@ -89,7 +93,7 @@ function saveToken(t, remember){
 }
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
-  clearInterval(syncT); syncT = null; setMenu(false);
+  liveReset(); clearInterval(syncT); syncT = null; setMenu(false);
   clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; S.setSec = null; closeModals(); chatReset(); vcReset(); ludoReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
@@ -1679,6 +1683,7 @@ function render(){
   applyRO(v);
   startPay(); startLic();
   const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindTrash(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
+  liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise
 }
 
 /* ---------- calculations ---------- */
@@ -3264,6 +3269,7 @@ function vSettings(){
   grid.insertAdjacentHTML('afterbegin', themeCard());
   grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
+  if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', trashCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
@@ -3271,7 +3277,7 @@ function vSettings(){
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash']];
+const SET_MATCH = [['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash']];
 const SET_DEF = {
   photo:['🖼','Profile photo','Your picture shown in Chat'],
   security:['🔐','Login & security','Change username and password'],
@@ -3284,6 +3290,7 @@ const SET_DEF = {
   status:['🏷️','Attendance codes','Status codes, paid factor and colours'],
   cats:['💸','Expense categories','Income / expense categories'],
   export:['📦','Data & export','Download Excel or PDF reports'],
+  vcsproc:['📡','VCS Processing','Live: every request, Render & Google services'],
   drive:['☁️','Google Drive','Where chat photos & videos are stored'],
   activity:['📋','Activity log','Who did what, and when'],
   trash:['🗑️','Trash','Deleted chat messages, photos & videos']
@@ -3293,7 +3300,7 @@ const SET_GROUPS = [
   ['Customize', ['theme','general']],
   ['People & access', ['emps','users','groups']],
   ['Attendance & expenses', ['status','cats']],
-  ['Data & system', ['export','drive','activity','trash']]
+  ['Data & system', ['vcsproc','export','drive','activity','trash']]
 ];
 function setHint(k){
   try {
@@ -5416,3 +5423,249 @@ async function ludoTick(force){
 }
 function ludoStart(){ clearInterval(LU.timer); LU.timer = setInterval(() => ludoTick(false), 1000); }
 function ludoReset(){ clearInterval(LU.timer); LU.timer = null; const gid = LU.gid || (LU.inc && LU.inc.id); if (gid) chatApi('ludoLeave', { gid }).catch(() => {}); luClose(); }
+
+/* =====================================================================
+   VCS PROCESSING — live activity monitor (Settings, main admin only)
+   Shows every request: Browser -> Render server -> Google Sheets / Calendar / Drive / ...
+   Server events come from GET /live/stream (kept open only while this card is open).
+   The browser records its own side of each request, so "never reached Render" is visible too.
+   ===================================================================== */
+const LV_DEST = { sheets:['📊','Google Sheets'], cache:['⚡','Server memory'], oauth:['🔑','Google login'], calendar:['📅','Google Calendar'], drive:['☁️','Google Drive'],
+  translate:['🌐','Translate'], github:['🐙','GitHub'], mail:['✉️','E-mail'], turn:['📞','Call relay'], other:['🔗','Other'] };
+const LV_NODES = ['sheets','calendar','drive','oauth','translate','github','mail','turn'];
+const LV_POLL = new Set(['chatLive','callPoll','ludoPoll','callConfig','chatPing','chatFetch','getAll','status']);
+const LV_ACT = { login:'Sign in', logout:'Sign out', getAll:'Load / refresh all data', setAttendance:'Mark attendance', addExpense:'Add expense', updateExpense:'Edit expense', deleteExpense:'Delete expense',
+  addWork:'Add work entry', updateWork:'Edit work entry', deleteWork:'Delete work entry', addVcs:'Add VCS complaint', updateVcs:'Update VCS complaint', addRack:'Add rack item', updateRack:'Edit rack item',
+  deleteRack:'Delete rack item', saveRackData:'Save rack data', setTimetable:'Time table change', chatSend:'Send chat message', chatLive:'Chat live tick', chatFetch:'Load chat', chatPing:'Online ping',
+  callPoll:'Call check', ludoPoll:'Ludo check', chatTranslate:'Translate chat message', saveSettings:'Save settings', saveUser:'Save user', deleteUser:'Delete user', addEmployee:'Add employee',
+  updateEmployee:'Edit employee', deleteEmployee:'Delete employee', changeCredentials:'Change login', calSyncAll:'Sync Google Calendar', listUsers:'List users', activityLog:'Activity log',
+  deployUpload:'Deploy: publish files', deployProgress:'Deploy: check progress', updList:'Updates list', bioLogin:'Fingerprint sign in', status:'Server check' };
+const lvAct = a => LV_ACT[a] || a;
+const lvTime = t => new Date(t).toLocaleTimeString('en-GB');
+const lvDur = ms => ms == null ? '' : ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + ' s';
+const lvAgo = s => s < 90 ? Math.round(s) + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h';
+
+/* ----- browser side of each request (called from callServer) ----- */
+function liveCliStart(action){
+  const rid = Math.random().toString(36).slice(2, 9) + (++LV.cn).toString(36);
+  LV.cli.set(rid, { rid, a:String(action || '?'), t0:Date.now(), p0:performance.now(), st:'wait', poll:LV_POLL.has(action) });
+  if (LV.cli.size > 160) LV.cli.delete(LV.cli.keys().next().value);
+  liveSoon(); return rid;
+}
+function liveCliEnd(rid, ok, info){
+  const c = LV.cli.get(rid); if (!c) return;
+  c.ms = Math.round(performance.now() - c.p0); c.st = ok ? 'ok' : 'err'; Object.assign(c, info || {}); liveSoon();
+}
+
+/* ----- stream from the server ----- */
+const liveWanted = () => !!(S.token && S.d && S.view === 'settings' && S.setSec === 'vcsproc' && S.me && S.me.primary);
+function liveSync(){
+  if (!liveWanted()) return liveStop();
+  liveMount();
+  if (!LV.ctl && !LV.rt) liveConnect();
+  if (!LV.tick) LV.tick = setInterval(liveDraw, 1000);
+}
+function liveStop(){
+  if (LV.ctl) LV.ctl.abort();
+  LV.ctl = null; clearTimeout(LV.rt); LV.rt = null; clearInterval(LV.tick); LV.tick = null; LV.conn = 'off';
+}
+function liveReset(){ liveStop(); LV.rows.clear(); LV.cli.clear(); LV.hist = []; LV.dest = {}; LV.stats = null; LV.hello = null; LV.since = 0; LV.open.clear(); }
+async function liveConnect(){
+  if (LV.ctl) return;
+  const ctl = new AbortController(); LV.ctl = ctl; LV.conn = 'connecting'; LV.c0 = Date.now(); liveDraw();
+  try {
+    const r = await fetch(API_URL + '/live/stream?since=' + LV.since, { headers:{ Authorization:'Bearer ' + S.token }, signal:ctl.signal, cache:'no-store' });
+    if (!r.ok) { LV.fatal = r.status === 403 || r.status === 401; throw new Error(r.status === 403 ? 'Only the main admin can watch this.' : 'Server answered HTTP ' + r.status); }
+    LV.conn = 'live'; LV.retry = 0; LV.err = ''; liveDraw();
+    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { done, value } = await rd.read(); if (done) break;
+      buf += dec.decode(value, { stream:true }); let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        chunk.split('\n').forEach(l => { if (l.startsWith('data: ')) { let o = null; try { o = JSON.parse(l.slice(6)); } catch {} if (o) liveEvent(o); } });
+      }
+      liveSoon();
+    }
+    throw new Error('Connection closed by the server');
+  } catch (e) {
+    if (ctl.signal.aborted) return;
+    LV.conn = 'retry'; LV.err = (e && e.message === 'Failed to fetch') ? 'Cannot reach the Render server (offline, asleep or restarting)' : (e && e.message) || 'Disconnected';
+  } finally { if (LV.ctl === ctl) LV.ctl = null; }
+  liveDraw();
+  if (liveWanted() && !LV.fatal) { LV.rt = setTimeout(() => { LV.rt = null; if (liveWanted()) liveConnect(); }, Math.min(1000 * 2 ** Math.min(LV.retry++, 3), 8000)); }
+}
+function liveRow(rid, a){
+  let r = LV.rows.get(rid);
+  if (!r) { r = { rid, a:a || '?', t:Date.now(), state:'run', steps:[], f:[], u:'', poll:LV_POLL.has(a) }; LV.rows.set(rid, r);
+    if (LV.rows.size > 450) LV.rows.delete(LV.rows.keys().next().value); }
+  return r;
+}
+function liveEvent(ev){
+  if (ev.k === 'hello') {
+    if (ev.n < LV.since) { LV.rows.clear(); LV.since = 0; LV.hist = []; throw new Error('Server was restarted – reloading the feed'); }
+    LV.hello = ev; LV.stats = ev.stats; LV.hcAt = Date.now();
+    (ev.events || []).forEach(liveEvent);
+    (ev.open || []).forEach(o => { const r = liveRow(o.rid, o.a); r.t = o.t; });
+    return;
+  }
+  if (ev.n) LV.since = Math.max(LV.since, ev.n);
+  if (ev.k === 'stats') { LV.stats = ev; return; }
+  if (ev.k === 'req') { const r = liveRow(ev.rid, ev.a); Object.assign(r, { t:ev.t, u:ev.u, f:ev.f || [], poll:!!ev.poll, http:!!ev.http, sz:ev.sz, state:'run' }); return; }
+  if (ev.k === 'go') { const r = liveRow(ev.rid); r.q = ev.q; r.go = ev.t; return; }
+  if (ev.k === 'step') {
+    LV.hist.push({ d:ev.d, t:ev.t, ok:ev.ok });
+    if (LV.hist.length > 600) LV.hist.splice(0, LV.hist.length - 600);
+    const d = LV.dest[ev.d] || (LV.dest[ev.d] = {}); d.t = ev.t; d.ok = ev.ok; d.ms = ev.ms; d.err = ev.ok ? d.err : (ev.x || 'HTTP ' + ev.s); d.s = ev.s;
+    if (ev.rid) liveRow(ev.rid).steps.push(ev);
+    else LV.rows.set('x' + ev.n, { rid:'x' + ev.n, a:'(no request) ' + (LV_DEST[ev.d] || LV_DEST.other)[1], t:ev.t, state:ev.ok ? 'ok' : 'err', steps:[ev], f:[], u:'', ms:ev.ms, poll:ev.ok, err:ev.ok ? '' : ev.x, sysrow:true });
+    return;
+  }
+  if (ev.k === 'end') { const r = liveRow(ev.rid); Object.assign(r, { state:ev.ok ? 'ok' : 'err', ms:ev.ms, q:ev.q, u:ev.u || r.u, code:ev.code, err:ev.err }); return; }
+  if (ev.k === 'sys') { LV.rows.set('s' + ev.n, { rid:'s' + ev.n, a:ev.text, t:ev.t, state:ev.lv === 'warn' ? 'warn' : 'sys', steps:[], f:[], u:'', sysrow:true }); }
+}
+
+/* ----- plain-words explanation of what went wrong / what is slow ----- */
+function liveDiag(r){
+  const c = r.cli, out = [], bad = r.steps.filter(s => !s.ok), slow = r.steps.slice().sort((a, b) => b.ms - a.ms)[0];
+  const nm = d => (LV_DEST[d] || LV_DEST.other)[1];
+  if (c && c.st === 'err' && r.cliOnly) {
+    if (c.http >= 500 || c.kind === 'parse') out.push(['bad', 'Render answered with an error page (HTTP ' + (c.http || '5xx') + '). The server is restarting, deploying or crashed – wait 30–60 s and try again.']);
+    else out.push(['bad', 'This request never reached the Render server. The free Render instance may be asleep (the first request after idle takes 30–60 s), or this device is offline / blocked by CORS.']);
+  }
+  if (r.cliOnly && r.state === 'run') { const w = (Date.now() - r.t) / 1000; if (w > 6) out.push(['warn', 'Still waiting for Render after ' + Math.round(w) + ' s – the server may be waking up from sleep.']); }
+  if (r.state === 'run' && !r.cliOnly) {
+    const w = (Date.now() - r.t) / 1000;
+    if (!r.go) out.push(['warn', 'Waiting in the queue (' + Math.round(w) + ' s). Requests that write to the sheet run one by one.']);
+    else if (w > 6) out.push(['warn', 'Running for ' + Math.round(w) + ' s' + (r.steps.length ? ', last step: ' + r.steps[r.steps.length - 1].l : ', no outgoing call yet') + '.']);
+  }
+  if (r.state === 'err' && !r.cliOnly) {
+    if (r.code === 'AUTH') out.push(['bad', 'Login token expired or invalid – the user has to sign in again.']);
+    else if (r.code === 'PERM') out.push(['bad', 'This user is not allowed to do this.']);
+    else if (r.code === 'PAYDUE' || r.code === 'DISABLED') out.push(['bad', 'Account blocked (' + (r.code === 'PAYDUE' ? 'payment pending' : 'disabled') + ').']);
+    else if (r.code === 'CRASH') out.push(['bad', 'The server crashed while handling this request: ' + (r.err || '') ]);
+    if (bad.length) bad.forEach(s => out.push(['bad', nm(s.d) + ' failed: ' + (s.x || 'HTTP ' + s.s) + (s.d === 'sheets' && /429|quota|rate/i.test(s.x || '') ? ' – Google Sheets limit reached (too many requests per minute). Wait a minute.' : '')
+      + (s.d === 'drive' && /401|connect|login/i.test(s.x || '') ? ' – reconnect Google Drive in Settings.' : '') ]));
+    else if (!out.length) out.push(['bad', 'The app refused this request: ' + (r.err || 'unknown reason') + (r.code && r.code !== 'ERR' ? ' (' + r.code + ')' : '')]);
+  }
+  if (c && c.st === 'ok' && r.ms != null && c.ms - r.ms > 2500) out.push(['warn', 'About ' + lvDur(c.ms - r.ms) + ' was lost between the browser and Render (slow network or Render waking up).']);
+  if (r.ms > 3000 && r.state !== 'run') {
+    if ((r.q || 0) > 1000) out.push(['warn', 'Slow: waited ' + lvDur(r.q) + ' in the queue behind other requests.']);
+    else if (slow && slow.ms > 1500) out.push(['warn', 'Slow: ' + nm(slow.d) + ' took ' + lvDur(slow.ms) + ' (' + slow.l + ').']);
+  }
+  return out;
+}
+
+/* ----- drawing ----- */
+function liveSoon(){ if (LV.dt || !liveWanted()) return; LV.dt = setTimeout(() => { LV.dt = null; liveDraw(); }, 250); }
+function liveMount(){
+  const q = $('#lvQ'); if (!q) return;
+  q.value = LV.f.q; $('#lvF').value = LV.f.mode; $('#lvPoll').checked = LV.f.poll; $('#lvPause').textContent = LV.paused ? '▶ Resume' : '⏸ Pause';
+  q.oninput = () => { LV.f.q = q.value.trim().toLowerCase(); liveDraw(true); };
+  $('#lvF').onchange = e => { LV.f.mode = e.target.value; liveDraw(true); };
+  $('#lvPoll').onchange = e => { LV.f.poll = e.target.checked; liveDraw(true); };
+  $('#lvPause').onclick = () => { LV.paused = !LV.paused; $('#lvPause').textContent = LV.paused ? '▶ Resume' : '⏸ Pause'; liveDraw(true); };
+  $('#lvClear').onclick = () => { LV.rows.clear(); LV.cli.clear(); LV.hist = []; LV.open.clear(); liveDraw(true); };
+  $('#lvCopy').onclick = liveCopy;
+  $('#lvList').onclick = e => { const el = e.target.closest('[data-rid]'); if (!el) return; const k = el.dataset.rid; LV.open.has(k) ? LV.open.delete(k) : LV.open.add(k); liveDraw(true); };
+  liveDraw(true);
+}
+function liveAll(){
+  const out = [];
+  LV.rows.forEach(r => { r.cli = LV.cli.get(r.rid); out.push(r); });
+  LV.cli.forEach(c => {
+    if (LV.rows.has(c.rid)) return;
+    if (c.st === 'ok' && LV.hello && c.t0 < LV.hcAt - 2000) return;           // old and fine: server replay window already moved on
+    out.push({ rid:c.rid, a:c.a, t:c.t0, cliOnly:true, cli:c, poll:c.poll, state:c.st === 'wait' ? 'run' : c.st, ms:c.ms, err:c.err, steps:[], f:[], u:'' });
+  });
+  return out.sort((a, b) => b.t - a.t);
+}
+function liveShow(r){
+  if (r.poll && r.state !== 'err' && !LV.f.poll) return false;
+  const m = LV.f.mode;
+  if (m === 'err' && !(r.state === 'err' || r.state === 'warn')) return false;
+  if (m === 'slow' && !((r.cli ? r.cli.ms : r.ms) > 2000)) return false;
+  if (m === 'run' && r.state !== 'run') return false;
+  if (LV.f.q) { const hay = (r.a + ' ' + lvAct(r.a) + ' ' + r.u + ' ' + (r.err || '') + ' ' + r.f.join(' ') + ' ' + r.steps.map(s => s.l + ' ' + s.d).join(' ')).toLowerCase(); if (!hay.includes(LV.f.q)) return false; }
+  return true;
+}
+function liveChips(r){
+  const g = {}; r.steps.forEach(s => { const k = s.d; (g[k] = g[k] || { n:0, ms:0, bad:0 }); g[k].n++; g[k].ms += s.ms; if (!s.ok) g[k].bad++; });
+  const ks = Object.keys(g);
+  return ks.slice(0, 6).map(k => `<span class="lv-ch ${g[k].bad ? 'bad' : ''}">${(LV_DEST[k] || LV_DEST.other)[0]} ${esc((LV_DEST[k] || LV_DEST.other)[1])}${g[k].n > 1 ? ' ×' + g[k].n : ''} <b>${lvDur(g[k].ms)}</b></span>`).join('<i>›</i>') + (ks.length > 6 ? ' +' + (ks.length - 6) : '');
+}
+function liveRowHtml(r){
+  const open = LV.open.has(r.rid), tot = r.cli && r.cli.ms != null ? r.cli.ms : r.ms;
+  const icon = { run:'⏳', ok:'✅', err:'❌', warn:'⚠️', sys:'ℹ️' }[r.state] || '•';
+  const live = r.state === 'run' ? ' ' + lvDur(Date.now() - r.t) : (tot != null ? ' ' + lvDur(tot) : '');
+  const diag = liveDiag(r);
+  let h = `<div class="lv-r ${r.state}${open ? ' open' : ''}" data-rid="${esc(r.rid)}">
+    <div class="lv-h"><span class="lv-t">${lvTime(r.t)}</span><span class="lv-i">${icon}</span>
+      <span class="lv-m"><b>${esc(r.sysrow ? r.a : lvAct(r.a))}</b>${r.u ? ` <em>${esc(r.u)}</em>` : ''}${!r.sysrow && lvAct(r.a) !== r.a ? ` <code>${esc(r.a)}</code>` : ''}${r.cliOnly && !r.sysrow ? ' <small class="lv-tag">browser only</small>' : ''}</span>
+      <span class="lv-d">${esc(live)}</span></div>`;
+  if (!r.sysrow) h += `<div class="lv-path"><span class="lv-ch">🌐 Browser</span><i>›</i><span class="lv-ch ${r.cliOnly && r.state === 'run' ? 'wait' : ''}">🖥 Render</span>${r.steps.length ? '<i>›</i>' + liveChips(r) : ''}${r.state === 'err' && r.err ? `<span class="lv-er">${esc(r.err)}</span>` : ''}</div>`;
+  if (r.sysrow && r.err) h += `<div class="lv-path"><span class="lv-er">${esc(r.err)}</span></div>`;
+  if (diag.length && !open) h += `<div class="lv-dg ${diag[0][0]}">${esc(diag[0][1])}</div>`;
+  if (open) {
+    const L = [];
+    if (r.cli) L.push(['🌐', 'Browser sent the request', lvTime(r.cli.t0), '']);
+    if (!r.cliOnly) L.push(['🖥', 'Render received it' + (r.f.length ? ' (fields: ' + r.f.join(', ') + ')' : ''), lvTime(r.t), '']);
+    if (r.q > 30) L.push(['⏳', 'Waited in queue for other requests', '', lvDur(r.q)]);
+    r.steps.forEach(s => L.push([(LV_DEST[s.d] || LV_DEST.other)[0], (LV_DEST[s.d] || LV_DEST.other)[1] + ' — ' + s.l + (s.bg ? ' (background)' : '') + (s.x ? ' · ' + s.x : ''), s.s ? 'HTTP ' + s.s : '', lvDur(s.ms), !s.ok]));
+    if (r.state === 'ok' || r.state === 'err') L.push([r.state === 'ok' ? '✅' : '❌', r.state === 'ok' ? 'Render sent the answer' : 'Failed' + (r.code ? ' (' + r.code + ')' : '') + (r.err ? ': ' + r.err : ''), '', lvDur(r.ms), r.state === 'err']);
+    if (r.cli && r.cli.st !== 'wait') L.push(['🌐', r.cli.st === 'ok' ? 'Browser got the answer' : 'Browser: request failed' + (r.cli.http ? ' (HTTP ' + r.cli.http + ')' : ''), '', lvDur(r.cli.ms), r.cli.st === 'err']);
+    h += '<div class="lv-tl">' + L.map(x => `<div class="${x[4] ? 'bad' : ''}"><span>${x[0]}</span><p>${esc(x[1])}</p><small>${esc(x[2])}</small><b>${esc(x[3])}</b></div>`).join('') + '</div>';
+    diag.forEach(d => { h += `<div class="lv-dg ${d[0]}">${esc(d[1])}</div>`; });
+  }
+  return h + '</div>';
+}
+function liveDraw(force){
+  if (!liveWanted()) return;
+  if (LV.paused && force !== true) { const p = $('#lvConn'); if (p) p.textContent = '⏸ Paused'; return; }
+  const now = Date.now(), st = LV.stats || {}, hello = LV.hello || {};
+  const pill = $('#lvConn'); if (pill) {
+    const m = { live:['🟢 Live', 'good'], connecting:['🟡 Connecting… ' + Math.round((now - (LV.c0 || now)) / 1000) + ' s (Render may be waking up)', 'warn'], retry:['🔴 ' + (LV.err || 'Disconnected') + ' – retrying', 'bad'], off:['⚪ Off', ''] }[LV.conn] || ['', ''];
+    pill.className = 'lv-pill ' + m[1]; pill.textContent = LV.paused ? '⏸ Paused' : m[0];
+  }
+  const pipe = $('#lvPipe'); if (pipe) {
+    const cutoff = now - 300000, cnt = {}, bad = {}; LV.hist.forEach(h => { if (h.t > cutoff) { cnt[h.d] = (cnt[h.d] || 0) + 1; if (!h.ok) bad[h.d] = (bad[h.d] || 0) + 1; } });
+    const cf = {}; (hello.integrations || []).forEach(i => { cf[i.id] = i; });
+    const node = k => {
+      const d = LV.dest[k], c = cf[k], off = c && !c.on, name = c ? c.name : LV_DEST[k][1];
+      const cls = off ? 'off' : !d ? 'idle' : (now - d.t < 1500 ? 'flash ' : '') + (d.ok ? 'ok' : 'bad');
+      const sub = off ? 'not set up' : !d ? 'no activity' : (d.ok ? lvDur(d.ms) + ' · ' + lvAgo((now - d.t) / 1000) + ' ago' : 'FAILED ' + lvAgo((now - d.t) / 1000) + ' ago');
+      return `<div class="lv-n ${cls}" title="${esc(d && !d.ok ? d.err : name)}"><i>${LV_DEST[k][0]}</i><b>${esc(name.replace(/ \(.*/, ''))}</b><small>${esc(sub)}</small>${cnt[k] ? `<em>${cnt[k]}${bad[k] ? ' · ' + bad[k] + ' failed' : ''} /5min</em>` : ''}</div>`;
+    };
+    const pend = [...LV.cli.values()].filter(c => c.st === 'wait').length, rt = [...LV.cli.values()].filter(c => c.st === 'ok' && !c.poll).slice(-5), avg = rt.length ? rt.reduce((a, c) => a + c.ms, 0) / rt.length : 0;
+    const srvOk = LV.conn === 'live';
+    pipe.innerHTML = `<div class="lv-flow"><div class="lv-n ${navigator.onLine ? 'ok' : 'bad'}"><i>🌐</i><b>This browser</b><small>${navigator.onLine ? 'online' : 'OFFLINE'}${pend ? ' · ' + pend + ' waiting' : ''}</small>${avg ? `<em>avg round trip ${lvDur(avg)}</em>` : ''}</div>
+      <span class="lv-ar">➜</span>
+      <div class="lv-n ${srvOk ? 'ok' : LV.conn === 'connecting' ? 'idle' : 'bad'}"><i>🖥</i><b>Render server</b><small>${srvOk ? 'up ' + lvAgo(st.up || 0) : LV.conn === 'connecting' ? 'connecting…' : 'not reachable'}</small>${st.lag != null ? `<em>lag ${st.lag} ms · ${st.mem || 0} MB</em>` : ''}</div>
+      <span class="lv-ar">➜</span></div><div class="lv-grid">${LV_NODES.map(node).join('')}</div>`;
+  }
+  const stats = $('#lvStats'); if (stats) {
+    const chip = (a, b, cls) => `<div class="lv-s ${cls || ''}"><small>${a}</small><b>${b}</b></div>`;
+    stats.innerHTML = LV.stats ? chip('Running', st.running || 0) + chip('In queue', st.queued || 0, st.queued > 2 ? 'warn' : '') + chip('Requests / min', st.rpm || 0) + chip('Errors / min', st.epm || 0, st.epm ? 'bad' : '')
+      + chip('Avg time', lvDur(st.avg || 0), st.avg > 2500 ? 'warn' : '') + chip('Server up', lvAgo(st.up || 0), (st.up || 0) < 120 ? 'warn' : '') + chip('Memory', (st.mem || 0) + ' MB') + chip('Watching', (st.subs || 1) + ' screen') : '';
+  }
+  const list = $('#lvList'); if (!list) return;
+  const all = liveAll(), rows = all.filter(liveShow).slice(0, 120), hid = all.filter(r => r.poll && r.state !== 'err').length;
+  list.innerHTML = (rows.length ? rows.map(liveRowHtml).join('') : `<div class="empty-state">${LV.conn === 'live' ? 'Waiting for activity… do something in the app (add an entry, send a chat message) and it appears here.' : 'Connecting to the server…'}</div>`)
+    + (!LV.f.poll && hid ? `<div class="lv-foot">${hid} background checks hidden (chat ticks, call / game polling). Tick “Show background polling” to see them.</div>` : '');
+}
+function liveCopy(){
+  const rows = liveAll().filter(liveShow).slice(0, 60).map(r => lvTime(r.t) + ' | ' + (r.u || '-') + ' | ' + r.a + ' | ' + r.state.toUpperCase() + ' | ' + lvDur(r.cli && r.cli.ms != null ? r.cli.ms : r.ms)
+    + (r.steps.length ? ' | ' + r.steps.map(s => s.d + ':' + (s.ok ? 'ok ' : 'FAIL ') + s.ms + 'ms').join(' > ') : '') + (r.err ? ' | ' + r.err : ''));
+  const txt = 'VCS Processing report (' + new Date().toLocaleString() + ')\n' + rows.join('\n');
+  (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast('Report copied'), () => toast('Could not copy', true));
+}
+function liveCard(){
+  return `<div class="card" id="lvCard"><h3>📡 VCS Processing <span class="lv-pill" id="lvConn"></span></h3>
+    <p class="muted" style="margin-bottom:12px">Live view of everything the website does: <b>Browser → Render server → Google Sheets / Calendar / Drive …</b>. Tap a row to see every step, timing and the reason for a failure. Only the main admin sees this. Passwords, tokens and message text are never shown. While this page is open the Render server stays awake.</p>
+    <div id="lvPipe"></div><div id="lvStats" class="lv-stats"></div>
+    <div class="lv-tools"><input class="input" id="lvQ" placeholder="Search user, action, error…" autocomplete="off">
+      <select class="select" id="lvF"><option value="all">Everything</option><option value="err">Only failures</option><option value="slow">Only slow (&gt; 2 s)</option><option value="run">Running now</option></select>
+      <label class="check"><input type="checkbox" id="lvPoll"> Show background polling</label>
+      <button type="button" class="btn ghost sm" id="lvPause">⏸ Pause</button><button type="button" class="btn ghost sm" id="lvClear">🧹 Clear</button><button type="button" class="btn ghost sm" id="lvCopy">📋 Copy report</button></div>
+    <div id="lvList" class="lv-list"></div></div>`;
+}

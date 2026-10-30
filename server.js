@@ -6,9 +6,21 @@ const vm = require('vm');
 const crypto = require('crypto');
 const { Readable } = require('stream');
 const { Workbook, install } = require('./gas-shim');
+const live = require('./live-monitor');
 
 function makeApp(store, env) {
+  live.patchFetch();                                   // every outgoing call (Calendar, Drive, GitHub ...) shows in VCS Processing
+  store = live.wrapStore(store);                       // Google Sheets reads / saves too
+  live.setIntegrations([
+    { id: 'sheets', name: 'Google Sheets (database)', on: true },
+    { id: 'calendar', name: 'Google Calendar', on: !!(env.CAL_CLIENT_ID && env.CAL_CLIENT_SECRET && env.PUBLIC_URL) },
+    { id: 'drive', name: 'Google Drive (chat media)', on: !!(env.CAL_CLIENT_ID && env.CAL_CLIENT_SECRET) },
+    { id: 'github', name: 'GitHub (Deploy / Updates)', on: !!(env.GITHUB_REPO && env.GITHUB_TOKEN) },
+    { id: 'mail', name: 'E-mail (Gmail SMTP)', on: !!(env.SMTP_USER && env.SMTP_PASS) },
+    { id: 'turn', name: 'Call relay (TURN)', on: !!(env.ICE_SERVERS || (env.METERED_APP && env.METERED_API_KEY)) }
+  ]);
   const wb = new Workbook(store);
+  const warn = (...a) => { console.warn(...a); live.sys('warn', a.join(' ')); };
   const rt = { delay: 0, mails: [], cal: [] };
   install(wb, env, rt);
   vm.runInThisContext(fs.readFileSync(path.join(__dirname, 'Code.gs'), 'utf8'), { filename: 'Code.gs' });
@@ -56,7 +68,7 @@ function makeApp(store, env) {
     const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ client_id: env.CAL_CLIENT_ID, client_secret: env.CAL_CLIENT_SECRET, refresh_token: refresh, grant_type: 'refresh_token' }) });
     const j = await r.json().catch(() => ({}));
-    if (!j.access_token) { console.warn('Calendar token refresh failed for', uid, j.error); accessCache.set(uid, { bad: Date.now() + 300000 }); return ''; }
+    if (!j.access_token) { warn('Calendar token refresh failed for', uid, j.error); accessCache.set(uid, { bad: Date.now() + 300000 }); return ''; }
     accessCache.set(uid, { tok: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 }); return j.access_token;
   }
   const addMin = (date, slot, m) => { const [h, mi] = slot.split(':').map(Number); let t = h * 60 + mi + m, d = new Date(date + 'T00:00:00Z');
@@ -79,7 +91,7 @@ function makeApp(store, env) {
   }
   let calChain = Promise.resolve();
   function calRun(jobs) {            // background, one by one - never blocks the app's own requests
-    jobs.forEach(j => { calChain = calChain.then(() => calDo(j)).catch(e => console.warn('Calendar sync:', e.message)); });
+    jobs.forEach(j => { calChain = calChain.then(() => calDo(j)).catch(e => warn('Calendar sync:', e.message)); });
   }
   globalThis.drvState_ = uid => { const p = uid + '|' + (Date.now() + 600000) + '|' + crypto.randomBytes(6).toString('hex');
     return Buffer.from(p).toString('base64url') + '.' + sign('drv:' + p); };
@@ -768,7 +780,7 @@ function makeApp(store, env) {
     const texts = (Array.isArray(req.texts) ? req.texts : []).slice(0, 30).map(t => String(t == null ? '' : t).slice(0, 1800));
     const out = await Promise.all(texts.map(async t => {
       if (!t.trim()) return '';
-      try { return await trOne(t, to); } catch (e) { console.warn('Translate failed:', e.message); return null; }
+      try { return await trOne(t, to); } catch (e) { warn('Translate failed:', e.message); return null; }
     }));
     return { ok: true, translations: out };
   }
@@ -844,6 +856,7 @@ function makeApp(store, env) {
   function withWb(fn) {                                                // run fn in the request queue with fresh sheet data, save its changes
     const job = async () => {
       if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
+      else live.step('cache', 'Sheet data from server memory', 200, 0, 'loaded ' + Math.round((Date.now() - wb.loadedAt) / 1000) + 's ago');
       let out, err;
       try { out = await fn(); } catch (e) { err = e; }
       try { await wb.flush(); } catch (e) { if (!err) err = e; }
@@ -854,6 +867,7 @@ function makeApp(store, env) {
   }
   async function run(body) {
     if (!wb.loadedAt || Date.now() - wb.loadedAt > REFRESH) await wb.load();
+    else live.step('cache', 'Sheet data from server memory', 200, 0, 'loaded ' + Math.round((Date.now() - wb.loadedAt) / 1000) + 's ago');
     rt.delay = 0; rt.mails = []; rt.cal = [];
     let req, res;
     try { req = JSON.parse(body); res = DEPLOY_ACTIONS.has(req.action) ? await deployRoute(req) : UPD_ACTIONS.has(req.action) ? await updRoute(req) : BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req); }
@@ -883,7 +897,14 @@ function makeApp(store, env) {
     if (!r || r.action !== 'chatLive') return null;
     return Promise.resolve().then(() => chatLiveRoute(r)).catch(errOut);
   };
-  return { handle: body => fastCall(body) || fastLive(body) || fastTr(body) || (chain = chain.then(() => run(body), () => run(body))),
+  const handle = body => {
+    const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
+    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastTr(body));
+    if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
+    const job = () => live.within(tr, () => { live.started(tr); return run(body); });
+    return (chain = chain.then(job, job)).then(fin, crash);
+  };
+  return { handle,
            mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
            updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
@@ -891,18 +912,20 @@ function makeApp(store, env) {
 
 async function sendMail(m, env) {
   if (!env.SMTP_USER || !env.SMTP_PASS) throw new Error('SMTP_USER / SMTP_PASS are not set on the server.');
-  const nodemailer = require('nodemailer');
+  const nodemailer = require('nodemailer'), t0 = Date.now();
   const t = nodemailer.createTransport({ service: 'gmail', auth: { user: env.SMTP_USER, pass: env.SMTP_PASS } });
-  await t.sendMail({ from: '"' + (m.name || 'Attendance App') + '" <' + env.SMTP_USER + '>', to: m.to, subject: m.subject, text: m.body });
+  try { await t.sendMail({ from: '"' + (m.name || 'Attendance App') + '" <' + env.SMTP_USER + '>', to: m.to, subject: m.subject, text: m.body }); live.step('mail', 'Send e-mail (Gmail SMTP)', 250, Date.now() - t0, 'subject: ' + String(m.subject || '').slice(0, 60)); }
+  catch (e) { live.step('mail', 'Send e-mail (Gmail SMTP)', 0, Date.now() - t0, e.message, true); throw e; }
 }
 
 function start(app, env) {
   const origin = env.ALLOWED_ORIGIN || '*';
   const cors = { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' };
-  return http.createServer((rq, rs) => {
+  return http.createServer((rq, rs) => live.http(rq, rs, () => {
     const send = (code, obj) => { rs.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, cors)); rs.end(JSON.stringify(obj)); };
     if (rq.method === 'OPTIONS') { rs.writeHead(204, cors); return rs.end(); }
     const url = new URL(rq.url, 'http://x');
+    if (rq.method === 'GET' && url.pathname === '/live/stream') return live.stream(rq, rs, cors, String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''));
     if (rq.method === 'GET' && url.pathname === '/updates/download' && app.updOpen) {      // stream an update file to the user
       return app.updOpen(Object.fromEntries(url.searchParams)).then(o => {
         if (o.code !== 200) { rs.writeHead(o.code, { 'Content-Type': 'text/html; charset=utf-8' }); return rs.end('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:32px;max-width:480px;margin:auto"><h2>⚠️ Download failed</h2><p>' + String(o.error).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + '</p></body>'); }
@@ -943,8 +966,8 @@ function start(app, env) {
     if (rq.method === 'GET') return send(200, { ok: true, app: 'Attendance & Expense Tracker API', time: new Date().toISOString() });
     let body = '';
     rq.on('data', c => { body += c; if (body.length > 2e6) rq.destroy(); });
-    rq.on('end', async () => send(200, await app.handle(body)));
-  });
+    rq.on('end', async () => { let out; try { out = await app.handle(body); } catch (e) { out = { ok: false, error: 'Server error: ' + (e && e.message || e), code: 'CRASH' }; } send(200, out); });
+  }));
 }
 module.exports = { makeApp, start };
 
