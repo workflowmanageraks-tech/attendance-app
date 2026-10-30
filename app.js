@@ -2713,6 +2713,10 @@ function rackFieldsEdit(){ if (!can('rack')) return deny();
 function licAmt(n){ return n ? '₹' + Number(n).toLocaleString('en-IN') : '<span class="dim">—</span>'; }
 const LIC_FREQ = { '':'One-time', monthly:'Monthly', quarterly:'Quarterly', halfyearly:'Half-Yearly', yearly:'Yearly' };
 const LIC_FREQ_MONTHS = { monthly:1, quarterly:3, halfyearly:6, yearly:12 };
+/* how many premiums fall in ONE year, per premium mode (a one-time policy has no yearly repeat) */
+const LIC_PER_YEAR = { monthly:12, quarterly:4, halfyearly:2, yearly:1 };
+const licYearly = x => { const n = LIC_PER_YEAR[x.freq], a = Number(x.amount) || 0; return n && a ? Math.round(a * n * 100) / 100 : 0; };
+const licYearlyTxt = x => { const y = licYearly(x); return y ? '₹' + y.toLocaleString('en-IN') : (!x.freq && Number(x.amount) ? 'One-time' : '—'); };
 const licIso = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
 const licToday = () => licIso(new Date());                      // local date (not UTC), so it flips at midnight India time
 /* iso + n months, keeping the day-of-month (31 Jan + 1 month = 28/29 Feb, not 3 Mar) */
@@ -2805,9 +2809,10 @@ function filteredLic(){
 function vLic(){
   const all = S.d.lic || [], list = filteredLic(), total = all.length;
   const now = Date.now();
-  let maturing = 0, matured = 0, totalAmt = 0, renew7 = 0, renew30 = 0;
+  let maturing = 0, matured = 0, totalAmt = 0, renew7 = 0, renew30 = 0, yearAmt = 0, yearN = 0;
   all.forEach(x => {
     totalAmt += Number(x.amount) || 0;
+    if (licYearly(x) && (!x.endDate || x.endDate >= licToday())){ yearAmt += licYearly(x); yearN++; }      // running policies only
     if (x.endDate){
       const end = new Date(x.endDate + 'T23:59:59').getTime();
       if (end <= now) matured++; else if (end - now <= 30 * 86400000) maturing++;
@@ -2825,6 +2830,7 @@ function vLic(){
       <td data-l="Nominee" style="white-space:normal;word-break:break-word">${esc(x.nominee) || '<span class="dim">—</span>'}</td>
       <td data-l="Customer Mobile" style="white-space:nowrap">${x.phone ? `<a href="tel:${esc(x.phone)}">${esc(x.phone)}</a>` : '<span class="dim">—</span>'}</td>
       <td data-l="Premium Mode"><span class="tag">${esc(LIC_FREQ[x.freq] || 'One-time')}</span></td>
+      <td data-l="Pay per Year" class="n">${licYearly(x) ? `<b>${esc(licYearlyTxt(x))}</b><br><span class="muted" style="font-size:calc(11.5px*var(--fs))">${LIC_PER_YEAR[x.freq]} × ${esc(licAmt(x.amount))}</span>` : esc(licYearlyTxt(x))}</td>
       <td data-l="Starting Date">${licDateFmt(x.startDate)}</td>
       <td data-l="Ending Date">${licDateFmt(x.endDate)}</td>
       <td data-l="Next Renewal">${rn.due ? `${licDateFmt(rn.due)}<br><span class="lic-rn ${rn.cls}" data-lic-id="${esc(x.id)}" style="font-weight:700;white-space:nowrap">${esc(rn.text)}</span>` : '<span class="dim">—</span>'}</td>
@@ -2840,6 +2846,7 @@ function vLic(){
   return `${remindCard}<div class="grid kpis" style="margin-bottom:16px">
       <div class="card kpi s"><div class="lbl">Total Policies</div><div class="val">${total}</div><div class="hint">customers</div></div>
       <div class="card kpi p"><div class="lbl">Total Amount</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(totalAmt))}</div></div>
+      <div class="card kpi p"><div class="lbl">To pay in 1 year</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(yearAmt))}</div><div class="hint">${yearN} running polic${yearN === 1 ? 'y' : 'ies'} · monthly ×12, quarterly ×4, half-yearly ×2, yearly ×1</div></div>
       <div class="card kpi m"><div class="lbl">Renewal due ≤ 7 days</div><div class="val">${renew7}</div><div class="hint">pay soon</div></div>
       <div class="card kpi w"><div class="lbl">Renewal due ≤ 30 days</div><div class="val">${renew30}</div><div class="hint">upcoming</div></div>
       <div class="card kpi w"><div class="lbl">Maturing ≤ 30 days</div><div class="val">${maturing}</div></div>
@@ -2852,7 +2859,7 @@ function vLic(){
       <button class="btn ghost" onclick="licFieldsEdit()" title="Add or rename your own extra details for every policy">⚙ Extra fields</button>
       <button class="btn" onclick="licForm()">＋ Add policy</button></div></div>
     <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
-      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Total Policy Amount</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Total Policy Amount</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
       <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;
@@ -2874,6 +2881,7 @@ async function licCopy(id){
     x.phone && 'Customer Mobile: ' + x.phone,
     ...(S.d.licFields || []).filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]),
     'Premium Mode: ' + (LIC_FREQ[x.freq] || 'One-time'),
+    licYearly(x) ? 'Pay per Year: ₹' + licYearly(x).toLocaleString('en-IN') + ' (' + LIC_PER_YEAR[x.freq] + ' × ₹' + Number(x.amount).toLocaleString('en-IN') + ')' : '',
     x.startDate && 'Starting Date: ' + x.startDate,
     x.endDate && 'Ending Date: ' + x.endDate,
     x.dueDate && 'Premium Due Date: ' + x.dueDate + (x.freq ? ' (repeats ' + LIC_FREQ[x.freq] + ')' : ''),
@@ -2901,8 +2909,8 @@ function licForm(id){ if (!can('lic')) return deny();
         <div class="field"><label>Ending Date</label><input class="input" type="date" name="endDate" value="${esc(x ? x.endDate : '')}"></div>
       </div>
       <div class="field"><label>Renewal / Premium Due Date</label><input class="input" type="date" name="dueDate" value="${esc(x ? x.dueDate : '')}"></div>
-      ${(S.d.licFields || []).length ? `<div class="field" style="margin-top:4px"><label style="font-weight:800">📎 More details</label></div><div class="row2">${S.d.licFields.map((n, i) => `<div class="field"><label>${esc(n)}</label><input class="input" data-ex="${esc(n)}" maxlength="300" autocomplete="off" value="${esc(x && x.extra ? (x.extra[n] || '') : '')}"></div>`).join('')}</div>` : ''}
-      <div class="actions" style="margin:0 0 8px"><button type="button" class="btn ghost sm" data-fields>⚙ Add / edit extra fields</button></div>
+      ${(S.d.licFields || []).length ? `<div class="field" style="margin-top:4px"><label style="font-weight:800">📎 More details</label></div><div class="row2">${S.d.licFields.map((n, i) => `<div class="field"><label class="lf-l"><span>${esc(n)}</span><span class="lf-b"><button type="button" class="lf-btn" data-fren="${i}" title="Edit this option's name" aria-label="Edit option name">✎</button><button type="button" class="lf-btn" data-frem="${i}" title="Remove this option" aria-label="Remove option">🗑</button></span></label><input class="input" data-ex="${esc(n)}" maxlength="300" autocomplete="off" value="${esc(x && x.extra ? (x.extra[n] || '') : '')}"></div>`).join('')}</div>` : ''}
+      <div class="actions" style="margin:0 0 8px"><button type="button" class="btn ghost sm" data-fadd>＋ Add new option</button> <button type="button" class="btn ghost sm" data-fields>⚙ Manage / reorder</button></div>
       <div id="licPrev" class="lic-prev"></div>
       <p class="muted" style="font-size:calc(12.5px*var(--fs));margin-top:-2px">Enter the due date once. For Monthly / Quarterly / Half-Yearly / Yearly it then repeats by itself and shows how many days / months / years are left. If left empty, the starting date is used.</p>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
@@ -2912,6 +2920,10 @@ function licForm(id){ if (!can('lic')) return deny();
     fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; });
     S.licDraft = { id:x ? x.id : '', vals, ex }; w.remove(); licFieldsEdit(x ? x.id : '');
   };
+  const keepDraft = () => { const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {}; fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; }); S.licDraft = { id:x ? x.id : '', vals, ex }; };
+  w.querySelector('[data-fadd]').onclick = () => { keepDraft(); w.remove(); licFieldQuick('add', -1, x ? x.id : ''); };
+  w.querySelectorAll('[data-fren]').forEach(b => b.onclick = () => { keepDraft(); w.remove(); licFieldQuick('ren', +b.dataset.fren, x ? x.id : ''); });
+  w.querySelectorAll('[data-frem]').forEach(b => b.onclick = () => { keepDraft(); w.remove(); licFieldQuick('rem', +b.dataset.frem, x ? x.id : ''); });
   const dr = S.licDraft && S.licDraft.id === (x ? x.id : '') ? S.licDraft : null; S.licDraft = null;
   if (dr){
     const fm = w.querySelector('#licf');
@@ -2919,8 +2931,8 @@ function licForm(id){ if (!can('lic')) return deny();
     fm.querySelectorAll('[data-ex]').forEach(i => { if (dr.ex[i.dataset.ex] !== undefined) i.value = dr.ex[i.dataset.ex]; });
   }
   const prev = () => {                       // live "next due" line under the form
-    const f = Object.fromEntries(new FormData(w.querySelector('#licf'))), rn = licRenewInfo(f), el = w.querySelector('#licPrev');
-    el.innerHTML = rn.due ? `Next due: <b>${licDateFmt(rn.due)}</b> · <span class="${rn.cls}" style="font-weight:700">${esc(rn.text)}</span>${LIC_FREQ_MONTHS[f.freq] ? ` <span class="muted">(repeats every ${LIC_FREQ_MONTHS[f.freq]} month${LIC_FREQ_MONTHS[f.freq] > 1 ? 's' : ''})</span>` : ''}` : '';
+    const f = Object.fromEntries(new FormData(w.querySelector('#licf'))), rn = licRenewInfo(f), el = w.querySelector('#licPrev'), yr = licYearly(f);
+    el.innerHTML = (yr ? `<div style="margin-bottom:4px">💰 To pay in 1 year: <b>₹${yr.toLocaleString('en-IN')}</b> <span class="muted">(${LIC_PER_YEAR[f.freq]} × ₹${Number(f.amount).toLocaleString('en-IN')})</span></div>` : '') + (rn.due ? `Next due: <b>${licDateFmt(rn.due)}</b> · <span class="${rn.cls}" style="font-weight:700">${esc(rn.text)}</span>${LIC_FREQ_MONTHS[f.freq] ? ` <span class="muted">(repeats every ${LIC_FREQ_MONTHS[f.freq]} month${LIC_FREQ_MONTHS[f.freq] > 1 ? 's' : ''})</span>` : ''}` : '');
   };
   w.querySelector('#licf').addEventListener('input', prev); w.querySelector('#licf').addEventListener('change', prev); prev();
   w.querySelector('#licf').onsubmit = async ev => {
@@ -2932,6 +2944,41 @@ function licForm(id){ if (!can('lic')) return deny();
       w.remove(); render(); toast('Saved');
     }catch(e){ btn.disabled = false; handleErr(e); }
   };
+}
+/* quick add / rename / remove of ONE option straight from the policy form; the half-filled form comes back afterwards */
+async function licFieldQuick(mode, idx, reopenId){
+  if (!can('lic')) return deny();
+  const cur = (S.d.licFields || []).slice(), back = () => licForm(reopenId || undefined);
+  const save = async list => {
+    try{
+      const r = await api('saveLicFields', { fields:list });
+      S.d.licFields = r.fields || [];
+      const m = {}; list.forEach(f => { if (f.o) m[f.o] = f.n; });
+      const carry = ex => { const nx = {}; Object.keys(m).forEach(o => { if (ex[o] !== undefined) nx[m[o]] = ex[o]; }); return nx; };
+      (S.d.lic || []).forEach(p => { p.extra = carry(p.extra || {}); });
+      if (S.licDraft) S.licDraft.ex = carry(S.licDraft.ex || {});
+      render(); toast('Saved');
+    }catch(e){ handleErr(e); }
+    back();
+  };
+  const same = n => cur.map(o => ({ o, n:o }));
+  if (mode === 'rem'){
+    if (!await confirmBox('Remove “' + cur[idx] + '”?', 'This option and what is saved in it will be deleted from every policy.', 'Remove', true)) return back();
+    return save(same().filter((_, i) => i !== idx));
+  }
+  const w = openModal(`<h3>${mode === 'add' ? '＋ New option' : '✎ Edit option name'}</h3><p class="sub">${mode === 'add' ? 'It appears in every policy (e.g. Address, Agent Code, Bank).' : 'Renaming keeps everything already typed.'}</p>
+    <div class="field"><input class="input" id="lqN" maxlength="40" autocomplete="off" placeholder="e.g. Address" value="${esc(mode === 'ren' ? cur[idx] : '')}"></div>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button type="button" class="btn" data-ok>Save</button></div>`);
+  const inp = w.querySelector('#lqN'); inp.focus();
+  w.querySelector('[data-x]').onclick = () => { w.remove(); back(); };
+  const go = () => {
+    const v = inp.value.trim(); if (!v) return;
+    if (cur.some((n, i) => n.toLowerCase() === v.toLowerCase() && !(mode === 'ren' && i === idx))) return toast('That option already exists', true);
+    if (mode === 'add' && cur.length >= 20) return toast('Up to 20 extra options', true);
+    w.remove();
+    save(mode === 'add' ? same().concat([{ o:'', n:v }]) : same().map((f, i) => i === idx ? { o:f.o, n:v } : f));
+  };
+  w.querySelector('[data-ok]').onclick = go; inp.onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); go(); } };
 }
 /* add / rename / remove your own extra details (shown in every policy's form, copy text and exports) */
 function licFieldsEdit(reopenId){ if (!can('lic')) return deny();
@@ -3698,9 +3745,9 @@ function pdfPasswords(P, d, first){
 }
 function licStatusPlain(endDate){ return licCountdown(endDate).status || '—'; }
 function xlLic(wb, d){
-  const fx = S.d.licFields || [], cols = 13 + fx.length;
-  const ws = xSheet(wb, 'LIC Policies', cols, [5, 24, 18, 22, 14, 16, 22, 16, 12, 12, 12, 14, 12, ...fx.map(() => 20)], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
-  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Policy Name', 'Premium Amount', 'Total Policy Amount', 'Nominee', 'Customer Mobile', 'Premium Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status', ...fx]);
+  const fx = S.d.licFields || [], cols = 14 + fx.length;
+  const ws = xSheet(wb, 'LIC Policies', cols, [5, 24, 18, 22, 14, 16, 22, 16, 12, 12, 12, 14, 12, 16, ...fx.map(() => 20)], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
+  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Policy Name', 'Premium Amount', 'Total Policy Amount', 'Nominee', 'Customer Mobile', 'Premium Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status', 'Pay per Year', ...fx]);
   d.lic.forEach((x, i) => { const row = ws.getRow(5 + i), z = i % 2 ? X.zebra : null, rn = licRenewInfo(x);
     xCell(row.getCell(1), i + 1, { h:'center', fill:z });
     xCell(row.getCell(2), x.name, { h:'left', fill:z });
@@ -3716,16 +3763,17 @@ function xlLic(wb, d){
     xCell(row.getCell(12), rn.due ? xDate(rn.due) : '—', { h:'left', fill:z, fmt:rn.due ? 'dd-mmm-yyyy' : '@' });
     const st = licStatusPlain(x.endDate);
     xCell(row.getCell(13), st, { h:'center', fill:z, bold:true, color:st === 'Expired' ? X.bad : st === 'Expiring soon' ? 'FFB45309' : X.good });
-    fx.forEach((n, k) => xCell(row.getCell(14 + k), (x.extra || {})[n] || '', { h:'left', fill:z })); });
-  const endCol = (n => { let t = ''; while (n > 0){ const m = (n - 1) % 26; t = String.fromCharCode(65 + m) + t; n = Math.floor((n - 1) / 26); } return t; })(13 + fx.length);
+    xCell(row.getCell(14), licYearly(x) || (x.freq ? '' : 'One-time'), { h:'right', fill:z, fmt:XM() });
+    fx.forEach((n, k) => xCell(row.getCell(15 + k), (x.extra || {})[n] || '', { h:'left', fill:z })); });
+  const endCol = (n => { let t = ''; while (n > 0){ const m = (n - 1) % 26; t = String.fromCharCode(65 + m) + t; n = Math.floor((n - 1) / 26); } return t; })(14 + fx.length);
   if (d.lic.length) ws.autoFilter = { from:'A4', to:`${endCol}${4 + d.lic.length}` };
 }
 function pdfLic(P, d, first){
   const fx = S.d.licFields || [];
   const y = pdfStart(P, 'LIC Policies', `${d.lic.length} policies   |   Generated ${STAMP()}`, 'l', first);
-  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy No.', 'Policy Name', 'Premium', 'Total Policy Amt', 'Nominee', 'Mobile', 'Mode', 'Start', 'End', 'Next Renewal', 'Status', ...(fx.length ? ['More details'] : [])]],
-    body:d.lic.map((x, i) => { const rn = licRenewInfo(x); return [i + 1, x.name, x.policyNo, x.policyName || '—', x.amount ? PM(x.amount) : '—', x.totalAmount ? PM(x.totalAmount) : '—', x.nominee || '—', x.phone || '—', LIC_FREQ[x.freq] || 'One-time', x.startDate || '—', x.endDate || '—', rn.due || '—', licStatusPlain(x.endDate), ...(fx.length ? [fx.filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]).join('; ') || '—'] : [])].map(PT); }),
-    styles:{ fontSize:6.5, cellPadding:1.4 }, columnStyles:{ 0:{ halign:'center', cellWidth:7 }, 4:{ halign:'right' }, 5:{ halign:'right' }, 12:{ halign:'center' } } });
+  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy No.', 'Policy Name', 'Premium', 'Total Policy Amt', 'Nominee', 'Mobile', 'Mode', 'Per Year', 'Start', 'End', 'Next Renewal', 'Status', ...(fx.length ? ['More details'] : [])]],
+    body:d.lic.map((x, i) => { const rn = licRenewInfo(x); return [i + 1, x.name, x.policyNo, x.policyName || '—', x.amount ? PM(x.amount) : '—', x.totalAmount ? PM(x.totalAmount) : '—', x.nominee || '—', x.phone || '—', LIC_FREQ[x.freq] || 'One-time', licYearly(x) ? PM(licYearly(x)) : '—', x.startDate || '—', x.endDate || '—', rn.due || '—', licStatusPlain(x.endDate), ...(fx.length ? [fx.filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]).join('; ') || '—'] : [])].map(PT); }),
+    styles:{ fontSize:6.5, cellPadding:1.4 }, columnStyles:{ 0:{ halign:'center', cellWidth:7 }, 4:{ halign:'right' }, 5:{ halign:'right' }, 9:{ halign:'right' }, 13:{ halign:'center' } } });
 }
 
 /* ---------- entry point ---------- */
@@ -3815,7 +3863,7 @@ boot();
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
    ===================================================================== */
-const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, peerSeen:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, mu:{}, mBusy:{}, gs:{}, defer:false, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
+const chatFresh = () => ({ users:[], groups:[], loaded:false, with:null, msgs:{}, peerRead:{}, peerSeen:{}, drafts:{}, unread:0, q:'', n:0, fetching:false, loadingUsers:false, err:'', sig:'', histLoaded:{}, sel:new Set(), ov:{}, tr:{}, trFail:{}, trBusy:{}, mu:{}, mBusy:{}, gs:{}, rp:{}, ed:{}, eb:{}, defer:false, trv:0, lang:(function(){ try{ return localStorage.getItem('ks_chat_lang_v1') || ''; }catch(e){ return ''; } })() });
 S.chat = chatFresh();
 let chatTimer = null;
 function chatReset(){ clearInterval(chatTimer); chatTimer = null; clearInterval(chatLiveT); chatLiveT = null; S.chat = chatFresh(); AV = {}; try{ localStorage.removeItem('ks_av_v1'); }catch(e){} document.body.classList.remove('chat-conv'); chatBadge(); }
@@ -4144,6 +4192,7 @@ function chatRenderPane(){
     </div>
     <div class="ch-sel" id="chSel" style="display:none"></div>
     <div class="ch-msgs" id="chMsgs"></div>
+    <div class="ch-ctx" id="chCtx" style="display:none"></div>
     <div class="ch-comp"><button class="ch-att" type="button" onclick="document.getElementById('chFile').click()" aria-label="Send photo or video">📎</button><input type="file" id="chFile" accept="image/*,video/*" multiple hidden onchange="chatAttach(this)"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
       <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
   const ta = $('#chInput');
@@ -4151,7 +4200,8 @@ function chatRenderPane(){
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; };
   ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); };
   ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches){ e.preventDefault(); chatSend(); } };
-  grow(); chatHeader(); chatLangBtn(); chatSelBar(); chatBindMsgs(); S.chat.sig = ''; chatRenderMsgs(true);
+  if (S.chat.ed[u.id]){ S.chat.ed[u.id] = null; S.chat.drafts[u.id] = S.chat.eb[u.id] || ''; ta.value = S.chat.drafts[u.id]; }     // an unfinished edit is dropped when the chat is reopened
+  grow(); chatHeader(); chatLangBtn(); chatSelBar(); chatBindMsgs(); S.chat.sig = ''; chatRenderMsgs(true); chatCtxBar();
 }
 function chatHeader(){
   const u = chatPeer(S.chat.with); if (!u) return;
@@ -4176,7 +4226,7 @@ function chatRenderMsgs(toBottom){
   arr.forEach(m => {
     const dl = chDayLabel(m.t);
     if (dl !== day){ day = dl; html += `<div class="ch-day">${esc(dl)}</div>`; }
-    let meta = esc(chClock(m.t));
+    let meta = (m.edited ? 'edited · ' : '') + esc(chClock(m.t));
     if (m.mine){
       if (m.state === 'pending') meta = 'Sending…';
       else if (m.state === 'failed') meta = 'Not sent · tap to retry';
@@ -4185,7 +4235,7 @@ function chatRenderMsgs(toBottom){
     }
     const v = chatView(m), sl = S.chat.sel.has(m.id);
     const tg = v.busy ? '<div class="tg">🌐 Translating…</div>' : v.fail ? '<div class="tg bad">🌐 Could not translate · tap to retry</div>' : v.lang ? `<div class="tg">🌐 ${esc(CH_LANGS[v.lang].short)} · tap for options</div>` : '';
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${v.text ? tg : ''}<div class="mt">${meta}</div></div>`;
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chRqHtml(m)}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${v.text ? tg : ''}<div class="mt">${meta}</div></div>`;
   });
   box.innerHTML = html;
   if (toBottom || near) box.scrollTop = box.scrollHeight; else box.scrollTop = keepTop;
@@ -4195,10 +4245,12 @@ function chatMerge(id, list){
   const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
   list.forEach(m => {
     const i = a.findIndex(x => x.id === m.id);
-    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text || a[i].from !== m.from){ a[i] = m; changed = true; } }
+    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text || a[i].from !== m.from || a[i].edited !== m.edited){
+      if (a[i].text !== m.text){ [S.chat.tr, S.chat.trFail].forEach(o => Object.keys(o).forEach(k => { if (k.endsWith('|' + m.id)) delete o[k]; })); }
+      a[i] = m; changed = true; } }
     else { a.push(m); changed = true; }
   });
-  if (changed) a.sort((x, y) => x.t - y.t);
+  if (changed){ a.sort((x, y) => x.t - y.t); S.chat.trv++; }
   return changed;
 }
 const chatAfter = id => (S.chat.msgs[id] || []).reduce((mx, m) => m.state ? mx : Math.max(mx, m.t), 0);
@@ -4233,6 +4285,7 @@ function chatApplyConv(id, r, first){
   const known = new Set((c.msgs[id] || []).map(m => m.id));
   const fresh = (r.messages || []).some(m => !m.mine && !m.state && !known.has(m.id));      // really new (not already shown by the other lane)
   let ch = chatMerge(id, r.messages || []);
+  if (r.edited && r.edited.length && chatMerge(id, r.edited)) ch = true;      // somebody edited a message: show the new text
   if (r.gone && r.gone.length){                                  // somebody deleted these: they vanish from this chat too, no trace
     const before = (c.msgs[id] || []).length;
     c.msgs[id] = (c.msgs[id] || []).filter(m => !r.gone.includes(m.id));
@@ -4414,17 +4467,71 @@ function chatMsgMenu(id){
       <button class=\"btn ghost\" data-l=\"orig\">↩ Show original</button>
       ${v.text ? '<button class=\"btn ghost\" data-copy>📋 Copy</button>' : ''}
       ${chMediaUrl(m) ? `<a class=\"btn ghost\" href=\"${esc(chMediaUrl(m, true))}\" download>⬇ Download</a>` : ''}
+      ${!m.state ? '<button class="btn ghost" data-reply>↩ Reply</button>' : ''}
+      ${m.mine && !m.state && !chMedia(m) ? '<button class="btn ghost" data-edit>✏️ Edit</button>' : ''}
       <button class=\"btn ghost\" data-pick>☑ Select</button>
       ${chatCanDel(m) ? '<button class="btn ghost" data-del>🗑 Delete</button>' : ''}
     </div><div class=\"foot\"><button class=\"btn ghost\" data-x>Close</button></div>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
   const cb = w.querySelector('[data-copy]'); if (cb) cb.onclick = () => { w.remove(); chatCopyText(v.text); };
   w.querySelector('[data-pick]').onclick = () => { w.remove(); chatTogglePick(id); };
+  const rpb = w.querySelector('[data-reply]'); if (rpb) rpb.onclick = () => { w.remove(); chatReplyTo(id); };
+  const edb = w.querySelector('[data-edit]'); if (edb) edb.onclick = () => { w.remove(); chatEditStart(id); };
   const dlb = w.querySelector('[data-del]'); if (dlb) dlb.onclick = () => { w.remove(); chatDeleteIds([id]); };
   w.querySelectorAll('[data-l]').forEach(b => b.onclick = () => {
     const l = b.dataset.l; S.chat.ov[id] = l; delete S.chat.trFail[l + '|' + id];
     w.remove(); S.chat.trv++; chatRenderMsgs();
   });
+}
+/* ---------- reply (quote) and edit ---------- */
+function chRqHtml(m){
+  const q = m && m.reply; if (!q) return '';
+  return `<div class="rq" data-rq="${esc(q.i)}"><b>${esc(q.mine ? 'You' : (q.n || ''))}</b><span>${esc(q.t || '')}</span></div>`;
+}
+function chatCtxBar(){
+  const el = $('#chCtx'); if (!el) return;
+  const c = S.chat, id = c.with, rp = c.rp[id], ed = c.ed[id];
+  if (!rp && !ed){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'flex';
+  el.innerHTML = (ed ? '<div class="cx-b"><b>✏️ Edit message</b><span>Change the text, then tap send</span></div>'
+    : `<div class="cx-b"><b>↩ ${esc(rp.mine ? 'You' : (rp.n || ''))}</b><span>${esc(rp.t || '')}</span></div>`)
+    + '<button class="ch-sbtn" type="button" onclick="chatCtxCancel()" aria-label="Cancel">✕</button>';
+}
+function chatCtxCancel(){
+  const c = S.chat, id = c.with;
+  if (c.ed[id]){ const ta = $('#chInput'); c.drafts[id] = c.eb[id] || ''; if (ta){ ta.value = c.drafts[id]; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; } }
+  c.ed[id] = null; c.rp[id] = null; chatCtxBar();
+}
+function chatReplyTo(id){
+  const c = S.chat, m = chatMsg(id); if (!m || m.state) return;
+  if (c.ed[c.with]) chatCtxCancel();
+  const u = chatPeer(c.with);
+  c.rp[c.with] = { id, mine:!!m.mine, n:m.mine ? 'You' : (m.from || (u && (u.name || u.username)) || ''), t:chPrev(m.text).replace(/\s+/g, ' ').slice(0, 100) };
+  chatCtxBar(); const ta = $('#chInput'); if (ta) ta.focus();
+}
+function chatEditStart(id){
+  const c = S.chat, m = chatMsg(id); if (!m || !m.mine || m.state || chMedia(m)) return;
+  const ta = $('#chInput'); if (!ta) return;
+  if (!c.ed[c.with]) c.eb[c.with] = ta.value;                    // the half-typed message comes back after the edit
+  c.rp[c.with] = null; c.ed[c.with] = id;
+  ta.value = m.text; c.drafts[c.with] = m.text; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; ta.focus();
+  chatCtxBar();
+}
+async function chatEditDo(to, text){
+  const c = S.chat, id = c.ed[to], m = (c.msgs[to] || []).find(x => x.id === id);
+  const fin = () => { c.ed[to] = null; const back = c.eb[to] || ''; c.drafts[to] = back; const ta = $('#chInput'); if (ta && c.with === to){ ta.value = back; ta.style.height = 'auto'; } chatCtxBar(); };
+  if (!m || text === m.text){ fin(); return; }
+  try{
+    const r = await chatApi('chatEdit', { with:to, id, text });
+    Object.assign(m, r.message);
+    [c.tr, c.trFail].forEach(o => Object.keys(o).forEach(k => { if (k.endsWith('|' + id)) delete o[k]; }));
+    fin(); c.trv++; chatRenderMsgs(); chatLoadUsers(); toast('Message edited');
+  }catch(e){ chatErr(e); toast((e && e.message) || 'Could not edit', true); }
+}
+function chatJump(id){
+  const el = document.querySelector('#chMsgs .ch-b[data-mid="' + String(id).replace(/"/g, '') + '"]');
+  if (!el) return toast('The original message is not available', true);
+  el.scrollIntoView({ block:'center', behavior:'smooth' }); el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), 1400);
 }
 /* ---------- delete messages / photos / videos (they vanish for everybody; the main admin keeps them in Settings → Trash) ---------- */
 const chatCanDel = m => !!m && !m.state && (m.mine || !!(S.me && S.me.primary));
@@ -4503,6 +4610,7 @@ function chatBindMsgs(){
     const b = bub(e); if (!b || b.classList.contains('failed')) return;
     if (long){ long = false; return; }
     const id = b.dataset.mid, m = chatMsg(id); if (!m) return;
+    const rqe = e.target.closest('.rq'); if (rqe && !S.chat.sel.size) return chatJump(rqe.dataset.rq);
     if (e.target.closest('video')) return;
     const er = e.target.closest('.ph.err'); if (er){ const o = chMedia(m); if (o){ delete S.chat.mu[o.i]; S.chat.trv++; chatRenderMsgs(); } return; }
     if (e.target.closest('.ch-mimg') && !S.chat.sel.size) return chMediaView(id);
@@ -4720,9 +4828,12 @@ function chatBack(){
 async function chatSend(){
   const c = S.chat, to = c.with, ta = $('#chInput'); if (!to || !ta) return;
   const text = ta.value.trim(); if (!text) return;
+  if (c.ed[to]) return chatEditDo(to, text);
   ta.value = ''; c.drafts[to] = ''; ta.style.height = 'auto'; ta.focus();
   const cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
-  const m = { id:cid, t:Date.now(), mine:true, text, state:'pending' };
+  const rq = c.rp[to];
+  const m = { id:cid, t:Date.now(), mine:true, text, state:'pending', ...(rq ? { reply:{ i:rq.id, n:rq.n, t:rq.t, mine:rq.mine } } : {}) };
+  c.rp[to] = null; chatCtxBar();
   (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
   chatRenderMsgs(true);
   await chatDeliver(to, m);
@@ -4730,7 +4841,7 @@ async function chatSend(){
 async function chatDeliver(to, m){
   const c = S.chat;
   try{
-    const r = await chatApi('chatSend', { to, cid:m.id, text:m.text });
+    const r = await chatApi('chatSend', { to, cid:m.id, text:m.text, reply:m.reply ? m.reply.i : undefined });
     const arr = c.msgs[to] || [], i = arr.findIndex(x => x.id === m.id);
     if (i >= 0) arr[i] = r.message; else arr.push(r.message);
     arr.sort((x, y) => x.t - y.t);

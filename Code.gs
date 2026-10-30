@@ -165,7 +165,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, setActivityAccess: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -326,6 +326,7 @@ function route_(req) {
       case 'deleteGroup':       out = deleteGroup_(req); break;
       case 'setActivityAccess': out = setActivityAccess_(req); break;
       case 'chatDelete':        out = chatDelete_(req); break;
+      case 'chatEdit':          out = chatEdit_(req); break;
       case 'chatUsers':         return chatUsers_();
       case 'chatPhotos':        return chatPhotos_(req);
       case 'chatPhotoFull':     return chatPhotoFull_(req);
@@ -1149,8 +1150,8 @@ function createSheet_(k) {
     sh.getRange('A:D').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'CHAT') {
-    sh.getRange(1, 1, 1, 6).setValues([['ID', 'Time (ms)', 'From (user ID)', 'To (user ID)', 'Message', 'Sent at']]);
-    sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:F').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
+    sh.getRange(1, 1, 1, 8).setValues([['ID', 'Time (ms)', 'From (user ID)', 'To (user ID)', 'Message', 'Sent at', 'Reply to (JSON)', 'Edited at (ms)']]);
+    sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:G').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
     sh.setFrozenRows(1);
   } else if (k === 'TRASH') {
     sh.getRange(1, 1, 1, 12).setValues([['Trash ID', 'Deleted at (ms)', 'Deleted by (user ID)', 'Deleted by (name)', 'From (user ID)', 'From (name)', 'To (user ID / group)', 'To (name)', 'Message', 'Sent at (ms)', 'Sent at', 'Original message ID']]);
@@ -2556,8 +2557,10 @@ function chatRows_() {
   var sh = getSheet_('CHAT'), last = sh.getLastRow();
   if (last < 2) return [];
   var n = Math.min(last - 1, CHAT_SCAN);
-  return sh.getRange(last - n + 1, 1, n, 5).getValues().map(function (r) {
-    return { id: String(r[0]), t: Number(r[1]) || 0, from: String(r[2]), to: String(r[3]), text: String(r[4]) };
+  return sh.getRange(last - n + 1, 1, n, 8).getValues().map(function (r) {
+    var rep = null;
+    if (r[6]) { try { rep = JSON.parse(String(r[6])); } catch (e) { rep = null; } }
+    return { id: String(r[0]), t: Number(r[1]) || 0, from: String(r[2]), to: String(r[3]), text: String(r[4]), reply: rep, edited: Number(r[7]) || 0 };
   });
 }
 function chatPeers_() {
@@ -2699,7 +2702,30 @@ function chatPeerOk_(id) {
   if (!chatSee_(getAccount_(CTX.uid, readSettings_().values), acc)) fail_('That user was not found.');
   return acc;
 }
-function chatMsgOut_(r) { return { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text }; }
+function chatMsgOut_(r) {
+  var o = { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text };
+  if (r.reply && r.reply.i) o.reply = { i: String(r.reply.i), n: String(r.reply.n || ''), t: String(r.reply.t || ''), mine: r.reply.f === CTX.uid };
+  if (r.edited) o.edited = r.edited;
+  return o;
+}
+// messages EDITED since the app last heard from the server (so the other phone shows the new text); same "since" time as the deleted list
+function chatEdited_(req, rows, nm) {
+  var since = Number(req.gs) || 0;
+  if (!since) return [];
+  return rows.filter(function (r) { return r.edited > since; }).map(function (r) {
+    var o = chatMsgOut_(r);
+    if (nm) o.from = r.from === CTX.uid ? '' : (nm[r.from] || 'Someone');
+    return o;
+  });
+}
+function chatEnsureCols_(sh) {
+  try {
+    if (!String(sh.getRange(1, 7).getValue() || '').trim()) {
+      sh.getRange(1, 7, 1, 2).setValues([['Reply to (JSON)', 'Edited at (ms)']]);
+      sh.getRange(1, 7, 1, 2).setFontWeight('bold');
+    }
+  } catch (e) {}
+}
 // req: { with: userId, after: lastTimeSeen }  -> new messages of this conversation + whether the other person has read mine
 function chatFetch_(req) {
   if (isChatGroupId_(req.with)) return chatGroupFetch_(String(req.with).trim(), req);
@@ -2714,7 +2740,7 @@ function chatFetch_(req) {
   var peerRead = Number(readPtr_(w)[CTX.uid] || 0);
   var ms = seenMap_([w])[w] || 0;
   var pr = ms ? presence_(ms, now) : null;
-  return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, peerSeen: ms, now: now, presence: pr, gone: chatGone_(req, function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); }) };
+  return { ok: true, messages: out.map(chatMsgOut_), peerRead: peerRead, peerSeen: ms, now: now, presence: pr, edited: chatEdited_(req, rows), gone: chatGone_(req, function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); }) };
 }
 // Light version of chatFetch for the open chat (polled every ~1.5 s): new messages + delivered / seen info.
 // req.read = 1 means "the person is looking at this chat right now" -> everything from the other person counts as seen.
@@ -2732,6 +2758,7 @@ function chatLive_(req) {
   }
   var ms = seenMap_([w])[w] || 0;
   return { ok: true, messages: out.map(chatMsgOut_), peerRead: Number(readPtr_(w)[CTX.uid] || 0), peerSeen: ms, now: now, presence: ms ? presence_(ms, now) : null,
+    edited: chatEdited_(req, rows),
     gone: chatGone_(req, function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); }) };
 }
 // Translate messages (English / Hindi / Indonesian) with Google Translate built into Apps Script. Results are cached 6 hours.
@@ -2816,15 +2843,59 @@ function chatSend_(req) {
   var tail = chatRows_().slice(-300), dup = null;
   tail.forEach(function (r) { if (r.id === id && r.from === CTX.uid) dup = r; });
   if (dup) return { ok: true, message: chatMsgOut_(dup) };          // the same message sent twice (network retry) is stored once
+  var rep = null;
+  if (req.reply) {                                                   // quote of another message of THIS conversation (built here, never trusted from the phone)
+    var rid = String(req.reply), nm0 = chatNameMap_(), isG0 = isChatGroupId_(req.to);
+    chatRows_().some(function (q) {
+      if (q.id !== rid) return false;
+      var okc = isG0 ? q.to === peer.id : ((q.from === CTX.uid && q.to === peer.id) || (q.from === peer.id && q.to === CTX.uid));
+      if (!okc) return false;
+      rep = { i: q.id, f: q.from, n: nm0[q.from] || '', t: chatPreview_(q.text).replace(/\s+/g, ' ').slice(0, 100) };
+      return true;
+    });
+  }
   var sh = getSheet_('CHAT'), row = sh.getLastRow() + 1, t = Date.now();
+  chatEnsureCols_(sh);
   var last = tail.length ? tail[tail.length - 1].t : 0;
   if (t <= last) t = last + 1;                                       // keep times strictly increasing
   var rng = sh.getRange(row, 1, 1, 6);
   rng.setNumberFormat('@');
   sh.getRange(row, 2).setNumberFormat('0');
   rng.setValues([[id, t, CTX.uid, peer.id, text, nowStr_()]]);
+  if (rep) { var rc = sh.getRange(row, 7); rc.setNumberFormat('@'); rc.setValue(JSON.stringify(rep)); }
   if (sh.getLastRow() > 20000) sh.deleteRows(2, 2000);              // keep the sheet from growing forever
-  return { ok: true, message: { id: id, t: t, mine: true, text: text } };
+  return { ok: true, message: chatMsgOut_({ id: id, t: t, from: CTX.uid, to: peer.id, text: text, reply: rep, edited: 0 }) };
+}
+
+// ---------- EDIT a message (only your own text messages; the other person sees the new text and a small \"edited\" mark) ----------
+function chatEdit_(req) {
+  var conv = String(req.with || '').trim(), isG = isChatGroupId_(conv);
+  var peer = isG ? chatGroupOk_(conv) : chatPeerOk_(conv);
+  var id = String(req.id || '').trim();
+  var text = String(req.text === undefined || req.text === null ? '' : req.text).replace(/\r\n?/g, '\n').trim();
+  if (!id) fail_('Choose a message to edit.');
+  if (!text) fail_('Type a message first.');
+  if (text.indexOf('ksmedia:') === 0) fail_('Photos and videos cannot be edited.');
+  if (text.length > CHAT_MAX_LEN) text = text.slice(0, CHAT_MAX_LEN);
+  var sh = getSheet_('CHAT'), last = sh.getLastRow();
+  if (last < 2) fail_('That message was not found.');
+  var n = Math.min(last - 1, CHAT_SCAN), top = last - n + 1;
+  var vals = sh.getRange(top, 1, n, 6).getValues(), hit = -1;
+  vals.forEach(function (r, i) {
+    if (String(r[0]) !== id) return;
+    var from = String(r[2]), to = String(r[3]);
+    var inConv = isG ? to === conv : ((from === CTX.uid && to === peer.id) || (from === peer.id && to === CTX.uid));
+    if (inConv) hit = i;
+  });
+  if (hit < 0) fail_('That message was not found (it may have been deleted).');
+  var row = vals[hit];
+  if (String(row[2]) !== CTX.uid) fail_('You can edit only your own messages.', 'PERM');
+  if (String(row[4]).indexOf('ksmedia:') === 0) fail_('Photos and videos cannot be edited.');
+  chatEnsureCols_(sh);
+  var now = Date.now(), r0 = top + hit;
+  var c5 = sh.getRange(r0, 5); c5.setNumberFormat('@'); c5.setValue(text);
+  var c8 = sh.getRange(r0, 8); c8.setValue(now);
+  return { ok: true, message: chatMsgOut_({ id: id, t: Number(row[1]) || 0, from: CTX.uid, to: String(row[3]), text: text, reply: null, edited: now }) };
 }
 
 // ---------- CHAT TRASH (deleted messages / photos / videos vanish for EVERYBODY in the chat, but are kept for the main admin) ----------
@@ -3017,8 +3088,8 @@ function chatGroupFetch_(gid, req) {
   rows.forEach(function (r) { if (r.from !== CTX.uid && r.t > latestIn) latestIn = r.t; });
   var ptr = readPtr_(CTX.uid);
   if (latestIn > (ptr[gid] || 0)) { ptr[gid] = latestIn; PropertiesService.getScriptProperties().setProperty('CR_' + CTX.uid, JSON.stringify(ptr)); }
-  return { ok: true, peerRead: 0, peerSeen: 0, now: now, presence: null, gone: chatGone_(req, function (r) { return r.to === gid; }), group: { id: g.id, name: g.name, members: chatGroupMemberList_(g, nm) },
-    messages: out.map(function (r) { return { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text, from: r.from === CTX.uid ? '' : (nm[r.from] || 'Someone') }; }) };
+  return { ok: true, peerRead: 0, peerSeen: 0, now: now, presence: null, edited: chatEdited_(req, rows, nm), gone: chatGone_(req, function (r) { return r.to === gid; }), group: { id: g.id, name: g.name, members: chatGroupMemberList_(g, nm) },
+    messages: out.map(function (r) { var o = chatMsgOut_(r); o.from = r.from === CTX.uid ? '' : (nm[r.from] || 'Someone'); return o; }) };
 }
 
 // ---------- BUNDLE ----------
