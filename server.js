@@ -762,7 +762,7 @@ function makeApp(store, env) {
   const TR_OK = { en: 1, hi: 1, id: 1 }, trCache = new Map();
   // Google blocks bursts (HTTP 429). So: at most 3 requests at a time, a short gap between them, a retry with back-off,
   // a second Google address as back-up, and a quiet period when Google says "slow down" (instead of hammering it).
-  let trBan = 0, trActive = 0; const trWait = [];
+  let trActive = 0; const trWait = [];
   const trSleep = ms => new Promise(r => setTimeout(r, ms));
   const trSlot = () => new Promise(res => { const go = () => { trActive++; res(); }; if (trActive < 3) go(); else trWait.push(go); });
   const trFree = () => { trActive--; const n = trWait.shift(); if (n) n(); };
@@ -783,23 +783,59 @@ function makeApp(store, env) {
     if (Array.isArray(j)) { const f = Array.isArray(j[0]) ? j[0][0] : j[0]; if (typeof f === 'string') return f; }
     throw new Error('unknown back-up format');
   }
+  async function trMyMem(text, to) {      // free, no key; 3rd address (different company, so not blocked with Google)
+    const r = await fetch('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text.slice(0, 480)) + '&langpair=Autodetect|' + to,
+      { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw trErr(r);
+    const j = await r.json(), v = j && j.responseData && j.responseData.translatedText;
+    if (!v || Number(j.responseStatus) !== 200 || /MYMEMORY WARNING|INVALID/i.test(v)) { const e = new Error('mymemory refused'); e.status = 429; throw e; }
+    return String(v);
+  }
+  async function trLingva(text, to) {     // 4th address (open Google-Translate front-end)
+    const r = await fetch('https://lingva.ml/api/v1/auto/' + to + '/' + encodeURIComponent(text.slice(0, 1000)), { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw trErr(r);
+    const j = await r.json();
+    if (!j || typeof j.translation !== 'string') throw new Error('lingva bad reply');
+    return j.translation;
+  }
+  async function trCloud(text, to) {      // official Google Cloud Translation API: no rate-limit problem. Used first when GOOGLE_TRANSLATE_KEY is set.
+    const r = await fetch('https://translation.googleapis.com/language/translate/v2?key=' + encodeURIComponent(env.GOOGLE_TRANSLATE_KEY),
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: text, target: to, format: 'text' }), signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw trErr(r);
+    const j = await r.json(), v = j && j.data && j.data.translations && j.data.translations[0] && j.data.translations[0].translatedText;
+    if (typeof v !== 'string') throw new Error('cloud bad reply');
+    return v;
+  }
+  // Each address gets its own "cool-off": when one says 429 it is skipped for 20 s while the others are tried straight away.
+  const trDead = {};
+  async function trChain(text, to) {
+    const list = [];
+    if (env.GOOGLE_TRANSLATE_KEY) list.push(['cloud', trCloud]);
+    list.push(['gtx', trGoogle], ['alt', trAlt], ['mymemory', trMyMem], ['lingva', trLingva]);
+    let last = null, tried = 0;
+    for (const [name, fn] of list) {
+      if (Date.now() < (trDead[name] || 0)) continue;
+      tried++;
+      try { const v = await fn(text, to); if (v && v.trim()) return v; last = new Error(name + ' empty'); }
+      catch (e) {
+        last = e;
+        if (e.status === 429 || e.status >= 500 || e.name === 'TimeoutError' || e.status === 403) trDead[name] = Date.now() + (Math.min(e.retryAfter || 0, 60) * 1000 || 20000);
+      }
+    }
+    if (!tried) throw new Error('translate paused (every translate address is rate-limited)');
+    throw last || new Error('translate failed');
+  }
   async function trOne(text, to) {
     const key = to + '|' + crypto.createHash('md5').update(text).digest('base64');
     const hit = trCache.get(key); if (hit && hit.t > Date.now()) return hit.v;
-    if (Date.now() < trBan) throw new Error('translate paused (Google rate limit)');
     let v = '';
     await trSlot();
     try {
-      for (let a = 0; a < 3 && !v; a++) {
-        if (Date.now() < trBan) throw new Error('translate paused (Google rate limit)');
-        try { v = await trGoogle(text, to); }
-        catch (e) {
-          if (!(e.status === 429 || e.status >= 500 || e.name === 'TimeoutError')) throw e;
-          try { v = await trAlt(text, to); } catch (e2) {}
-          if (v) break;
-          if (a === 2) { if (e.status === 429) trBan = Date.now() + 45000; throw e; }
-          await trSleep(Math.min(e.retryAfter || 0, 20) * 1000 || 700 * (a + 1) + Math.random() * 300);
-        }
+      try { v = await trChain(text, to); }
+      catch (e) {                           // everything failed once: wait a moment and try one more time
+        if (/paused/.test(e.message)) throw e;
+        await trSleep(700 + Math.random() * 300);
+        v = await trChain(text, to);
       }
       await trSleep(150);                   // small gap so the next request is not a burst
     } finally { trFree(); }
