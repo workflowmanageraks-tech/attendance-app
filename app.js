@@ -4463,14 +4463,36 @@ function chatNeedTr(){
   });
   Object.keys(by).forEach(l => chatTrRun(by[l], l, id));
 }
+async function chatTrBrowser(text, lang){
+  const c = S.chat; c.trBrCache = c.trBrCache || {};
+  const k = lang + '|' + text; if (c.trBrCache[k]) return c.trBrCache[k];
+  if (Date.now() < (c.trBrOff || 0)) throw new Error('paused');
+  const r = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=auto&tl=' + lang + '&q=' + encodeURIComponent(String(text).slice(0, 1800)));
+  if (r.status === 429) c.trBrOff = Date.now() + 30000;
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  const v = (Array.isArray(j[0]) ? j[0] : []).map(x => (x && x[0]) || '').join('');
+  if (!v) throw new Error('empty');
+  c.trBrCache[k] = v; return v;
+}
 async function chatTrRun(items, lang, convId){
   const c = S.chat;
   for (let i = 0; i < items.length; i += 25){
     const part = items.slice(i, i + 25);
     part.forEach(x => c.trBusy[lang + '|' + x.id] = 1);
     try{
-      const r = await chatApi('chatTranslate', { to:lang, texts:part.map(x => x.text) });
-      part.forEach((x, j) => { const t = r.translations && r.translations[j]; if (typeof t === 'string') c.tr[lang + '|' + x.id] = t; else c.trFail[lang + '|' + x.id] = 1; });
+      let tl = [];
+      if (Date.now() >= (c.trSrvOff || 0)){                      // server first (shared cache) ...
+        const r = await chatApi('chatTranslate', { to:lang, texts:part.map(x => x.text) });
+        tl = r.translations || [];
+        if (part.length && !tl.some(t => typeof t === 'string' && t)) c.trSrvOff = Date.now() + 120000;   // Google blocks the server: skip it for 2 min
+      }
+      // ... and whatever the server could not do, this phone translates itself (its own IP is not rate-limited like the server's)
+      for (let j = 0; j < part.length; j++){
+        if (typeof tl[j] === 'string') continue;
+        try{ tl[j] = await chatTrBrowser(part[j].text, lang); }catch(e){ tl[j] = null; }
+      }
+      part.forEach((x, j) => { const t = tl[j]; if (typeof t === 'string') c.tr[lang + '|' + x.id] = t; else c.trFail[lang + '|' + x.id] = 1; });
     }catch(e){ chatErr(e); part.forEach(x => c.trFail[lang + '|' + x.id] = 1); }
     part.forEach(x => delete c.trBusy[lang + '|' + x.id]);
     c.trTry = c.trTry || {};
