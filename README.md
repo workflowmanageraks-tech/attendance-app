@@ -79,3 +79,27 @@ One-time setup:
 3. Repo → Settings → Actions → General → Workflow permissions → **Read and write permissions**.
 
 On the phone: open the downloaded .apk and allow "Install unknown apps". The APK is debug-signed, so uninstall the old one before installing a build from another run.
+
+
+## VCS Processing - network monitor (main admin only)
+
+Settings > **VCS Processing**. Besides the live request feed it now has five tabs:
+
+- **📜 Requests** - every request with the user, the **client IP and device** (e.g. `App · Android`), size in / out, and every outgoing call it caused (with the server host, data sent / received and timing). **⬇ CSV** exports the list; **📋 Copy report** copies it as text.
+- **🌍 Servers** - every server the Render app talks to (`sheets.googleapis.com`, `www.googleapis.com`, `api.github.com`, `smtp.gmail.com:465` ...): calls, failures, average / slowest time, data up / down, **which users** the calls were made for, and the last error.
+- **👤 Users** - per user: online now, requests, errors, average time, outgoing calls, data, last IP + device, **which servers their requests reached** and what they do most.
+- **📍 Clients** - every IP address that contacted the server, its device, the users seen from it, and a 🚨 flag after 3+ failed sign-ins in 5 minutes.
+- **🚨 Alerts** - a server failing 3 times in 2 minutes, a call slower than 5 s, a user sending 100+ requests a minute, 5+ failed sign-ins from one IP, event-loop lag over 800 ms, memory over 420 MB. The same alerts also appear in the Requests feed.
+
+A small chart shows requests per minute for the last 20 minutes (failures in red). Everything is kept in server memory only (nothing is written to the sheet) and resets when Render restarts. Passwords, tokens, query strings and message text are never shown; IPs are visible only to the main admin. Files changed: `live-monitor.js`, `server.js`, `app.js`, `style.css`.
+
+## LIC policy groups
+
+LIC tab > **👥 Policy groups**. Put each policy / premium into a group (family, agent, branch, plan ...).
+
+- **＋ New group** creates a group. If policies are ticked in the table, you can add them to the new group right away.
+- Tap a group chip to see only its policies; the cards at the top (total, to-pay-in-1-year, renewals due ...) then show that group's numbers. **No group** shows policies that are not grouped.
+- **✏️ Rename** and **🗑 Delete group** appear while a group is open. Deleting a group never deletes policies - they just become *No group*.
+- Add policies to a group: tick them in the table > **Move to group** (or choose *No group (remove)*), or pick the **Group** in a policy's Add / Edit form (it also has a **＋ New group** button).
+- Group name is shown in the table, in **Copy**, and as a **Group** column in the Excel / PDF export.
+- Stored in column **O (Group ID)** of the *LIC Policies* sheet (added automatically); the list of groups is saved in the *Rack Config* sheet (type `LicGroups`). Needs *LIC: Edit* permission to change groups; *View* users can still filter by group. Files changed: `Code.gs` (also `Code_gs.txt`), `app.js`, `style.css`.
