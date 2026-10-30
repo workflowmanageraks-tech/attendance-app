@@ -175,7 +175,7 @@ var NEED = {
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
-  addLic: 'lic', updateLic: 'lic', deleteLic: 'lic', saveLicFields: 'lic', saveLicGroup: 'lic', deleteLicGroup: 'lic', setLicGroup: 'lic',
+  addLic: 'lic', updateLic: 'lic', deleteLic: 'lic', saveLicFields: 'lic',
   addVcs: 'vcs', updateVcs: 'vcs',
   addRack: 'rack', updateRack: 'rack', deleteRack: 'rack', saveRackRows: 'rack', saveRackCats: 'rack', saveRackFields: 'rack', saveRackData: 'rack', saveRackPresets: 'rack',
   addEmployee: 'emp', updateEmployee: 'emp', deleteEmployee: 'emp',
@@ -294,9 +294,6 @@ function route_(req) {
       case 'updateLink':        out = updateLink_(req); break;
       case 'deleteLink':        out = deleteLink_(req); break;
       case 'saveLicFields':     out = saveLicFields_(req); break;
-      case 'saveLicGroup':      out = saveLicGroup_(req); break;
-      case 'deleteLicGroup':    out = deleteLicGroup_(req); break;
-      case 'setLicGroup':       out = setLicGroup_(req); break;
       case 'addLic':            out = addLic_(req); break;
       case 'updateLic':         out = updateLic_(req); break;
       case 'deleteLic':         out = deleteLic_(req); break;
@@ -651,7 +648,7 @@ var ACTIVITY_LABEL_ = {
   addCategory: 'Added a category', updateCategory: 'Updated a category', deleteCategory: 'Deleted a category',
   addWork: 'Added a work entry', updateWork: 'Updated a work entry', deleteWork: 'Deleted a work entry',
   addPw: 'Added a saved password', updatePw: 'Updated a saved password', deletePw: 'Deleted a saved password',
-  addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link', saveLicFields: 'Changed LIC extra fields', saveLicGroup: 'Saved a LIC policy group', deleteLicGroup: 'Deleted a LIC policy group', setLicGroup: 'Moved LIC policies to a group',
+  addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link', saveLicFields: 'Changed LIC extra fields',
   addVcs: 'Logged a VCS complaint', updateVcs: 'Updated a VCS complaint',
   addRack: 'Added a rack item', updateRack: 'Updated a rack item', deleteRack: 'Deleted a rack item',
   saveRackRows: 'Customised rack rows', saveRackCats: 'Changed rack categories', saveRackFields: 'Changed rack fields', saveRackData: 'Saved rack details', saveRackPresets: 'Changed INS packing list',
@@ -1887,10 +1884,9 @@ var LIC_FREQS = { monthly: 1, quarterly: 1, halfyearly: 1, yearly: 1 };   // '' 
 // the LIC sheet with its extra columns (older sheets get them added automatically):
 // I = Renewal Due Date | J = Policy Name | K = Total Policy Amount | L = Nominee | M = Customer Mobile | N = More Details (JSON of the extra fields you add yourself)
 var LIC_EXTRA_HDR = ['Policy Name', 'Total Policy Amount', 'Nominee', 'Customer Mobile', 'More Details (JSON)'];
-// O (15) = Group ID (policy group; the list of groups lives in the "Rack Config" sheet under type "LicGroups")
 function licSheet_() {
   var sh = ownedSheet_('LIC', 8);
-  if (sh.getMaxColumns() < 15) sh.insertColumnsAfter(sh.getMaxColumns(), 15 - sh.getMaxColumns());
+  if (sh.getMaxColumns() < 14) sh.insertColumnsAfter(sh.getMaxColumns(), 14 - sh.getMaxColumns());
   var h = sh.getRange(1, 9);
   if (String(h.getValue()) !== 'Renewal Due Date') {
     h.setNumberFormat('@'); h.setValue('Renewal Due Date'); h.setFontWeight('bold');
@@ -1901,11 +1897,6 @@ function licSheet_() {
     hx.setNumberFormat('@'); hx.setValues([LIC_EXTRA_HDR]); hx.setFontWeight('bold');
     sh.getRange('J:N').setNumberFormat('@');
   }
-  if (String(sh.getRange(1, 15).getValue()) !== 'Group ID') {
-    var hg = sh.getRange(1, 15);
-    hg.setNumberFormat('@'); hg.setValue('Group ID'); hg.setFontWeight('bold');
-    sh.getRange('O:O').setNumberFormat('@');
-  }
   return sh;
 }
 // names of the extra fields this owner added (stored in the "Rack Config" sheet under type "LicFields")
@@ -1915,19 +1906,6 @@ function readLicFields_() {
   sh.getRange(2, 1, last - 1, 4).getValues().forEach(function (r) {
     if (String(r[0]) !== 'LicFields' || ownerOf_(r[3]) !== CTX.owner) return;
     try { var v = JSON.parse(String(r[2])); if (Array.isArray(v)) out = v.map(String); } catch (e) {}
-  });
-  return out;
-}
-// policy groups of this owner: [{ id, name }]
-function readLicGroups_() {
-  var sh = rackCfgSheet_(), last = sh.getLastRow(), out = [];
-  if (last < 2) return out;
-  sh.getRange(2, 1, last - 1, 4).getValues().forEach(function (r) {
-    if (String(r[0]) !== 'LicGroups' || ownerOf_(r[3]) !== CTX.owner) return;
-    try {
-      var v = JSON.parse(String(r[2]));
-      if (Array.isArray(v)) out = v.filter(function (g) { return g && g.id && g.name; }).map(function (g) { return { id: String(g.id), name: String(g.name) }; });
-    } catch (e) {}
   });
   return out;
 }
@@ -1946,8 +1924,7 @@ function readLic_() {
   var sh = licSheet_();
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 15).getValues();
-  var gids = {}; readLicGroups_().forEach(function (g) { gids[g.id] = 1; });
+  var vals = sh.getRange(2, 1, last - 1, 14).getValues();
   var out = [], dirty = false;
   vals.forEach(function (r) {
     if (r[0] === '' && r[1] === '' && r[2] === '') return;
@@ -1959,7 +1936,7 @@ function readLic_() {
     out.push({ id: id, name: String(r[0]), policyNo: String(r[1]), amount: Number(r[2]) || 0,
       startDate: LIC_DATE_RE.test(r[3]) ? String(r[3]) : '', endDate: LIC_DATE_RE.test(r[4]) ? String(r[4]) : '',
       freq: LIC_FREQS[freq] ? freq : '', dueDate: LIC_DATE_RE.test(r[8]) ? String(r[8]) : '',
-      policyName: String(r[9] || ''), totalAmount: Number(r[10]) || 0, nominee: String(r[11] || ''), phone: String(r[12] || ''), extra: ex, group: gids[String(r[14] || '')] ? String(r[14]) : '' });
+      policyName: String(r[9] || ''), totalAmount: Number(r[10]) || 0, nominee: String(r[11] || ''), phone: String(r[12] || ''), extra: ex });
   });
   if (dirty) sh.getRange(2, 7, vals.length, 1).setValues(vals.map(function (r) { return [r[6]]; }));
   return out;
@@ -1977,11 +1954,8 @@ function validLic_(req) {
     totalAmount: Math.max(0, Number(req.totalAmount) || 0),
     nominee: String(req.nominee || '').trim().slice(0, 200),
     phone: String(req.phone || '').trim().slice(0, 30),
-    extra: licExtraClean_(req.extra),
-    group: ''
+    extra: licExtraClean_(req.extra)
   };
-  var gid = String(req.group || '').trim();
-  if (gid) readLicGroups_().forEach(function (g) { if (g.id === gid) p.group = gid; });
   if (!(p.name || p.policyNo)) fail_('Fill in at least the customer name or policy number.');
   if (p.startDate && p.endDate && p.endDate < p.startDate) fail_('Ending date cannot be before the starting date.');
   return p;
@@ -1998,10 +1972,10 @@ function addLic_(req) {
   var sh = licSheet_();
   var row = sh.getLastRow() + 1;
   var id = Utilities.getUuid().slice(0, 8);
-  var rng = sh.getRange(row, 1, 1, 15);
+  var rng = sh.getRange(row, 1, 1, 14);
   rng.setNumberFormat('@');
   rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq, id, CTX.owner, p.dueDate,
-    p.policyName, p.totalAmount, p.nominee, p.phone, JSON.stringify(p.extra), p.group]]);
+    p.policyName, p.totalAmount, p.nominee, p.phone, JSON.stringify(p.extra)]]);
   p.id = id;
   return { ok: true, lic: p };
 }
@@ -2019,9 +1993,6 @@ function updateLic_(req) {
   var rx = sh.getRange(row, 10, 1, 5);
   rx.setNumberFormat('@');
   rx.setValues([[p.policyName, p.totalAmount, p.nominee, p.phone, JSON.stringify(p.extra)]]);
-  var rg = sh.getRange(row, 15);
-  rg.setNumberFormat('@');
-  rg.setValue(p.group);
   p.id = String(req.id);
   return { ok: true, lic: p };
 }
@@ -2051,63 +2022,6 @@ function saveLicFields_(req) {
   }
   rackCfgSet_('LicFields', '*', names.length ? names : null);
   return { ok: true, fields: names };
-}
-// ---- policy groups: add / rename (id given), delete, and move policies into a group ----
-function licGroupId_(groups) {
-  var id; do { id = 'g' + Utilities.getUuid().slice(0, 6); } while (groups.some(function (g) { return g.id === id; }));
-  return id;
-}
-function saveLicGroup_(req) {
-  var groups = readLicGroups_();
-  var name = String(req.name || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 60);
-  if (!name) fail_('Group name is required.');
-  var id = String(req.id || '').trim(), cur = null;
-  if (id) {
-    groups.forEach(function (g) { if (g.id === id) cur = g; });
-    if (!cur) fail_('Group not found. Please refresh.');
-  }
-  if (groups.some(function (g) { return (!cur || g.id !== cur.id) && g.name.toLowerCase() === name.toLowerCase(); })) fail_('A group with that name already exists.');
-  if (cur) cur.name = name;
-  else {
-    if (groups.length >= 50) fail_('At most 50 groups are allowed.');
-    cur = { id: licGroupId_(groups), name: name };
-    groups.push(cur);
-  }
-  rackCfgSet_('LicGroups', '*', groups);
-  return { ok: true, group: cur, groups: groups };
-}
-// policies of a deleted group are NOT deleted - they just become "no group"
-function deleteLicGroup_(req) {
-  var id = String(req.id || '').trim();
-  var groups = readLicGroups_();
-  var keep = groups.filter(function (g) { return g.id !== id; });
-  if (keep.length === groups.length) fail_('Group not found. Please refresh.');
-  var sh = licSheet_(), last = sh.getLastRow(), freed = 0;
-  if (last >= 2) {
-    var own = sh.getRange(2, 8, last - 1, 1).getValues(), gv = sh.getRange(2, 15, last - 1, 1).getValues(), changed = false;
-    for (var i = 0; i < gv.length; i++) {
-      if (ownerOf_(own[i][0]) === CTX.owner && String(gv[i][0]) === id) { gv[i][0] = ''; changed = true; freed++; }
-    }
-    if (changed) { var rg = sh.getRange(2, 15, last - 1, 1); rg.setNumberFormat('@'); rg.setValues(gv); }
-  }
-  rackCfgSet_('LicGroups', '*', keep.length ? keep : null);
-  return { ok: true, groups: keep, freed: freed };
-}
-// req.ids = policy ids, req.group = group id ('' = take them out of every group)
-function setLicGroup_(req) {
-  var ids = Array.isArray(req.ids) ? req.ids.map(String) : [];
-  if (!ids.length) fail_('Select at least one policy.');
-  var gid = String(req.group || '').trim();
-  if (gid && !readLicGroups_().some(function (g) { return g.id === gid; })) fail_('Group not found. Please refresh.');
-  var sh = licSheet_(), last = sh.getLastRow(), n = 0;
-  if (last >= 2) {
-    var v = sh.getRange(2, 7, last - 1, 2).getValues(), gv = sh.getRange(2, 15, last - 1, 1).getValues();
-    for (var i = 0; i < v.length; i++) {
-      if (ids.indexOf(String(v[i][0])) >= 0 && ownerOf_(v[i][1]) === CTX.owner) { gv[i][0] = gid; n++; }
-    }
-    if (n) { var rg = sh.getRange(2, 15, last - 1, 1); rg.setNumberFormat('@'); rg.setValues(gv); }
-  }
-  return { ok: true, moved: n, group: gid };
 }
 function deleteLic_(req) {
   var sh = licSheet_();
@@ -3201,7 +3115,6 @@ function getAll_() {
     links: p.link === 'none' ? [] : readLink_(),
     lic: p.lic === 'none' ? [] : readLic_(),
     licFields: p.lic === 'none' ? [] : readLicFields_(),
-    licGroups: p.lic === 'none' ? [] : readLicGroups_(),
     vcs: p.vcs === 'none' ? [] : readVcs_(),
     vcsUsers: p.vcs === 'none' ? [] : vcsUsers_(),
     rack: p.rack === 'none' ? [] : readRack_(RC.cats),

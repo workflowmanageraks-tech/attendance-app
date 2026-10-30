@@ -13,9 +13,9 @@ const EK = 'att_tracker_emp';
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
 const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
-  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, lic:{ q:'', g:'all' }, groups:null, sig:'' };
+  wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, lic:{ q:'' }, groups:null, sig:'' };
 
-const LV = { rows:new Map(), cli:new Map(), hist:[], dest:{}, stats:null, hello:null, conn:'off', since:0, retry:0, cn:0, f:{ q:'', mode:'all', poll:false }, open:new Set(), paused:false, ctl:null, rt:null, tick:null, dt:null, err:'', hcAt:0, c0:0, fatal:false, tab:'feed', net:null, alerts:new Map() };
+const LV = { rows:new Map(), cli:new Map(), hist:[], dest:{}, stats:null, hello:null, conn:'off', since:0, retry:0, cn:0, f:{ q:'', mode:'all', poll:false }, open:new Set(), paused:false, ctl:null, rt:null, tick:null, dt:null, err:'', hcAt:0, c0:0, fatal:false };
 
 /* ---------- tiny helpers ---------- */
 const $ = (s, r=document) => r.querySelector(s);
@@ -333,7 +333,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.licFields = S.d.licFields || []; S.d.licGroups = S.d.licGroups || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.licFields = S.d.licFields || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -439,7 +439,7 @@ function applyRO(v){
   if (!can('pw')) kill('[onclick*="pwForm"],[onclick*="pwDel"]');
   if (!can('tt')){ kill('[onclick*="ttCats"],[onclick*="ttClear"],[onclick*="ttCopyPrev"]'); v.querySelectorAll('[data-tt]').forEach(e => { e.disabled = true; }); }
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
-  if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"],[onclick*="licFieldsEdit"],[onclick*="licGroupForm"],[onclick*="licGroupDel"],[onclick*="licMove"]');
+  if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"],[onclick*="licFieldsEdit"]');
   if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"],[onclick*="vcsReopen"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
   if (!can('rack')) kill('[onclick*="rackFieldsEdit"],[onclick*="rackRowsEdit"]');
   if (!can('work')){
@@ -2817,23 +2817,14 @@ function licMore(x){
   const ex = x.extra || {};
   return (S.d.licFields || []).filter(n => ex[n]).map(n => `<div><span class="muted">${esc(n)}:</span> ${esc(ex[n])}</div>`).join('');
 }
-/* policy groups (premiums grouped by family / agent / branch ... - whatever you name them) */
-const licGroups = () => (S.d && S.d.licGroups) || [];
-const licGroupName = id => { const g = licGroups().find(e => e.id === id); return g ? g.name : ''; };
-function licGroupMatch(x){ const g = S.lic.g || 'all'; return g === 'all' ? true : g === 'none' ? !x.group : x.group === g; }
-const licSelSet = () => (S.lic.sel = S.lic.sel || new Set());
 function filteredLic(){
   const q = (S.lic.q || '').trim().toLowerCase();
   return [...(S.d.lic || [])]
-    .filter(licGroupMatch)
-    .filter(x => !q || licGroupName(x.group).toLowerCase().includes(q) || [x.name, x.policyNo, x.policyName, x.nominee, x.phone, ...Object.values(x.extra || {})].join(' ').toLowerCase().includes(q))
+    .filter(x => !q || [x.name, x.policyNo, x.policyName, x.nominee, x.phone, ...Object.values(x.extra || {})].join(' ').toLowerCase().includes(q))
     .sort((a, b) => (a.endDate || '9999').localeCompare(b.endDate || '9999'));     // soonest-ending first
 }
 function vLic(){
-  const every = S.d.lic || [], gs = licGroups(), cur = S.lic.g || 'all', mine = can('lic');
-  if (cur !== 'all' && cur !== 'none' && !gs.some(g => g.id === cur)) S.lic.g = 'all';      // the group was deleted meanwhile
-  const all = every.filter(licGroupMatch), list = filteredLic(), total = all.length;
-  const sel = licSelSet(); [...sel].forEach(id => { if (!every.some(x => x.id === id)) sel.delete(id); });
+  const all = S.d.lic || [], list = filteredLic(), total = all.length;
   const now = Date.now();
   let maturing = 0, matured = 0, totalAmt = 0, renew7 = 0, renew30 = 0, yearAmt = 0, yearN = 0;
   all.forEach(x => {
@@ -2848,11 +2839,9 @@ function vLic(){
   });
   const remind = all.map(x => ({ x, rn: licRenewInfo(x) })).filter(o => o.rn.due && o.rn.days <= 30).sort((a, b) => a.rn.days - b.rn.days);
   const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
-      ${mine ? `<td style="width:28px"><input type="checkbox" class="lg-cb" data-licsel="${esc(x.id)}" ${sel.has(x.id) ? 'checked' : ''} onchange="licSelOne('${esc(x.id)}',this.checked)" aria-label="Select this policy"></td>` : ''}
       <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b>${licStatusTag(x.endDate)}</td>
       <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
       <td data-l="Policy Name" style="white-space:normal;word-break:break-word;min-width:120px">${esc(x.policyName) || '<span class="dim">—</span>'}</td>
-      ${gs.length ? `<td data-l="Group">${x.group && licGroupName(x.group) ? `<span class="tag lg-tag">👥 ${esc(licGroupName(x.group))}</span>` : '<span class="dim">—</span>'}</td>` : ''}
       <td data-l="Premium Amount" class="n">${licAmt(x.amount)}</td>
       <td data-l="Total Policy Amount" class="n">${licAmt(x.totalAmount)}</td>
       <td data-l="Nominee" style="white-space:normal;word-break:break-word">${esc(x.nominee) || '<span class="dim">—</span>'}</td>
@@ -2880,7 +2869,6 @@ function vLic(){
       <div class="card kpi w"><div class="lbl">Maturing ≤ 30 days</div><div class="val">${maturing}</div></div>
       <div class="card kpi a"><div class="lbl">Matured / Expired</div><div class="val">${matured}</div></div>
     </div>
-    ${licGroupBar(every, all)}
     <div class="card" style="margin-bottom:16px"><div class="actions">
       <input class="input" id="licq" style="width:220px" placeholder="Search name, policy, nominee, mobile…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)">
       <span style="flex:1"></span>
@@ -2888,87 +2876,10 @@ function vLic(){
       <button class="btn ghost" onclick="licFieldsEdit()" title="Add or rename your own extra details for every policy">⚙ Extra fields</button>
       <button class="btn" onclick="licForm()">＋ Add policy</button></div></div>
     <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
-      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr>${mine ? `<th style="width:28px"><input type="checkbox" class="lg-cb" onchange="licSelAll(this.checked)" aria-label="Select all shown"></th>` : ''}<th>Customer Name</th><th>Policy Number</th><th>Policy Name</th>${gs.length ? '<th>Group</th>' : ''}<th>Premium Amount</th><th>Total Policy Amount</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-        : `<div class="empty-state">${total ? 'No policies match your search.' : every.length ? 'No policies in this group yet. Switch to “All”, tick the policies and use “Move to group”, or tap “Add policy”.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Total Policy Amount</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
       <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;
-}
-/* ---- group bar: chips to filter, totals of the open group, Rename / Delete, bulk "Move to group" ---- */
-function licGroupBar(every, scope){
-  const gs = licGroups(), cur = S.lic.g || 'all', mine = can('lic');
-  const nNone = every.filter(x => !x.group).length;
-  const chip = (id, label, n) => `<button type="button" class="lg-chip ${cur === id ? 'on' : ''}" onclick="licGroupPick('${esc(id)}')">${label} <b>${n}</b></button>`;
-  const g = gs.find(e => e.id === cur);
-  const yr = scope.reduce((t, x) => t + ((!x.endDate || x.endDate >= licToday()) ? licYearly(x) : 0), 0);
-  let h = `<div class="card lg-card" style="margin-bottom:16px"><h3>👥 Policy groups <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${gs.length} group${gs.length === 1 ? '' : 's'}</span></h3>
-    <div class="lg-chips">${chip('all', 'All', every.length)}${gs.map(e => chip(e.id, '👥 ' + esc(e.name), every.filter(x => x.group === e.id).length)).join('')}${gs.length && (nNone || cur === 'none') ? chip('none', 'No group', nNone) : ''}
-      <button type="button" class="lg-chip add" onclick="licGroupForm('')">＋ New group</button></div>`;
-  if (g) h += `<div class="lg-open"><div><b>${esc(g.name)}</b> <span class="muted">· ${scope.length} polic${scope.length === 1 ? 'y' : 'ies'}${yr ? ' · ₹' + yr.toLocaleString('en-IN') + ' to pay in 1 year' : ''}</span></div>
-      <div class="actions"><button type="button" class="btn ghost sm" onclick="licGroupForm('${esc(g.id)}')">✏️ Rename</button><button type="button" class="btn ghost sm" onclick="licGroupDel('${esc(g.id)}')">🗑 Delete group</button></div></div>`;
-  else if (!gs.length) h += `<p class="muted" style="margin:6px 0 0;font-size:calc(13px*var(--fs))">Make groups (family, agent, branch, plan …) and put each policy / premium in one. Tap <b>＋ New group</b>, then tick policies in the table and use <b>Move to group</b> — or pick the group inside a policy's form.</p>`;
-  if (mine) h += `<div id="licBulk">${licBulkHtml()}</div>`;
-  return h + '</div>';
-}
-function licBulkHtml(){
-  const n = licSelSet().size; if (!n || !can('lic')) return '';
-  const opts = licGroups().map(e => `<option value="${esc(e.id)}">${esc(e.name)}</option>`).join('');
-  return `<div class="lg-bulk"><b>${n} selected</b><select class="select" id="licBulkG"><option value="">Move to group…</option>${opts}<option value="__none">— No group (remove) —</option></select>
-    <button type="button" class="btn sm" onclick="licMoveSel()">Move</button><button type="button" class="btn soft sm" onclick="licGroupForm('')">＋ New group</button><button type="button" class="btn ghost sm" onclick="licSelClear()">Clear</button></div>`;
-}
-function licBulkDraw(){ const el = $('#licBulk'); if (el) el.innerHTML = licBulkHtml(); }
-function licGroupPick(id){ S.lic.g = id; licSelSet().clear(); render(); }
-function licSelOne(id, on){ const sel = licSelSet(); on ? sel.add(id) : sel.delete(id); licBulkDraw(); }
-function licSelAll(on){
-  const sel = licSelSet(); filteredLic().forEach(x => { on ? sel.add(x.id) : sel.delete(x.id); });
-  document.querySelectorAll('[data-licsel]').forEach(c => { c.checked = on; }); licBulkDraw();
-}
-function licSelClear(){ licSelSet().clear(); document.querySelectorAll('[data-licsel],.lg-cb').forEach(c => { c.checked = false; }); licBulkDraw(); }
-async function licMoveSel(){ if (!can('lic')) return deny();
-  const ids = [...licSelSet()], v = ($('#licBulkG') || {}).value;
-  if (!ids.length) return toast('Tick at least one policy', true);
-  if (!v) return toast('Choose a group first', true);
-  const gid = v === '__none' ? '' : v;
-  try {
-    await api('setLicGroup', { ids, group:gid });
-    (S.d.lic || []).forEach(p => { if (ids.includes(p.id)) p.group = gid; });
-    licSelSet().clear(); render(); toast(gid ? `${ids.length} moved to “${licGroupName(gid)}”` : `${ids.length} taken out of their group`);
-  } catch (e) { handleErr(e); }
-}
-/* add (id = '') or rename a group. `reopen` = { id } when it was opened from inside a policy form: the form comes back afterwards */
-function licGroupForm(id, reopen){ if (!can('lic')) return deny();
-  const g = id ? licGroups().find(e => e.id === id) : null, nSel = licSelSet().size;
-  const w = openModal(`<h3>${g ? 'Rename group' : 'New group'}</h3><p class="sub">${g ? 'The policies stay in this group.' : 'Group your policies — for example by family, agent, branch or plan.'}</p>
-    <form id="lgf" autocomplete="off"><div class="field"><label>Group name</label><input class="input" name="name" maxlength="60" required autocomplete="off" value="${esc(g ? g.name : '')}"></div>
-    ${!g && nSel && !reopen ? `<label class="check" style="margin:6px 0 10px"><input type="checkbox" name="addsel" checked> Add the ${nSel} selected polic${nSel === 1 ? 'y' : 'ies'} to this group</label>` : ''}
-    <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${g ? 'Save' : 'Create'}</button></div></form>`);
-  const back = () => { if (reopen) licForm(reopen.id || undefined); };
-  w.querySelector('[data-x]').onclick = () => { w.remove(); back(); };
-  setTimeout(() => { const i = w.querySelector('[name=name]'); if (i) i.focus(); }, 30);
-  w.querySelector('#lgf').onsubmit = async ev => {
-    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)), btn = ev.submitter; btn.disabled = true;
-    try {
-      const r = await api('saveLicGroup', { id:g ? g.id : '', name:f.name });
-      S.d.licGroups = r.groups || [];
-      if (!g && f.addsel){
-        const ids = [...licSelSet()];
-        if (ids.length){ await api('setLicGroup', { ids, group:r.group.id }); (S.d.lic || []).forEach(p => { if (ids.includes(p.id)) p.group = r.group.id; }); licSelSet().clear(); }
-      }
-      if (reopen && S.licDraft) S.licDraft.vals.group = r.group.id;
-      if (!g && !reopen) S.lic.g = r.group.id;                          // jump straight into the new group
-      w.remove(); render(); toast(g ? 'Group renamed' : 'Group created'); back();
-    } catch (e) { btn.disabled = false; handleErr(e); }
-  };
-}
-async function licGroupDel(id){ if (!can('lic')) return deny();
-  const g = licGroups().find(e => e.id === id); if (!g) return;
-  const n = (S.d.lic || []).filter(x => x.group === id).length;
-  if (!await confirmBox('Delete this group?', `“${g.name}” will be deleted. Its ${n} polic${n === 1 ? 'y is' : 'ies are'} NOT deleted — they just move to “No group”.`, 'Delete group', true)) return;
-  try {
-    const r = await api('deleteLicGroup', { id });
-    S.d.licGroups = r.groups || []; (S.d.lic || []).forEach(p => { if (p.group === id) p.group = ''; });
-    if (S.lic.g === id) S.lic.g = 'all';
-    render(); toast('Group deleted');
-  } catch (e) { handleErr(e); }
 }
 function licSearch(v){
   S.lic.q = v; clearTimeout(window._lict);
@@ -2981,7 +2892,6 @@ async function licCopy(id){
     x.name && 'Customer Name: ' + x.name,
     x.policyNo && 'Policy Number: ' + x.policyNo,
     x.policyName && 'Policy Name: ' + x.policyName,
-    licGroupName(x.group) && 'Group: ' + licGroupName(x.group),
     x.amount ? 'Premium Amount: ₹' + Number(x.amount).toLocaleString('en-IN') : '',
     x.totalAmount ? 'Total Policy Amount: ₹' + Number(x.totalAmount).toLocaleString('en-IN') : '',
     x.nominee && 'Nominee: ' + x.nominee,
@@ -3016,7 +2926,6 @@ function licForm(id){ if (!can('lic')) return deny();
         <div class="field"><label>Ending Date</label><input class="input" type="date" name="endDate" value="${esc(x ? x.endDate : '')}"></div>
       </div>
       <div class="field"><label>Renewal / Premium Due Date</label><input class="input" type="date" name="dueDate" value="${esc(x ? x.dueDate : '')}"></div>
-      <div class="field"><label>👥 Group</label><div class="actions" style="flex-wrap:nowrap;margin:0"><select class="select" name="group"><option value="">No group</option>${licGroups().map(e => `<option value="${esc(e.id)}" ${(x ? x.group : (licGroups().some(g2 => g2.id === S.lic.g) ? S.lic.g : '')) === e.id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select><button type="button" class="btn soft sm" data-gnew style="white-space:nowrap">＋ New group</button></div></div>
       ${(S.d.licFields || []).length ? `<div class="field" style="margin-top:4px"><label style="font-weight:800">📎 More details</label></div><div class="row2">${S.d.licFields.map((n, i) => `<div class="field"><label class="lf-l"><span>${esc(n)}</span><span class="lf-b"><button type="button" class="lf-btn" data-fren="${i}" title="Edit this option's name" aria-label="Edit option name">✎</button><button type="button" class="lf-btn" data-frem="${i}" title="Remove this option" aria-label="Remove option">🗑</button></span></label><input class="input" data-ex="${esc(n)}" maxlength="300" autocomplete="off" value="${esc(x && x.extra ? (x.extra[n] || '') : '')}"></div>`).join('')}</div>` : ''}
       <div class="actions" style="margin:0 0 8px"><button type="button" class="btn ghost sm" data-fadd>＋ Add new option</button> <button type="button" class="btn ghost sm" data-fields>⚙ Manage / reorder</button></div>
       <div id="licPrev" class="lic-prev"></div>
@@ -3029,7 +2938,6 @@ function licForm(id){ if (!can('lic')) return deny();
     S.licDraft = { id:x ? x.id : '', vals, ex }; w.remove(); licFieldsEdit(x ? x.id : '');
   };
   const keepDraft = () => { const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {}; fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; }); S.licDraft = { id:x ? x.id : '', vals, ex }; };
-  w.querySelector('[data-gnew]').onclick = () => { keepDraft(); w.remove(); licGroupForm('', { id:x ? x.id : '' }); };
   w.querySelector('[data-fadd]').onclick = () => { keepDraft(); w.remove(); licFieldQuick('add', -1, x ? x.id : ''); };
   w.querySelectorAll('[data-fren]').forEach(b => b.onclick = () => { keepDraft(); w.remove(); licFieldQuick('ren', +b.dataset.fren, x ? x.id : ''); });
   w.querySelectorAll('[data-frem]').forEach(b => b.onclick = () => { keepDraft(); w.remove(); licFieldQuick('rem', +b.dataset.frem, x ? x.id : ''); });
@@ -3856,9 +3764,9 @@ function pdfPasswords(P, d, first){
 }
 function licStatusPlain(endDate){ return licCountdown(endDate).status || '—'; }
 function xlLic(wb, d){
-  const fx = S.d.licFields || [], cols = 15 + fx.length;
-  const ws = xSheet(wb, 'LIC Policies', cols, [5, 24, 18, 22, 14, 16, 22, 16, 12, 12, 12, 14, 12, 16, 18, ...fx.map(() => 20)], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
-  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Policy Name', 'Premium Amount', 'Total Policy Amount', 'Nominee', 'Customer Mobile', 'Premium Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status', 'Pay per Year', 'Group', ...fx]);
+  const fx = S.d.licFields || [], cols = 14 + fx.length;
+  const ws = xSheet(wb, 'LIC Policies', cols, [5, 24, 18, 22, 14, 16, 22, 16, 12, 12, 12, 14, 12, 16, ...fx.map(() => 20)], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
+  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Policy Name', 'Premium Amount', 'Total Policy Amount', 'Nominee', 'Customer Mobile', 'Premium Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status', 'Pay per Year', ...fx]);
   d.lic.forEach((x, i) => { const row = ws.getRow(5 + i), z = i % 2 ? X.zebra : null, rn = licRenewInfo(x);
     xCell(row.getCell(1), i + 1, { h:'center', fill:z });
     xCell(row.getCell(2), x.name, { h:'left', fill:z });
@@ -3875,16 +3783,15 @@ function xlLic(wb, d){
     const st = licStatusPlain(x.endDate);
     xCell(row.getCell(13), st, { h:'center', fill:z, bold:true, color:st === 'Expired' ? X.bad : st === 'Expiring soon' ? 'FFB45309' : X.good });
     xCell(row.getCell(14), licYearly(x) || (x.freq ? '' : 'One-time'), { h:'right', fill:z, fmt:XM() });
-    xCell(row.getCell(15), licGroupName(x.group) || '', { h:'left', fill:z });
-    fx.forEach((n, k) => xCell(row.getCell(16 + k), (x.extra || {})[n] || '', { h:'left', fill:z })); });
-  const endCol = (n => { let t = ''; while (n > 0){ const m = (n - 1) % 26; t = String.fromCharCode(65 + m) + t; n = Math.floor((n - 1) / 26); } return t; })(15 + fx.length);
+    fx.forEach((n, k) => xCell(row.getCell(15 + k), (x.extra || {})[n] || '', { h:'left', fill:z })); });
+  const endCol = (n => { let t = ''; while (n > 0){ const m = (n - 1) % 26; t = String.fromCharCode(65 + m) + t; n = Math.floor((n - 1) / 26); } return t; })(14 + fx.length);
   if (d.lic.length) ws.autoFilter = { from:'A4', to:`${endCol}${4 + d.lic.length}` };
 }
 function pdfLic(P, d, first){
   const fx = S.d.licFields || [];
   const y = pdfStart(P, 'LIC Policies', `${d.lic.length} policies   |   Generated ${STAMP()}`, 'l', first);
-  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy No.', 'Policy Name', 'Premium', 'Total Policy Amt', 'Nominee', 'Mobile', 'Mode', 'Per Year', 'Start', 'End', 'Next Renewal', 'Status', 'Group', ...(fx.length ? ['More details'] : [])]],
-    body:d.lic.map((x, i) => { const rn = licRenewInfo(x); return [i + 1, x.name, x.policyNo, x.policyName || '—', x.amount ? PM(x.amount) : '—', x.totalAmount ? PM(x.totalAmount) : '—', x.nominee || '—', x.phone || '—', LIC_FREQ[x.freq] || 'One-time', licYearly(x) ? PM(licYearly(x)) : '—', x.startDate || '—', x.endDate || '—', rn.due || '—', licStatusPlain(x.endDate), licGroupName(x.group) || '—', ...(fx.length ? [fx.filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]).join('; ') || '—'] : [])].map(PT); }),
+  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy No.', 'Policy Name', 'Premium', 'Total Policy Amt', 'Nominee', 'Mobile', 'Mode', 'Per Year', 'Start', 'End', 'Next Renewal', 'Status', ...(fx.length ? ['More details'] : [])]],
+    body:d.lic.map((x, i) => { const rn = licRenewInfo(x); return [i + 1, x.name, x.policyNo, x.policyName || '—', x.amount ? PM(x.amount) : '—', x.totalAmount ? PM(x.totalAmount) : '—', x.nominee || '—', x.phone || '—', LIC_FREQ[x.freq] || 'One-time', licYearly(x) ? PM(licYearly(x)) : '—', x.startDate || '—', x.endDate || '—', rn.due || '—', licStatusPlain(x.endDate), ...(fx.length ? [fx.filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]).join('; ') || '—'] : [])].map(PT); }),
     styles:{ fontSize:6.5, cellPadding:1.4 }, columnStyles:{ 0:{ halign:'center', cellWidth:7 }, 4:{ halign:'right' }, 5:{ halign:'right' }, 9:{ halign:'right' }, 13:{ halign:'center' } } });
 }
 
@@ -5546,8 +5453,6 @@ const LV_ACT = { login:'Sign in', logout:'Sign out', getAll:'Load / refresh all 
   updateEmployee:'Edit employee', deleteEmployee:'Delete employee', changeCredentials:'Change login', calSyncAll:'Sync Google Calendar', listUsers:'List users', activityLog:'Activity log',
   deployUpload:'Deploy: publish files', deployProgress:'Deploy: check progress', updList:'Updates list', bioLogin:'Fingerprint sign in', status:'Server check' };
 const lvAct = a => LV_ACT[a] || a;
-const lvBytes = n => !n ? '—' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
-const lvDest = k => LV_DEST[k] || LV_DEST.other;
 const lvTime = t => new Date(t).toLocaleTimeString('en-GB');
 const lvDur = ms => ms == null ? '' : ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + ' s';
 const lvAgo = s => s < 90 ? Math.round(s) + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h';
@@ -5576,7 +5481,7 @@ function liveStop(){
   if (LV.ctl) LV.ctl.abort();
   LV.ctl = null; clearTimeout(LV.rt); LV.rt = null; clearInterval(LV.tick); LV.tick = null; LV.conn = 'off';
 }
-function liveReset(){ liveStop(); LV.rows.clear(); LV.cli.clear(); LV.hist = []; LV.dest = {}; LV.stats = null; LV.hello = null; LV.since = 0; LV.open.clear(); LV.net = null; LV.alerts.clear(); }
+function liveReset(){ liveStop(); LV.rows.clear(); LV.cli.clear(); LV.hist = []; LV.dest = {}; LV.stats = null; LV.hello = null; LV.since = 0; LV.open.clear(); }
 async function liveConnect(){
   if (LV.ctl) return;
   const ctl = new AbortController(); LV.ctl = ctl; LV.conn = 'connecting'; LV.c0 = Date.now(); liveDraw();
@@ -5611,15 +5516,14 @@ function liveRow(rid, a){
 function liveEvent(ev){
   if (ev.k === 'hello') {
     if (ev.n < LV.since) { LV.rows.clear(); LV.since = 0; LV.hist = []; throw new Error('Server was restarted – reloading the feed'); }
-    LV.hello = ev; LV.stats = ev.stats; LV.net = ev.net || LV.net; LV.hcAt = Date.now();
+    LV.hello = ev; LV.stats = ev.stats; LV.hcAt = Date.now();
     (ev.events || []).forEach(liveEvent);
     (ev.open || []).forEach(o => { const r = liveRow(o.rid, o.a); r.t = o.t; });
     return;
   }
   if (ev.n) LV.since = Math.max(LV.since, ev.n);
   if (ev.k === 'stats') { LV.stats = ev; return; }
-  if (ev.k === 'net') { LV.net = ev; return; }
-  if (ev.k === 'req') { const r = liveRow(ev.rid, ev.a); Object.assign(r, { t:ev.t, u:ev.u, f:ev.f || [], poll:!!ev.poll, http:!!ev.http, sz:ev.sz, ip:ev.ip || '', dev:ev.dev || '', state:'run' }); return; }
+  if (ev.k === 'req') { const r = liveRow(ev.rid, ev.a); Object.assign(r, { t:ev.t, u:ev.u, f:ev.f || [], poll:!!ev.poll, http:!!ev.http, sz:ev.sz, state:'run' }); return; }
   if (ev.k === 'go') { const r = liveRow(ev.rid); r.q = ev.q; r.go = ev.t; return; }
   if (ev.k === 'step') {
     LV.hist.push({ d:ev.d, t:ev.t, ok:ev.ok });
@@ -5629,9 +5533,8 @@ function liveEvent(ev){
     else LV.rows.set('x' + ev.n, { rid:'x' + ev.n, a:'(no request) ' + (LV_DEST[ev.d] || LV_DEST.other)[1], t:ev.t, state:ev.ok ? 'ok' : 'err', steps:[ev], f:[], u:'', ms:ev.ms, poll:ev.ok, err:ev.ok ? '' : ev.x, sysrow:true });
     return;
   }
-  if (ev.k === 'end') { const r = liveRow(ev.rid); Object.assign(r, { state:ev.ok ? 'ok' : 'err', ms:ev.ms, q:ev.q, u:ev.u || r.u, code:ev.code, err:ev.err, so:ev.so || 0 }); return; }
-  if (ev.k === 'sys') { if (ev.al) { LV.alerts.set(ev.n, { t:ev.t, lv:ev.lv, text:ev.text }); if (LV.alerts.size > 60) LV.alerts.delete(LV.alerts.keys().next().value); }
-    LV.rows.set('s' + ev.n, { rid:'s' + ev.n, a:ev.text, t:ev.t, state:ev.lv === 'warn' ? 'warn' : 'sys', steps:[], f:[], u:'', sysrow:true }); }
+  if (ev.k === 'end') { const r = liveRow(ev.rid); Object.assign(r, { state:ev.ok ? 'ok' : 'err', ms:ev.ms, q:ev.q, u:ev.u || r.u, code:ev.code, err:ev.err }); return; }
+  if (ev.k === 'sys') { LV.rows.set('s' + ev.n, { rid:'s' + ev.n, a:ev.text, t:ev.t, state:ev.lv === 'warn' ? 'warn' : 'sys', steps:[], f:[], u:'', sysrow:true }); }
 }
 
 /* ----- plain-words explanation of what went wrong / what is slow ----- */
@@ -5675,8 +5578,7 @@ function liveMount(){
   $('#lvPoll').onchange = e => { LV.f.poll = e.target.checked; liveDraw(true); };
   $('#lvPause').onclick = () => { LV.paused = !LV.paused; $('#lvPause').textContent = LV.paused ? '▶ Resume' : '⏸ Pause'; liveDraw(true); };
   $('#lvClear').onclick = () => { LV.rows.clear(); LV.cli.clear(); LV.hist = []; LV.open.clear(); liveDraw(true); };
-  $('#lvCopy').onclick = liveCopy; $('#lvCsv').onclick = liveCsv;
-  document.querySelectorAll('[data-lvtab]').forEach(b => { b.onclick = () => { LV.tab = b.dataset.lvtab; liveDraw(true); }; });
+  $('#lvCopy').onclick = liveCopy;
   $('#lvList').onclick = e => { const el = e.target.closest('[data-rid]'); if (!el) return; const k = el.dataset.rid; LV.open.has(k) ? LV.open.delete(k) : LV.open.add(k); liveDraw(true); };
   liveDraw(true);
 }
@@ -5696,13 +5598,13 @@ function liveShow(r){
   if (m === 'err' && !(r.state === 'err' || r.state === 'warn')) return false;
   if (m === 'slow' && !((r.cli ? r.cli.ms : r.ms) > 2000)) return false;
   if (m === 'run' && r.state !== 'run') return false;
-  if (LV.f.q) { const hay = (r.a + ' ' + lvAct(r.a) + ' ' + r.u + ' ' + (r.err || '') + ' ' + r.f.join(' ') + ' ' + (r.ip || '') + ' ' + (r.dev || '') + ' ' + r.steps.map(s => s.l + ' ' + s.d + ' ' + (s.h || '')).join(' ')).toLowerCase(); if (!hay.includes(LV.f.q)) return false; }
+  if (LV.f.q) { const hay = (r.a + ' ' + lvAct(r.a) + ' ' + r.u + ' ' + (r.err || '') + ' ' + r.f.join(' ') + ' ' + r.steps.map(s => s.l + ' ' + s.d).join(' ')).toLowerCase(); if (!hay.includes(LV.f.q)) return false; }
   return true;
 }
 function liveChips(r){
-  const g = {}; r.steps.forEach(s => { const k = s.d; (g[k] = g[k] || { n:0, ms:0, bad:0, h:new Set() }); g[k].n++; g[k].ms += s.ms; if (!s.ok) g[k].bad++; if (s.h) g[k].h.add(s.h); });
+  const g = {}; r.steps.forEach(s => { const k = s.d; (g[k] = g[k] || { n:0, ms:0, bad:0 }); g[k].n++; g[k].ms += s.ms; if (!s.ok) g[k].bad++; });
   const ks = Object.keys(g);
-  return ks.slice(0, 6).map(k => `<span class="lv-ch ${g[k].bad ? 'bad' : ''}" title="${esc([...g[k].h].join(', '))}">${(LV_DEST[k] || LV_DEST.other)[0]} ${esc((LV_DEST[k] || LV_DEST.other)[1])}${g[k].n > 1 ? ' ×' + g[k].n : ''} <b>${lvDur(g[k].ms)}</b></span>`).join('<i>›</i>') + (ks.length > 6 ? ' +' + (ks.length - 6) : '');
+  return ks.slice(0, 6).map(k => `<span class="lv-ch ${g[k].bad ? 'bad' : ''}">${(LV_DEST[k] || LV_DEST.other)[0]} ${esc((LV_DEST[k] || LV_DEST.other)[1])}${g[k].n > 1 ? ' ×' + g[k].n : ''} <b>${lvDur(g[k].ms)}</b></span>`).join('<i>›</i>') + (ks.length > 6 ? ' +' + (ks.length - 6) : '');
 }
 function liveRowHtml(r){
   const open = LV.open.has(r.rid), tot = r.cli && r.cli.ms != null ? r.cli.ms : r.ms;
@@ -5713,16 +5615,16 @@ function liveRowHtml(r){
     <div class="lv-h"><span class="lv-t">${lvTime(r.t)}</span><span class="lv-i">${icon}</span>
       <span class="lv-m"><b>${esc(r.sysrow ? r.a : lvAct(r.a))}</b>${r.u ? ` <em>${esc(r.u)}</em>` : ''}${!r.sysrow && lvAct(r.a) !== r.a ? ` <code>${esc(r.a)}</code>` : ''}${r.cliOnly && !r.sysrow ? ' <small class="lv-tag">browser only</small>' : ''}</span>
       <span class="lv-d">${esc(live)}</span></div>`;
-  if (!r.sysrow) h += `<div class="lv-path"><span class="lv-ch">🌐 Browser${r.ip ? ' · ' + esc(r.ip) : ''}</span><i>›</i><span class="lv-ch ${r.cliOnly && r.state === 'run' ? 'wait' : ''}">🖥 Render</span>${r.steps.length ? '<i>›</i>' + liveChips(r) : ''}${r.state === 'err' && r.err ? `<span class="lv-er">${esc(r.err)}</span>` : ''}</div>`;
+  if (!r.sysrow) h += `<div class="lv-path"><span class="lv-ch">🌐 Browser</span><i>›</i><span class="lv-ch ${r.cliOnly && r.state === 'run' ? 'wait' : ''}">🖥 Render</span>${r.steps.length ? '<i>›</i>' + liveChips(r) : ''}${r.state === 'err' && r.err ? `<span class="lv-er">${esc(r.err)}</span>` : ''}</div>`;
   if (r.sysrow && r.err) h += `<div class="lv-path"><span class="lv-er">${esc(r.err)}</span></div>`;
   if (diag.length && !open) h += `<div class="lv-dg ${diag[0][0]}">${esc(diag[0][1])}</div>`;
   if (open) {
     const L = [];
     if (r.cli) L.push(['🌐', 'Browser sent the request', lvTime(r.cli.t0), '']);
-    if (!r.cliOnly) L.push(['🖥', 'Render received it' + (r.ip ? ' from ' + r.ip : '') + (r.dev ? ' (' + r.dev + ')' : '') + (r.sz ? ' · ' + lvBytes(r.sz) + ' in' : '') + (r.f.length ? ' · fields: ' + r.f.join(', ') : ''), lvTime(r.t), '']);
+    if (!r.cliOnly) L.push(['🖥', 'Render received it' + (r.f.length ? ' (fields: ' + r.f.join(', ') + ')' : ''), lvTime(r.t), '']);
     if (r.q > 30) L.push(['⏳', 'Waited in queue for other requests', '', lvDur(r.q)]);
-    r.steps.forEach(s => L.push([(LV_DEST[s.d] || LV_DEST.other)[0], (LV_DEST[s.d] || LV_DEST.other)[1] + ' — ' + s.l + (s.h ? ' → ' + s.h : '') + (s.bo || s.bi ? ' · ↑' + lvBytes(s.bo) + ' ↓' + lvBytes(s.bi) : '') + (s.bg ? ' (background)' : '') + (s.x ? ' · ' + s.x : ''), s.s ? 'HTTP ' + s.s : '', lvDur(s.ms), !s.ok]));
-    if (r.state === 'ok' || r.state === 'err') L.push([r.state === 'ok' ? '✅' : '❌', r.state === 'ok' ? 'Render sent the answer' + (r.so ? ' · ' + lvBytes(r.so) + ' out' : '') : 'Failed' + (r.code ? ' (' + r.code + ')' : '') + (r.err ? ': ' + r.err : ''), '', lvDur(r.ms), r.state === 'err']);
+    r.steps.forEach(s => L.push([(LV_DEST[s.d] || LV_DEST.other)[0], (LV_DEST[s.d] || LV_DEST.other)[1] + ' — ' + s.l + (s.bg ? ' (background)' : '') + (s.x ? ' · ' + s.x : ''), s.s ? 'HTTP ' + s.s : '', lvDur(s.ms), !s.ok]));
+    if (r.state === 'ok' || r.state === 'err') L.push([r.state === 'ok' ? '✅' : '❌', r.state === 'ok' ? 'Render sent the answer' : 'Failed' + (r.code ? ' (' + r.code + ')' : '') + (r.err ? ': ' + r.err : ''), '', lvDur(r.ms), r.state === 'err']);
     if (r.cli && r.cli.st !== 'wait') L.push(['🌐', r.cli.st === 'ok' ? 'Browser got the answer' : 'Browser: request failed' + (r.cli.http ? ' (HTTP ' + r.cli.http + ')' : ''), '', lvDur(r.cli.ms), r.cli.st === 'err']);
     h += '<div class="lv-tl">' + L.map(x => `<div class="${x[4] ? 'bad' : ''}"><span>${x[0]}</span><p>${esc(x[1])}</p><small>${esc(x[2])}</small><b>${esc(x[3])}</b></div>`).join('') + '</div>';
     diag.forEach(d => { h += `<div class="lv-dg ${d[0]}">${esc(d[1])}</div>`; });
@@ -5758,100 +5660,24 @@ function liveDraw(force){
     stats.innerHTML = LV.stats ? chip('Running', st.running || 0) + chip('In queue', st.queued || 0, st.queued > 2 ? 'warn' : '') + chip('Requests / min', st.rpm || 0) + chip('Errors / min', st.epm || 0, st.epm ? 'bad' : '')
       + chip('Avg time', lvDur(st.avg || 0), st.avg > 2500 ? 'warn' : '') + chip('Server up', lvAgo(st.up || 0), (st.up || 0) < 120 ? 'warn' : '') + chip('Memory', (st.mem || 0) + ' MB') + chip('Watching', (st.subs || 1) + ' screen') : '';
   }
-  liveTabs();
   const list = $('#lvList'); if (!list) return;
-  if (LV.tab !== 'feed') return;
   const all = liveAll(), rows = all.filter(liveShow).slice(0, 120), hid = all.filter(r => r.poll && r.state !== 'err').length;
   list.innerHTML = (rows.length ? rows.map(liveRowHtml).join('') : `<div class="empty-state">${LV.conn === 'live' ? 'Waiting for activity… do something in the app (add an entry, send a chat message) and it appears here.' : 'Connecting to the server…'}</div>`)
     + (!LV.f.poll && hid ? `<div class="lv-foot">${hid} background checks hidden (chat ticks, call / game polling). Tick “Show background polling” to see them.</div>` : '');
 }
 function liveCopy(){
-  if (LV.tab !== 'feed') {
-    const n = LV.net || {}, ago = t => t ? lvAgo((Date.now() - t) / 1000) + ' ago' : '-';
-    const lines = LV.tab === 'servers' ? (n.hosts || []).map(h => h.host + ' | ' + h.d + ' | ' + h.n + ' calls | ' + h.bad + ' failed | avg ' + lvDur(h.avg) + ' | max ' + lvDur(h.max) + ' | up ' + lvBytes(h.bo) + ' down ' + lvBytes(h.bi) + ' | users: ' + h.users.map(u => u[0] + ' x' + u[1]).join(', ') + ' | last ' + ago(h.last))
-      : LV.tab === 'users' ? (n.users || []).map(u => u.name + ' | ' + u.n + ' requests | ' + u.errs + ' errors | ' + u.out + ' outgoing | ' + (u.ip || '-') + ' | ' + (u.dev || '-') + ' | last ' + ago(u.last))
-      : LV.tab === 'ips' ? (n.ips || []).map(r => r.ip + ' | ' + r.dev + ' | ' + r.n + ' requests | ' + r.errs + ' errors | users: ' + r.users.join(', ') + ' | last ' + ago(r.last))
-      : [...LV.alerts.values()].reverse().map(a => lvTime(a.t) + ' | ' + a.lv + ' | ' + a.text);
-    return (navigator.clipboard ? navigator.clipboard.writeText('VCS Processing — ' + LV.tab + ' (' + new Date().toLocaleString() + ')\n' + lines.join('\n')) : Promise.reject()).then(() => toast('Report copied'), () => toast('Could not copy', true));
-  }
   const rows = liveAll().filter(liveShow).slice(0, 60).map(r => lvTime(r.t) + ' | ' + (r.u || '-') + ' | ' + r.a + ' | ' + r.state.toUpperCase() + ' | ' + lvDur(r.cli && r.cli.ms != null ? r.cli.ms : r.ms)
     + (r.steps.length ? ' | ' + r.steps.map(s => s.d + ':' + (s.ok ? 'ok ' : 'FAIL ') + s.ms + 'ms').join(' > ') : '') + (r.err ? ' | ' + r.err : ''));
   const txt = 'VCS Processing report (' + new Date().toLocaleString() + ')\n' + rows.join('\n');
   (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast('Report copied'), () => toast('Could not copy', true));
 }
-/* ----- network tabs: Servers / Users / Clients (IP) / Alerts + the 20-minute chart ----- */
-function liveChart(){
-  const el = $('#lvChart'), n = LV.net; if (!el) return;
-  if (!n || !n.series) { el.innerHTML = ''; return; }
-  const max = Math.max(3, ...n.series.map(x => x[0])), tot = n.series.reduce((a, x) => a + x[0], 0), er = n.series.reduce((a, x) => a + x[1], 0);
-  el.innerHTML = `<div class="lv-cht-h"><b>Requests per minute</b><span class="muted"> · last 20 min · ${tot} requests${er ? ' · <span style="color:var(--bad)">' + er + ' failed</span>' : ''} · background polling not counted</span></div>
-    <div class="lv-cht">${n.series.map((x, i) => `<div class="lv-bar" title="${20 - i} min ago: ${x[0]} requests, ${x[1]} failed"><i style="height:${Math.round(x[0] / max * 100)}%"></i>${x[1] ? `<u style="height:${Math.max(6, Math.round(x[1] / max * 100))}%"></u>` : ''}</div>`).join('')}</div>`;
-}
-function liveTabs(){
-  const feed = $('#lvFeed'), net = $('#lvNet'); if (!feed || !net) return;
-  document.querySelectorAll('[data-lvtab]').forEach(b => b.classList.toggle('on', b.dataset.lvtab === LV.tab));
-  const nal = [...LV.alerts.values()].filter(a => a.t > Date.now() - 900000).length, bd = $('#lvAl'); if (bd) bd.textContent = nal ? nal : '';
-  liveChart();
-  feed.style.display = LV.tab === 'feed' ? '' : 'none'; net.style.display = LV.tab === 'feed' ? 'none' : '';
-  if (LV.tab === 'feed') return;
-  net.innerHTML = LV.tab === 'servers' ? liveServers() : LV.tab === 'users' ? liveUsers() : LV.tab === 'ips' ? liveClients() : liveAlerts();
-}
-const lvLast = t => t ? (Date.now() - t < 5000 ? 'just now' : lvAgo((Date.now() - t) / 1000) + ' ago') : '—';
-function liveServers(){
-  const L = (LV.net && LV.net.hosts) || [];
-  if (!L.length) return `<div class="empty-state">No outgoing calls yet. Every call the Render server makes to another server (Google Sheets, Calendar, Drive, GitHub, e-mail …) is listed here with the user it was made for.</div>`;
-  return `<p class="muted lv-note">Every server your Render app talks to — since the server started. Query strings and keys are never shown.</p>` + L.map(h => {
-    const failing = h.bad && (h.st === 0 || h.st >= 400) && Date.now() - h.last < 120000, d = lvDest(h.d);
-    return `<div class="lv-r ${failing ? 'err' : 'ok'}"><div class="lv-h"><span class="lv-i">${d[0]}</span><span class="lv-m"><b>${esc(h.host)}</b> <small class="lv-tag">${esc(d[1])}</small></span><span class="lv-d">${h.n} call${h.n === 1 ? '' : 's'}</span></div>
-      <div class="lv-kv"><span>✅ ${h.n - h.bad} ok</span><span class="${h.bad ? 'bad' : ''}">❌ ${h.bad} failed</span><span>⏱ avg ${lvDur(h.avg)}</span><span>🐢 max ${lvDur(h.max)}</span><span>↑ ${lvBytes(h.bo)}</span><span>↓ ${lvBytes(h.bi)}</span><span>🕒 ${lvLast(h.last)}</span></div>
-      <div class="lv-who">${h.users.map(u => `<span class="lv-ch">👤 ${esc(u[0])} <b>×${u[1]}</b></span>`).join(' ')}</div>
-      ${h.err ? `<div class="lv-dg ${failing ? 'bad' : 'warn'}">Last error: ${esc(h.err)}</div>` : ''}</div>`;
-  }).join('');
-}
-function liveUsers(){
-  const L = (LV.net && LV.net.users) || [];
-  if (!L.length) return `<div class="empty-state">No user activity yet.</div>`;
-  return `<p class="muted lv-note">Who is using the app, from where, and which servers their requests reach. Counts are since the server started; “requests” do not include background polling.</p>` + L.map(u => {
-    const on = Date.now() - u.last < 60000;
-    return `<div class="lv-r ${u.errs && u.errs >= u.n && u.n ? 'err' : on ? 'run' : ''}"><div class="lv-h"><span class="lv-i">${on ? '🟢' : '⚪'}</span><span class="lv-m"><b>${esc(u.name)}</b>${u.guest ? ' <small class="lv-tag">not signed in</small>' : ''}${u.rpm > 30 ? ' <small class="lv-tag" style="color:var(--warn)">busy ' + u.rpm + '/min</small>' : ''}</span><span class="lv-d">${lvLast(u.last)}</span></div>
-      <div class="lv-kv"><span>📨 ${u.n} requests</span><span class="${u.errs ? 'bad' : ''}">❌ ${u.errs} errors</span><span>⏱ avg ${lvDur(u.avg)}</span><span>🔗 ${u.out} outgoing calls</span><span>↑ ${lvBytes(u.bin)}</span><span>↓ ${lvBytes(u.bout)}</span></div>
-      ${u.ip ? `<div class="lv-meta">📍 ${esc(u.ip)} · ${esc(u.dev || 'Unknown')}${u.ips > 1 ? ' · ' + u.ips + ' different IPs' : ''}</div>` : ''}
-      ${u.dests.length ? `<div class="lv-who"><span class="muted">Servers reached:</span> ${u.dests.map(d => `<span class="lv-ch">${lvDest(d[0])[0]} ${esc(lvDest(d[0])[1])} <b>×${d[1]}</b></span>`).join(' ')}</div>` : ''}
-      ${u.acts.length ? `<div class="lv-who"><span class="muted">Does:</span> ${u.acts.map(a => `<span class="lv-ch">${esc(lvAct(a[0]))} <b>×${a[1]}</b></span>`).join(' ')}</div>` : ''}</div>`;
-  }).join('');
-}
-function liveClients(){
-  const L = (LV.net && LV.net.ips) || [];
-  if (!L.length) return `<div class="empty-state">No client connections yet.</div>`;
-  return `<p class="muted lv-note">Every address (IP) that sent a request to your server. Repeated failed sign-ins from one address are flagged.</p>` + L.map(r => {
-    const sus = r.fails >= 3;
-    return `<div class="lv-r ${sus ? 'err' : Date.now() - r.last < 60000 ? 'run' : ''}"><div class="lv-h"><span class="lv-i">${sus ? '🚨' : '📍'}</span><span class="lv-m"><b>${esc(r.ip)}</b> <small class="lv-tag">${esc(r.dev || 'Unknown')}</small></span><span class="lv-d">${lvLast(r.last)}</span></div>
-      <div class="lv-kv"><span>📨 ${r.n} requests</span><span class="${r.errs ? 'bad' : ''}">❌ ${r.errs} failed</span><span>🕒 first seen ${lvLast(r.first)}</span></div>
-      <div class="lv-who">${r.users.map(u => `<span class="lv-ch">👤 ${esc(u)}</span>`).join(' ')}</div>
-      ${sus ? `<div class="lv-dg bad">${r.fails} failed sign-ins from this address in the last 5 minutes — someone may be guessing a password.</div>` : ''}</div>`;
-  }).join('');
-}
-function liveAlerts(){
-  const L = [...LV.alerts.values()].reverse();
-  if (!L.length) return `<div class="empty-state">✅ No alerts. This tab warns you about: a server failing repeatedly or answering slowly, a user sending too many requests, repeated wrong passwords from one IP, an overloaded server and high memory.</div>`;
-  return L.map(a => `<div class="lv-r ${a.lv === 'bad' ? 'err' : 'warn'}"><div class="lv-h"><span class="lv-t">${lvTime(a.t)}</span><span class="lv-i">${a.lv === 'bad' ? '🚨' : '⚠️'}</span><span class="lv-m" style="white-space:normal">${esc(a.text)}</span><span class="lv-d">${lvLast(a.t)}</span></div></div>`).join('');
-}
-function liveCsv(){
-  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const rows = liveAll().filter(liveShow).map(r => [new Date(r.t).toISOString(), r.u || '', r.ip || '', r.dev || '', r.a, lvAct(r.a), r.state, r.cli && r.cli.ms != null ? r.cli.ms : (r.ms == null ? '' : r.ms), [...new Set(r.steps.map(s => s.h).filter(Boolean))].join(' | '), r.err || ''].map(q).join(','));
-  const csv = '\ufefftime,user,ip,device,action,action_name,state,ms,servers,error\n' + rows.join('\n');
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type:'text/csv;charset=utf-8' })); a.download = 'vcs-processing-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.csv';
-  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
-  toast(rows.length + ' rows exported');
-}
 function liveCard(){
   return `<div class="card" id="lvCard"><h3>📡 VCS Processing <span class="lv-pill" id="lvConn"></span></h3>
-    <p class="muted" style="margin-bottom:12px">Live view of everything the website does: <b>Browser → Render server → Google Sheets / Calendar / Drive …</b>. Tap a row to see every step, timing and the reason for a failure. Only the main admin sees this. Passwords, tokens and message text are never shown. While this page is open the Render server stays awake. Tabs show <b>which servers</b> get requests, <b>which user</b> caused them, and <b>which IP / device</b> they came from.</p>
-    <div id="lvPipe"></div><div id="lvStats" class="lv-stats"></div><div id="lvChart" class="lv-chart"></div>
-    <div class="lv-tabs"><button type="button" class="lv-tab on" data-lvtab="feed">📜 Requests</button><button type="button" class="lv-tab" data-lvtab="servers">🌍 Servers</button><button type="button" class="lv-tab" data-lvtab="users">👤 Users</button><button type="button" class="lv-tab" data-lvtab="ips">📍 Clients</button><button type="button" class="lv-tab" data-lvtab="alerts">🚨 Alerts <em id="lvAl" class="lv-badge"></em></button></div>
-    <div id="lvFeed"><div class="lv-tools"><input class="input" id="lvQ" placeholder="Search user, action, error…" autocomplete="off">
+    <p class="muted" style="margin-bottom:12px">Live view of everything the website does: <b>Browser → Render server → Google Sheets / Calendar / Drive …</b>. Tap a row to see every step, timing and the reason for a failure. Only the main admin sees this. Passwords, tokens and message text are never shown. While this page is open the Render server stays awake.</p>
+    <div id="lvPipe"></div><div id="lvStats" class="lv-stats"></div>
+    <div class="lv-tools"><input class="input" id="lvQ" placeholder="Search user, action, error…" autocomplete="off">
       <select class="select" id="lvF"><option value="all">Everything</option><option value="err">Only failures</option><option value="slow">Only slow (&gt; 2 s)</option><option value="run">Running now</option></select>
       <label class="check"><input type="checkbox" id="lvPoll"> Show background polling</label>
-      <button type="button" class="btn ghost sm" id="lvPause">⏸ Pause</button><button type="button" class="btn ghost sm" id="lvClear">🧹 Clear</button><button type="button" class="btn ghost sm" id="lvCopy">📋 Copy report</button><button type="button" class="btn ghost sm" id="lvCsv">⬇ CSV</button></div>
-    <div id="lvList" class="lv-list"></div></div><div id="lvNet" class="lv-list" style="display:none"></div></div>`;
+      <button type="button" class="btn ghost sm" id="lvPause">⏸ Pause</button><button type="button" class="btn ghost sm" id="lvClear">🧹 Clear</button><button type="button" class="btn ghost sm" id="lvCopy">📋 Copy report</button></div>
+    <div id="lvList" class="lv-list"></div></div>`;
 }

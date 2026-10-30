@@ -897,8 +897,8 @@ function makeApp(store, env) {
     if (!r || r.action !== 'chatLive') return null;
     return Promise.resolve().then(() => chatLiveRoute(r)).catch(errOut);
   };
-  const handle = (body, meta) => {
-    const tr = live.begin(body, meta), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
+  const handle = body => {
+    const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
     const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastTr(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
@@ -914,8 +914,8 @@ async function sendMail(m, env) {
   if (!env.SMTP_USER || !env.SMTP_PASS) throw new Error('SMTP_USER / SMTP_PASS are not set on the server.');
   const nodemailer = require('nodemailer'), t0 = Date.now();
   const t = nodemailer.createTransport({ service: 'gmail', auth: { user: env.SMTP_USER, pass: env.SMTP_PASS } });
-  try { await t.sendMail({ from: '"' + (m.name || 'Attendance App') + '" <' + env.SMTP_USER + '>', to: m.to, subject: m.subject, text: m.body }); live.step('mail', 'Send e-mail (Gmail SMTP)', 250, Date.now() - t0, 'subject: ' + String(m.subject || '').slice(0, 60), false, { h: 'smtp.gmail.com:465', m: 'SMTP', bo: String(m.body || '').length }); }
-  catch (e) { live.step('mail', 'Send e-mail (Gmail SMTP)', 0, Date.now() - t0, e.message, true, { h: 'smtp.gmail.com:465', m: 'SMTP' }); throw e; }
+  try { await t.sendMail({ from: '"' + (m.name || 'Attendance App') + '" <' + env.SMTP_USER + '>', to: m.to, subject: m.subject, text: m.body }); live.step('mail', 'Send e-mail (Gmail SMTP)', 250, Date.now() - t0, 'subject: ' + String(m.subject || '').slice(0, 60)); }
+  catch (e) { live.step('mail', 'Send e-mail (Gmail SMTP)', 0, Date.now() - t0, e.message, true); throw e; }
 }
 
 function start(app, env) {
@@ -966,7 +966,7 @@ function start(app, env) {
     if (rq.method === 'GET') return send(200, { ok: true, app: 'Attendance & Expense Tracker API', time: new Date().toISOString() });
     let body = '';
     rq.on('data', c => { body += c; if (body.length > 2e6) rq.destroy(); });
-    rq.on('end', async () => { let out; try { out = await app.handle(body, live.client(rq)); } catch (e) { out = { ok: false, error: 'Server error: ' + (e && e.message || e), code: 'CRASH' }; } send(200, out); });
+    rq.on('end', async () => { let out; try { out = await app.handle(body); } catch (e) { out = { ok: false, error: 'Server error: ' + (e && e.message || e), code: 'CRASH' }; } send(200, out); });
   }));
 }
 module.exports = { makeApp, start };
