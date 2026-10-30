@@ -760,14 +760,49 @@ function makeApp(store, env) {
   // Apps Script's LanguageApp does not exist on this Node server, so translate by calling Google Translate directly.
   // Runs outside the sheet queue (like call polling), so chat never waits for it. Results are cached 6 hours.
   const TR_OK = { en: 1, hi: 1, id: 1 }, trCache = new Map();
+  // Google blocks bursts (HTTP 429). So: at most 3 requests at a time, a short gap between them, a retry with back-off,
+  // a second Google address as back-up, and a quiet period when Google says "slow down" (instead of hammering it).
+  let trBan = 0, trActive = 0; const trWait = [];
+  const trSleep = ms => new Promise(r => setTimeout(r, ms));
+  const trSlot = () => new Promise(res => { const go = () => { trActive++; res(); }; if (trActive < 3) go(); else trWait.push(go); });
+  const trFree = () => { trActive--; const n = trWait.shift(); if (n) n(); };
+  const trErr = r => { const e = new Error('translate HTTP ' + r.status); e.status = r.status; e.retryAfter = Number(r.headers.get('retry-after')) || 0; return e; };
+  async function trGoogle(text, to) {
+    const r = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=auto&tl=' + to + '&q=' + encodeURIComponent(text),
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw trErr(r);
+    const j = await r.json();
+    return (Array.isArray(j[0]) ? j[0] : []).map(x => (x && x[0]) || '').join('');
+  }
+  async function trAlt(text, to) {          // back-up address, used only when the main one refuses
+    const r = await fetch('https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=' + to + '&q=' + encodeURIComponent(text),
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw trErr(r);
+    const j = await r.json();
+    if (j && Array.isArray(j.sentences)) return j.sentences.map(x => (x && x.trans) || '').join('');
+    if (Array.isArray(j)) { const f = Array.isArray(j[0]) ? j[0][0] : j[0]; if (typeof f === 'string') return f; }
+    throw new Error('unknown back-up format');
+  }
   async function trOne(text, to) {
     const key = to + '|' + crypto.createHash('md5').update(text).digest('base64');
     const hit = trCache.get(key); if (hit && hit.t > Date.now()) return hit.v;
-    const r = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=auto&tl=' + to + '&q=' + encodeURIComponent(text),
-      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) throw new Error('translate HTTP ' + r.status);
-    const j = await r.json();
-    const v = (Array.isArray(j[0]) ? j[0] : []).map(x => (x && x[0]) || '').join('');
+    if (Date.now() < trBan) throw new Error('translate paused (Google rate limit)');
+    let v = '';
+    await trSlot();
+    try {
+      for (let a = 0; a < 3 && !v; a++) {
+        if (Date.now() < trBan) throw new Error('translate paused (Google rate limit)');
+        try { v = await trGoogle(text, to); }
+        catch (e) {
+          if (!(e.status === 429 || e.status >= 500 || e.name === 'TimeoutError')) throw e;
+          try { v = await trAlt(text, to); } catch (e2) {}
+          if (v) break;
+          if (a === 2) { if (e.status === 429) trBan = Date.now() + 45000; throw e; }
+          await trSleep(Math.min(e.retryAfter || 0, 20) * 1000 || 700 * (a + 1) + Math.random() * 300);
+        }
+      }
+      await trSleep(150);                   // small gap so the next request is not a burst
+    } finally { trFree(); }
     if (!v) throw new Error('empty translation');
     if (trCache.size > 3000) trCache.clear();
     trCache.set(key, { v, t: Date.now() + 6 * 3600 * 1000 });
@@ -778,10 +813,12 @@ function makeApp(store, env) {
     const to = String(req.to || '').toLowerCase();
     if (!TR_OK[to]) globalThis.fail_('Choose English, Hindi or Indonesian.');
     const texts = (Array.isArray(req.texts) ? req.texts : []).slice(0, 30).map(t => String(t == null ? '' : t).slice(0, 1800));
+    let bad = 0, why = '';
     const out = await Promise.all(texts.map(async t => {
       if (!t.trim()) return '';
-      try { return await trOne(t, to); } catch (e) { warn('Translate failed:', e.message); return null; }
+      try { return await trOne(t, to); } catch (e) { bad++; why = e.message; return null; }
     }));
+    if (bad) warn('Translate failed for ' + bad + ' of ' + texts.length + ' messages: ' + why);   // one line, not one per message
     return { ok: true, translations: out };
   }
   const fastTr = body => {

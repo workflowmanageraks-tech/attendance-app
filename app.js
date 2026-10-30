@@ -4455,7 +4455,7 @@ function chatView(m){
 }
 function chatNeedTr(){
   const c = S.chat, id = c.with; if (!id) return;
-  const arr = (c.msgs[id] || []).slice(-60), by = {};
+  const arr = (c.msgs[id] || []).slice(-30), by = {};
   arr.forEach(m => {
     const l = chatLangOf(m); if (!l || m.state || !String(chTxt(m)).trim()) return;
     const k = l + '|' + m.id; if (c.tr[k] != null || c.trFail[k] || c.trBusy[k]) return;
@@ -4473,6 +4473,13 @@ async function chatTrRun(items, lang, convId){
       part.forEach((x, j) => { const t = r.translations && r.translations[j]; if (typeof t === 'string') c.tr[lang + '|' + x.id] = t; else c.trFail[lang + '|' + x.id] = 1; });
     }catch(e){ chatErr(e); part.forEach(x => c.trFail[lang + '|' + x.id] = 1); }
     part.forEach(x => delete c.trBusy[lang + '|' + x.id]);
+    c.trTry = c.trTry || {};
+    const again = part.filter(x => c.trFail[lang + '|' + x.id] && (c.trTry[lang + '|' + x.id] || 0) < 2);   // busy server: try again quietly (after 12 s, then 40 s)
+    if (again.length){
+      const n = Math.max.apply(null, again.map(x => c.trTry[lang + '|' + x.id] || 0));
+      again.forEach(x => { c.trTry[lang + '|' + x.id] = (c.trTry[lang + '|' + x.id] || 0) + 1; });
+      setTimeout(() => { again.forEach(x => delete c.trFail[lang + '|' + x.id]); if (S.view === 'chat') chatNeedTr(); }, n ? 40000 : 12000);
+    }
     c.trv++;
     if (S.view === 'chat' && c.with === convId) chatRenderMsgs();
   }
