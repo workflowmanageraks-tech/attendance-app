@@ -9,9 +9,6 @@ const MAX_EVENTS = 900, REPLAY = 300;
 const buf = [], subs = new Set(), open = new Map(), names = new Map(), recent = [];
 const info = { integrations: [], started: Date.now() };
 let seq = 0, lag = 0;
-// network accounting (in memory only, since the server started): outgoing servers, users, client IPs
-const hosts = new Map(), ustat = new Map(), ips = new Map(), alertAt = new Map();
-const MAXKEYS = 200;
 
 // background polling the app does all the time (hidden by default in the viewer)
 const POLL = new Set(['chatLive', 'callPoll', 'ludoPoll', 'callConfig', 'chatPing', 'chatFetch', 'getAll', 'status']);
@@ -39,55 +36,6 @@ function who(uid) {
 }
 const tokenUid = t => { try { return (t && globalThis.checkToken_(t)) || ''; } catch (e) { return ''; } };
 
-// ---- who is calling: client IP + a short device label (never the full user-agent string) ----
-function device(ua) {
-  ua = String(ua || '');
-  const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad|iPod/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS X|Macintosh/.test(ua) ? 'macOS' : /CrOS/.test(ua) ? 'ChromeOS' : /Linux/.test(ua) ? 'Linux' : '';
-  let br = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /SamsungBrowser/.test(ua) ? 'Samsung' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : /node|undici|curl|python|axios|wget/i.test(ua) ? 'Script' : '';
-  if (/; wv\)|Capacitor/.test(ua)) br = 'App';
-  return (br + (br && os ? ' · ' : '') + os) || 'Unknown';
-}
-function client(rq) {
-  const h = (rq && rq.headers) || {};
-  let ip = String(h['x-forwarded-for'] || '').split(',')[0].trim() || (rq && rq.socket && rq.socket.remoteAddress) || '';
-  ip = ip.replace(/^::ffff:/, '').slice(0, 45);
-  return { ip, dev: device(h['user-agent']), origin: String(h.origin || '').replace(/^https?:\/\//, '').slice(0, 60) };
-}
-// throttled warning (shown in the feed + the Alerts tab)
-function alert(key, level, text) {
-  const now = Date.now();
-  if ((alertAt.get(key) || 0) > now - 120000) return;
-  alertAt.set(key, now); if (alertAt.size > 300) alertAt.delete(alertAt.keys().next().value);
-  emit({ k: 'sys', lv: level, text: String(text).slice(0, 400), al: 1 });
-}
-const cap = (m) => { if (m.size > MAXKEYS) m.delete(m.keys().next().value); };
-function userStat(uid, name, c) {
-  const key = uid || ('guest:' + ((c && c.ip) || '?'));
-  let u = ustat.get(key);
-  if (!u) { u = { key, uid: uid || '', name: name || (uid ? uid : 'Not signed in'), first: Date.now(), last: 0, n: 0, poll: 0, errs: 0, ms: 0, bin: 0, bout: 0, out: 0, dests: {}, acts: {}, ip: '', dev: '', ips: {}, stamps: [] }; ustat.set(key, u); cap(ustat); }
-  if (name && u.name !== name) u.name = name;
-  if (c && c.ip) { u.ip = c.ip; u.dev = c.dev || u.dev; u.ips[c.ip] = Date.now(); }
-  return u;
-}
-function ipStat(c) {
-  if (!c || !c.ip) return null;
-  let r = ips.get(c.ip);
-  if (!r) { r = { ip: c.ip, dev: c.dev, first: Date.now(), last: 0, n: 0, errs: 0, users: {}, fails: [], origin: c.origin }; ips.set(c.ip, r); cap(ips); }
-  r.dev = c.dev || r.dev; if (c.origin) r.origin = c.origin;
-  return r;
-}
-function hostStat(host, dest, ms, ok, user, bo, bi, status, err) {
-  let h = hosts.get(host);
-  if (!h) { h = { host, dest, n: 0, bad: 0, ms: 0, max: 0, bo: 0, bi: 0, first: Date.now(), last: 0, users: {}, status: 0, err: '', fails: [], methods: {} }; hosts.set(host, h); cap(hosts); }
-  h.n++; h.ms += ms; h.max = Math.max(h.max, ms); h.bo += bo || 0; h.bi += bi || 0; h.last = Date.now(); h.status = status || 0;
-  h.users[user || 'system'] = (h.users[user || 'system'] || 0) + 1;
-  if (!ok) {
-    h.bad++; h.err = err || ('HTTP ' + status); h.fails.push(Date.now()); h.fails = h.fails.filter(t => t > Date.now() - 120000);
-    if (h.fails.length >= 3) alert('hostfail:' + host, 'warn', host + ' failed ' + h.fails.length + ' times in 2 minutes (' + h.err + ')' + (user ? ' - last for ' + user : ''));
-  }
-  if (ms > 5000) alert('slow:' + host, 'warn', host + ' is slow: one call took ' + (ms / 1000).toFixed(1) + ' s' + (user ? ' (for ' + user + ')' : ''));
-}
-
 function fieldsOf(req) {
   const out = [];
   Object.keys(req || {}).forEach(k => {
@@ -100,13 +48,13 @@ function fieldsOf(req) {
 }
 
 // ---- one trace per request ----
-function begin(body, meta) {
+function begin(body) {
   let req = {}; try { req = JSON.parse(body) || {}; } catch (e) { /* not JSON */ }
   const rid = (typeof req._rid === 'string' && /^[\w-]{4,20}$/.test(req._rid)) ? req._rid : 's' + (seq + 1).toString(36);
   const uid = tokenUid(req.token);
-  const tr = { rid, action: String(req.action || '?').slice(0, 40), uid, req, t0: Date.now(), tStart: 0, done: false, steps: 0, c: meta || null, sz: String(body || '').length };
+  const tr = { rid, action: String(req.action || '?').slice(0, 40), uid, req, t0: Date.now(), tStart: 0, done: false, steps: 0 };
   open.set(rid, tr);
-  emit({ k: 'req', rid, a: tr.action, u: who(uid) || (req.username ? String(req.username).slice(0, 30) : ''), f: fieldsOf(req), poll: POLL.has(tr.action), sz: tr.sz, ip: meta ? meta.ip : '', dev: meta ? meta.dev : '' });
+  emit({ k: 'req', rid, a: tr.action, u: who(uid) || (req.username ? String(req.username).slice(0, 30) : ''), f: fieldsOf(req), poll: POLL.has(tr.action), sz: String(body || '').length });
   return tr;
 }
 function started(tr) {
@@ -118,37 +66,16 @@ function end(tr, res, crashed) {
   const ms = Date.now() - tr.t0, ok = !!(res && res.ok !== false) && !crashed;
   const uid = tr.uid || tokenUid(res && res.token);
   const user = who(uid) || (tr.req && tr.req.username ? String(tr.req.username).slice(0, 30) : '');
-  recent.push({ t: Date.now(), ok, ms, poll: POLL.has(tr.action) }); while (recent.length && recent[0].t < Date.now() - 1200000) recent.shift();
-  let outSz = 0; try { outSz = res ? JSON.stringify(res).length : 0; } catch (e) { /* ignore */ }
-  const poll = POLL.has(tr.action), us = userStat(uid, user && user !== uid ? user : '', tr.c);
-  us.last = Date.now(); us.ms += ms; us.bin += tr.sz || 0; us.bout += outSz;
-  if (poll) us.poll++; else { us.n++; us.acts[tr.action] = (us.acts[tr.action] || 0) + 1; us.stamps.push(Date.now()); while (us.stamps.length && us.stamps[0] < Date.now() - 60000) us.stamps.shift(); }
-  if (!ok) us.errs++;
-  if (!poll && us.stamps.length > 100) alert('flood:' + us.key, 'warn', (us.name || 'A user') + ' sent ' + us.stamps.length + ' requests in one minute (very busy or a stuck loop)');
-  const ir = ipStat(tr.c);
-  if (ir) {
-    ir.last = Date.now(); ir.n++; if (!ok) ir.errs++;
-    ir.users[user || (uid ? uid : 'guest')] = Date.now();
-    if (!ok && (tr.action === 'login' || tr.action === 'bioLogin')) {
-      ir.fails.push(Date.now()); ir.fails = ir.fails.filter(t => t > Date.now() - 300000);
-      if (ir.fails.length >= 5) alert('brute:' + ir.ip, 'bad', 'Possible password guessing: ' + ir.fails.length + ' failed sign-ins from ' + ir.ip + ' in 5 minutes');
-    }
-  }
-  emit({ k: 'end', rid: tr.rid, ok, ms, q: tr.tStart ? tr.tStart - tr.t0 : 0, u: user, code: ok ? '' : String((res && res.code) || 'ERR'), err: ok ? '' : String((res && res.error) || 'Unknown error').slice(0, 300), so: outSz });
+  recent.push({ t: Date.now(), ok, ms, poll: POLL.has(tr.action) }); while (recent.length && recent[0].t < Date.now() - 300000) recent.shift();
+  emit({ k: 'end', rid: tr.rid, ok, ms, q: tr.tStart ? tr.tStart - tr.t0 : 0, u: user, code: ok ? '' : String((res && res.code) || 'ERR'), err: ok ? '' : String((res && res.error) || 'Unknown error').slice(0, 300) });
 }
 const within = (tr, fn) => als.run(tr, fn);
 
 // ---- steps = outgoing calls made while a request runs ----
-function step(dest, label, status, ms, detail, failed, net) {
-  const tr = als.getStore(), ok = !failed && !(status >= 400), n = net || {};
-  const user = tr ? (who(tr.uid) || (tr.req && tr.req.username ? String(tr.req.username).slice(0, 30) : '')) : '';
-  ms = Math.round(ms || 0);
-  if (n.h) {                                           // a real outgoing network call: count it per server and per user
-    hostStat(n.h, dest, ms, ok, user, n.bo, n.bi, status, String(detail || ''));
-    if (tr) { const us = userStat(tr.uid, user && user !== tr.uid ? user : '', tr.c); us.out++; us.dests[dest] = (us.dests[dest] || 0) + 1; }
-  }
-  emit({ k: 'step', rid: tr ? tr.rid : '', d: dest, l: String(label).slice(0, 90), s: status || 0, ms, x: String(detail || '').slice(0, 240),
-    ok, bg: !!(tr && tr.done), h: n.h || '', m: n.m || '', bo: n.bo || 0, bi: n.bi || 0, u: user });
+function step(dest, label, status, ms, detail, failed) {
+  const tr = als.getStore();
+  emit({ k: 'step', rid: tr ? tr.rid : '', d: dest, l: String(label).slice(0, 90), s: status || 0, ms: Math.round(ms || 0), x: String(detail || '').slice(0, 240),
+    ok: !failed && !(status >= 400), bg: !!(tr && tr.done) });
 }
 function sys(level, text) { emit({ k: 'sys', lv: level, text: String(text).slice(0, 400) }); }
 
@@ -157,13 +84,13 @@ function classify(rawUrl, method) {
   let u; try { u = new URL(rawUrl); } catch (e) { return null; }
   const h = u.hostname, p = u.pathname, m = String(method || 'GET').toUpperCase();
   if (h === 'sheets.googleapis.com') return null;                        // shown by the store wrapper (load / save)
-  if (h === 'oauth2.googleapis.com' || p.startsWith('/oauth2/')) return { d: 'oauth', l: m + ' ' + p, h };
-  if (h === 'translate.googleapis.com') return { d: 'translate', l: 'Translate text', h };
-  if (h === 'www.googleapis.com' && p.startsWith('/calendar/')) return { d: 'calendar', l: m + ' ' + p.replace(/^\/calendar\/v3\/calendars\/primary\//, ''), h };
-  if (h === 'www.googleapis.com' && /^\/(upload\/)?drive\//.test(p)) return { d: 'drive', l: m + ' ' + p.replace(/^\/(upload\/)?drive\/v3\//, ''), h };
-  if (h === 'api.github.com') return { d: 'github', l: m + ' ' + p.replace(/^\/repos\/[^/]+\/[^/]+/, ''), h };
-  if (h.endsWith('metered.live')) return { d: 'turn', l: 'Call-relay (TURN) credentials', h };
-  return { d: 'other', l: m + ' ' + h + p, h };
+  if (h === 'oauth2.googleapis.com' || p.startsWith('/oauth2/')) return { d: 'oauth', l: m + ' ' + p };
+  if (h === 'translate.googleapis.com') return { d: 'translate', l: 'Translate text' };
+  if (h === 'www.googleapis.com' && p.startsWith('/calendar/')) return { d: 'calendar', l: m + ' ' + p.replace(/^\/calendar\/v3\/calendars\/primary\//, '') };
+  if (h === 'www.googleapis.com' && /^\/(upload\/)?drive\//.test(p)) return { d: 'drive', l: m + ' ' + p.replace(/^\/(upload\/)?drive\/v3\//, '') };
+  if (h === 'api.github.com') return { d: 'github', l: m + ' ' + p.replace(/^\/repos\/[^/]+\/[^/]+/, '') };
+  if (h.endsWith('metered.live')) return { d: 'turn', l: 'Call-relay (TURN) credentials' };
+  return { d: 'other', l: m + ' ' + h + p };
 }
 function patchFetch() {
   if (!globalThis.fetch || globalThis.fetch.__live) return;
@@ -172,28 +99,26 @@ function patchFetch() {
     const url = typeof input === 'string' ? input : (input && input.url) || String(input);
     const c = classify(url, (init && init.method) || (input && input.method));
     if (!c) return orig.apply(this, arguments);
-    const t0 = Date.now(), body = init && init.body, bo = body ? (typeof body === 'string' || body.length !== undefined ? body.length : body.byteLength || 0) : 0;
-    const meth = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
-    try { const r = await orig.apply(this, arguments); step(c.d, c.l, r.status, Date.now() - t0, r.ok ? '' : 'HTTP ' + r.status + ' ' + (r.statusText || ''), false, { h: c.h, m: meth, bo, bi: Number(r.headers && r.headers.get && r.headers.get('content-length')) || 0 }); return r; }
-    catch (e) { step(c.d, c.l, 0, Date.now() - t0, e && e.message, true, { h: c.h, m: meth, bo }); throw e; }
+    const t0 = Date.now();
+    try { const r = await orig.apply(this, arguments); step(c.d, c.l, r.status, Date.now() - t0, r.ok ? '' : 'HTTP ' + r.status + ' ' + (r.statusText || '')); return r; }
+    catch (e) { step(c.d, c.l, 0, Date.now() - t0, e && e.message, true); throw e; }
   };
   f.__live = true; globalThis.fetch = f;
 }
 
 // ---- Google Sheets = the database: wrap the store so every read / save is visible ----
-const SHEETS_HOST = 'sheets.googleapis.com';
 function wrapStore(store) {
   const sum = ops => { const c = {}; ops.forEach(o => { const k = Object.keys(o)[0]; c[k] = (c[k] || 0) + 1; }); return Object.keys(c).map(k => k + (c[k] > 1 ? ' x' + c[k] : '')).join(', '); };
   return {
     load: async () => {
       const t0 = Date.now();
-      try { const r = await store.load(); let bi = 0; try { bi = JSON.stringify(r).length; } catch (e) { /* ignore */ } step('sheets', 'Read all sheets', 200, Date.now() - t0, (Array.isArray(r) ? r.length : '?') + ' sheets loaded', false, { h: SHEETS_HOST, m: 'GET', bi }); return r; }
-      catch (e) { step('sheets', 'Read all sheets', 0, Date.now() - t0, e && e.message, true, { h: SHEETS_HOST, m: 'GET' }); throw e; }
+      try { const r = await store.load(); step('sheets', 'Read all sheets', 200, Date.now() - t0, (Array.isArray(r) ? r.length : '?') + ' sheets loaded'); return r; }
+      catch (e) { step('sheets', 'Read all sheets', 0, Date.now() - t0, e && e.message, true); throw e; }
     },
     flush: async ops => {
       const t0 = Date.now();
-      try { const r = await store.flush(ops); step('sheets', 'Save ' + ops.length + ' change' + (ops.length === 1 ? '' : 's'), 200, Date.now() - t0, sum(ops), false, { h: SHEETS_HOST, m: 'POST', bo: ops.length * 120 }); return r; }
-      catch (e) { step('sheets', 'Save ' + ops.length + ' change' + (ops.length === 1 ? '' : 's'), 0, Date.now() - t0, e && e.message, true, { h: SHEETS_HOST, m: 'POST' }); throw e; }
+      try { const r = await store.flush(ops); step('sheets', 'Save ' + ops.length + ' change' + (ops.length === 1 ? '' : 's'), 200, Date.now() - t0, sum(ops)); return r; }
+      catch (e) { step('sheets', 'Save ' + ops.length + ' change' + (ops.length === 1 ? '' : 's'), 0, Date.now() - t0, e && e.message, true); throw e; }
     }
   };
 }
@@ -202,9 +127,9 @@ function wrapStore(store) {
 function http(rq, rs, fn) {
   const url = (rq.url || '/').split('?')[0];
   if (rq.method === 'OPTIONS' || url === '/live/stream' || (rq.method === 'POST' && url === '/')) return fn();
-  const c = client(rq), tr = { rid: 'h' + (seq + 1).toString(36), action: rq.method + ' ' + url, uid: '', req: {}, t0: Date.now(), tStart: Date.now(), done: false, c, sz: 0 };
+  const tr = { rid: 'h' + (seq + 1).toString(36), action: rq.method + ' ' + url, uid: '', req: {}, t0: Date.now(), tStart: Date.now(), done: false };
   open.set(tr.rid, tr);
-  emit({ k: 'req', rid: tr.rid, a: tr.action, u: '', f: [], poll: rq.method === 'GET' && url === '/', sz: 0, http: true, ip: c.ip, dev: c.dev });
+  emit({ k: 'req', rid: tr.rid, a: tr.action, u: '', f: [], poll: rq.method === 'GET' && url === '/', sz: 0, http: true });
   rs.on('finish', () => end(tr, { ok: rs.statusCode < 400, code: 'HTTP ' + rs.statusCode, error: 'HTTP ' + rs.statusCode }));
   rs.on('close', () => { if (!tr.done) end(tr, { ok: false, code: 'ABORT', error: 'Connection closed before the answer was sent' }); });
   return als.run(tr, fn);
@@ -218,39 +143,23 @@ function snapshotStats() {
   return { k: 'stats', up: Math.round(process.uptime()), boot: info.started, mem: Math.round(mu.rss / 1048576), heap: Math.round(mu.heapUsed / 1048576), lag: Math.round(lag),
     queued, running, rpm: win.length, epm: win.filter(r => !r.ok).length, avg: real.length ? Math.round(real.reduce((a, r) => a + r.ms, 0) / real.length) : 0, subs: subs.size, node: process.version, now };
 }
-function netSnapshot() {
-  const now = Date.now(), top = (o, n) => Object.keys(o).sort((a, b) => o[b] - o[a]).slice(0, n).map(k => [k, o[k]]);
-  const series = []; for (let i = 19; i >= 0; i--) { const a = now - (i + 1) * 60000, b = now - i * 60000; const w = recent.filter(r => !r.poll && r.t > a && r.t <= b); series.push([w.length, w.filter(r => !r.ok).length]); }
-  return { k: 'net', now, series,
-    hosts: [...hosts.values()].sort((a, b) => b.last - a.last).slice(0, 40).map(h => ({ host: h.host, d: h.dest, n: h.n, bad: h.bad, avg: h.n ? Math.round(h.ms / h.n) : 0, max: h.max, bo: h.bo, bi: h.bi, last: h.last, st: h.status, err: h.bad ? h.err : '', users: top(h.users, 5) })),
-    users: [...ustat.values()].sort((a, b) => b.last - a.last).slice(0, 40).map(u => ({ key: u.key, name: u.name, guest: !u.uid, n: u.n, poll: u.poll, errs: u.errs, avg: (u.n + u.poll) ? Math.round(u.ms / (u.n + u.poll)) : 0, last: u.last, first: u.first, ip: u.ip, dev: u.dev, ips: Object.keys(u.ips).length, out: u.out, bin: u.bin, bout: u.bout, dests: top(u.dests, 6), acts: top(u.acts, 5), rpm: u.stamps.length })),
-    ips: [...ips.values()].sort((a, b) => b.last - a.last).slice(0, 40).map(r => ({ ip: r.ip, dev: r.dev, n: r.n, errs: r.errs, last: r.last, first: r.first, users: Object.keys(r.users).slice(0, 6), fails: r.fails.filter(t => t > now - 300000).length, origin: r.origin })) };
-}
 function stream(rq, rs, cors, token) {
   if (tokenUid(token) !== 'ADMIN') { rs.writeHead(403, Object.assign({ 'Content-Type': 'application/json' }, cors)); return rs.end(JSON.stringify({ ok: false, error: 'Only the main admin can watch this.', code: 'PERM' })); }
   rs.writeHead(200, Object.assign({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' }, cors));
   const since = Number(new URL(rq.url, 'http://x').searchParams.get('since')) || 0;
   const send = o => rs.write('data: ' + JSON.stringify(o) + '\n\n');
   const past = buf.filter(e => e.n > since).slice(-REPLAY);
-  send({ k: 'hello', n: seq, integrations: info.integrations, started: info.started, events: past, open: [...open.values()].map(t => ({ rid: t.rid, a: t.action, t: t.t0, go: !!t.tStart })), stats: snapshotStats(), net: netSnapshot() });
+  send({ k: 'hello', n: seq, integrations: info.integrations, started: info.started, events: past, open: [...open.values()].map(t => ({ rid: t.rid, a: t.action, t: t.t0, go: !!t.tStart })), stats: snapshotStats() });
   subs.add(rs);
-  const hb = setInterval(() => { try { rs.write(': ping\n\n'); send(snapshotStats()); send(netSnapshot()); } catch (e) { cleanup(); } }, 3000);
+  const hb = setInterval(() => { try { rs.write(': ping\n\n'); send(snapshotStats()); } catch (e) { cleanup(); } }, 3000);
   const cleanup = () => { clearInterval(hb); subs.delete(rs); };
   rq.on('close', cleanup); rs.on('close', cleanup);
 }
 
 // event-loop lag = how busy / slow the server itself is
-(function () {
-  let last = Date.now();
-  setInterval(() => {
-    const n = Date.now(); lag = Math.max(0, n - last - 1000); last = n;
-    if (lag > 800) alert('lag', 'warn', 'The server is overloaded: it was frozen for ' + Math.round(lag) + ' ms');
-    const mb = process.memoryUsage().rss / 1048576;
-    if (mb > 420) alert('mem', 'warn', 'Server memory is high (' + Math.round(mb) + ' MB). Render free plan restarts the app near 512 MB.');
-  }, 1000).unref();
-})();
+(function () { let last = Date.now(); setInterval(() => { const n = Date.now(); lag = Math.max(0, n - last - 1000); last = n; }, 1000).unref(); })();
 
 function setIntegrations(list) { info.integrations = list; }
 sys('info', 'Server started (Node ' + process.version + ')');
 
-module.exports = { begin, started, end, within, step, sys, patchFetch, wrapStore, http, stream, setIntegrations, client, POLL };
+module.exports = { begin, started, end, within, step, sys, patchFetch, wrapStore, http, stream, setIntegrations, POLL };
