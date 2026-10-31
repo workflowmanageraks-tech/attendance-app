@@ -2110,6 +2110,31 @@ function wSearch(v){
   window._wt = setTimeout(() => { render(); const i = $('#wq'); if (i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
 }
 
+/* Work: pick numbers 1 to 6. Selected ones go in one column, the rest in the other. Remembered on this phone. */
+function workPicker(){
+  let sel; try{ sel = JSON.parse(localStorage.getItem('ks_work_pick') || '[]').filter(n => n >= 1 && n <= 6); }catch(e){ sel = []; }
+  const w = openModal(`<h3>🔢 Select numbers</h3><p class="sub">Tap a number to select it. Tap again to unselect.</p>
+    <div id="wpBtns" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:14px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div style="border:1px solid var(--line);border-radius:12px;padding:10px"><div style="font-weight:800;margin-bottom:6px">✅ Selected <span class="muted" id="wpSn"></span></div><div id="wpSel" style="display:flex;flex-wrap:wrap;gap:6px;min-height:34px"></div></div>
+      <div style="border:1px solid var(--line);border-radius:12px;padding:10px"><div style="font-weight:800;margin-bottom:6px">⬜ Not selected <span class="muted" id="wpUn"></span></div><div id="wpUns" style="display:flex;flex-wrap:wrap;gap:6px;min-height:34px"></div></div>
+    </div>
+    <div class="foot"><button type="button" class="btn ghost" data-all>Select all</button><button type="button" class="btn ghost" data-clr>Clear</button><button type="button" class="btn" data-x>Close</button></div>`);
+  const save = () => { try{ localStorage.setItem('ks_work_pick', JSON.stringify(sel)); }catch(e){} };
+  const chip = n => `<span style="min-width:34px;text-align:center;padding:6px 10px;border-radius:10px;font-weight:800;background:rgba(99,102,241,.14)">${n}</span>`;
+  const draw = () => {
+    const nums = [1, 2, 3, 4, 5, 6], un = nums.filter(n => !sel.includes(n)), on = nums.filter(n => sel.includes(n));
+    w.querySelector('#wpBtns').innerHTML = nums.map(n => `<button type="button" class="btn ${sel.includes(n) ? '' : 'soft'}" data-n="${n}" style="padding:12px 0;font-size:calc(17px*var(--fs));font-weight:800">${n}</button>`).join('');
+    w.querySelector('#wpSel').innerHTML = on.length ? on.map(chip).join('') : '<span class="muted">None</span>';
+    w.querySelector('#wpUns').innerHTML = un.length ? un.map(chip).join('') : '<span class="muted">None</span>';
+    w.querySelector('#wpSn').textContent = '(' + on.length + ')'; w.querySelector('#wpUn').textContent = '(' + un.length + ')';
+    w.querySelectorAll('[data-n]').forEach(b => b.onclick = () => { const n = +b.dataset.n; sel = sel.includes(n) ? sel.filter(x => x !== n) : sel.concat(n); save(); draw(); });
+  };
+  w.querySelector('[data-all]').onclick = () => { sel = [1, 2, 3, 4, 5, 6]; save(); draw(); };
+  w.querySelector('[data-clr]').onclick = () => { sel = []; save(); draw(); };
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  draw();
+}
 function vWork(){
   const y = S.wy, f = S.wf, q = f.q.trim().toLowerCase(), tIso = todayISO();
   const yearList = S.d.work.filter(x => x.date.startsWith(y + '-'));
@@ -2182,6 +2207,7 @@ function vWork(){
         <input class="input" id="wq" style="width:210px" placeholder="Search name, product, no.…" value="${esc(f.q)}" oninput="wSearch(this.value)">
         <label class="check" style="margin:0"><input type="checkbox" ${f.only?'checked':''} onchange="S.wf.only=this.checked;render()"> Only days with entries</label>
         <button class="btn sm" onclick="wToday()">＋ Add entry for today</button>
+        <button class="btn soft sm" onclick="workPicker()">🔢 Select 1–6</button>
       </div>
       <div class="sec-title" style="margin-bottom:8px">Month</div>
       <div class="chips" style="margin-bottom:14px">${mchips}</div>
