@@ -824,9 +824,21 @@ function changeCredentials_(req) {
 }
 
 // ---------- USER MANAGEMENT (admins) ----------
+// How long this user stays signed in (hours). Only an admin can change it (Edit user > "Stay signed in for").
+// 0 / empty = the normal 6 hours. It applies to every phone this user is signed in on, at once.
+function sessHours_(uid) {
+  var v = Number(PropertiesService.getScriptProperties().getProperty('SH_' + (uid || 'ADMIN')) || 0);
+  return v > 0 ? v : 0;
+}
+function sessLimitMs_(uid) { var h = sessHours_(uid); return (h > 0 ? h * 3600 : TOKEN_TTL) * 1000; }
+function setSessHours_(uid, h) {
+  h = Number(h) || 0; if (h < 0 || h > 720) h = 0;           // 720 h = 30 days is the most
+  var p = PropertiesService.getScriptProperties();
+  if (h > 0) p.setProperty('SH_' + uid, String(h)); else p.deleteProperty('SH_' + uid);
+}
 function pubUser_(u, last) {
   return { id: u.id, username: u.username, name: u.name, email: u.email, role: u.role, active: u.active, perms: u.perms,
-    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '', createdBy: u.createdBy || '', see: u.see || [] };
+    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '', createdBy: u.createdBy || '', see: u.see || [], sessHours: sessHours_(u.id) };
 }
 function listUsers_() {
   var s = readSettings_().values, last = {};
@@ -896,6 +908,7 @@ function saveUser_(req) {
     r2.setValues([[nid, username, pw, role, name, email, active ? 'Yes' : 'No', permStr, needLoc ? 'Yes' : 'No', nowStr_(), '', payDue, avatar, CTX.primary ? '' : CTX.uid, seeNew ? seeNew.join(',') : '']]);
     if (!CTX.primary) joinAdderGroup_(nid);      // the new user lands in the group of the person who added him
   }
+  if (isAdm && req.sessHours !== undefined) setSessHours_(cur ? cur.id : nid, req.sessHours);   // admin only
   return listUsers_();
 }
 // Saves "who can this user see" for one user. The permission is two-way, so when an id is taken OFF this user's list

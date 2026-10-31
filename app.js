@@ -661,7 +661,9 @@ function userForm(id){
       <label class="tog"><input type="checkbox" name="active" ${(!x || x.active) ? 'checked' : ''}> Account active (untick to block sign-in)</label>
       ${isAdmin() ? `<label class="tog"><input type="checkbox" name="needLoc" ${x && x.needLoc ? 'checked' : ''}> Location required to sign in <span class="muted">(blocks login unless the phone gives a real GPS location, accurate to 500 m)</span></label>
       <div class="field"><label>Payment due until <span class="muted">(after this date/time, login is blocked with a payment-reminder message, until you clear or extend it)</span></label>
-        <input class="input" type="datetime-local" name="payDue" value="${x && x.payDue ? x.payDue.replace(' ', 'T').slice(0,16) : ''}"></div>` : ''}
+        <input class="input" type="datetime-local" name="payDue" value="${x && x.payDue ? x.payDue.replace(' ', 'T').slice(0,16) : ''}"></div>
+      <div class="field"><label>⏳ Stay signed in for <span class="muted">(only admins can change this. The user is signed out after this time and must log in again. It works on every phone this user is signed in on, and straight away)</span></label>
+        <select class="select" name="sessHours">${[['0','Normal (6 hours)'],['1','1 hour'],['2','2 hours'],['5','5 hours'],['12','12 hours'],['24','1 day'],['72','3 days'],['168','7 days'],['720','30 days']].map(o => `<option value="${o[0]}" ${String(x && x.sessHours || 0) === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></div>` : ''}
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save user' : 'Add user'}</button></div></form>`, 'wide');
   w.querySelector('[data-x]').onclick = () => w.remove();
   const roleEl = w.querySelector('#ufRole');
@@ -670,7 +672,7 @@ function userForm(id){
     ev.preventDefault(); const f = new FormData(ev.target), btn = ev.submitter; btn.disabled = true;
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
-        role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '',
+        role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '', ...(isAdmin() ? { sessHours:Number(f.get('sessHours')) || 0 } : {}),
         ...(S.me.primary ? { see:f.getAll('see') } : {}),
         perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), vcs:f.get('p_vcs'), rack:f.get('p_rack'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
       S.users = r.users; w.remove(); if (!isAdmin()) await loadAll();   // a new user may have created / joined my group
@@ -4234,6 +4236,13 @@ function chatRenderList(){
       </div>${u.unread ? `<span class="ch-unread">${u.unread > 99 ? '99+' : u.unread}</span>` : ''}</div>`;
   }).join('');
 }
+let chatTypSent = 0;
+function chatTypingPing(u){                       // tells the other person "I am typing" (at most once every 2.5 s, never for groups)
+  const ta = $('#chInput'); if (!u || u.isGroup || !ta || !ta.value.trim() || S.chat.ed[u.id]) return;
+  if (Date.now() - chatTypSent < 2500) return;
+  chatTypSent = Date.now();
+  chatApi('chatTyping', { with:u.id }).catch(() => {});
+}
 function chatRenderPane(){
   const pane = $('#chPane'); if (!pane) return;
   const u = chatPeer(S.chat.with);
@@ -4256,7 +4265,7 @@ function chatRenderPane(){
   const ta = $('#chInput');
   ta.value = S.chat.drafts[u.id] || '';
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; };
-  ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); };
+  ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); chatTypingPing(u); };
   ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches){ e.preventDefault(); chatSend(); } };
   if (S.chat.ed[u.id]){ S.chat.ed[u.id] = null; S.chat.drafts[u.id] = S.chat.eb[u.id] || ''; ta.value = S.chat.drafts[u.id]; }     // an unfinished edit is dropped when the chat is reopened
   grow(); chatHeader(); chatLangBtn(); chatSelBar(); chatBindMsgs(); S.chat.sig = ''; chatRenderMsgs(true); chatCtxBar();
@@ -4264,7 +4273,8 @@ function chatRenderPane(){
 function chatHeader(){
   const u = chatPeer(S.chat.with); if (!u) return;
   const st = chatStatus(u), t = $('#chHStat'); if (!t) return;
-  t.className = 'ch-stat ' + st.cls; t.textContent = st.txt;
+  const typ = !u.isGroup && S.chat.typ && S.chat.typ[u.id] > Date.now();
+  t.className = 'ch-stat ' + (typ ? 'on' : st.cls); t.textContent = typ ? 'typing…' : st.txt; t.style.fontStyle = typ ? 'italic' : '';
   if (u.isGroup){ $('#chHDot').style.display = 'none'; $('#chHAv .dot').style.display = 'none'; return; }
   $('#chHDot').className = 'dot ' + st.cls; $('#chHAv .dot').className = 'dot ' + st.cls;
 }
@@ -4355,6 +4365,8 @@ function chatApplyConv(id, r, first){
   if (!c.histLoaded[id]){ c.histLoaded[id] = true; ch = true; }
   if ((r.peerRead || 0) > (c.peerRead[id] || 0)){ c.peerRead[id] = r.peerRead; ch = true; }
   if ((r.peerSeen || 0) > (c.peerSeen[id] || 0)){ c.peerSeen[id] = r.peerSeen; ch = true; }
+  if ('typing' in r){ c.typ = c.typ || {}; c.typ[id] = r.typing ? Date.now() + 3500 : 0; }
+  if ((r.messages || []).some(m => !m.mine) && c.typ) c.typ[id] = 0;       // his message arrived: he is no longer typing
   const u = chatPeer(id);
   if (u && u.isGroup && r.group){ u.name = r.group.name; u.members = r.group.members; }
   if (u && r.presence){ u.online = r.presence.online; u.ago = r.presence.ago; u.at = Date.now(); }
@@ -4678,6 +4690,7 @@ function chatSelTr(){
   });
 }
 /* tap a message = options; long-press = select (then tap more to add / remove) */
+let chatSwipedAt = 0;
 function chatBindMsgs(){
   const box = $('#chMsgs'); if (!box) return;
   let tm = null, long = false, x0 = 0, y0 = 0;
@@ -4692,6 +4705,31 @@ function chatBindMsgs(){
   box.addEventListener('pointermove', e => { if (tm && (Math.abs(e.clientX - x0) > 8 || Math.abs(e.clientY - y0) > 8)) stop(); });
   ['pointerup', 'pointercancel', 'pointerleave', 'scroll'].forEach(ev => box.addEventListener(ev, stop, true));
   box.addEventListener('contextmenu', e => { if (bub(e)) e.preventDefault(); });
+  /* swipe a message to the right = reply (like WhatsApp / Telegram) */
+  (function swipeReply(){
+    let b = null, sx = 0, sy = 0, dx = 0, lock = '', hit = false;
+    const reset = () => { if (b){ b.style.transition = 'transform .18s'; b.style.transform = ''; const e = b; setTimeout(() => { e.style.transition = ''; const i = e.querySelector('.sw-ic'); if (i) i.remove(); }, 200); } b = null; lock = ''; hit = false; };
+    box.addEventListener('touchstart', e => {
+      const t = e.target.closest && e.target.closest('.ch-b[data-mid]');
+      if (!t || t.classList.contains('failed') || S.chat.sel.size || e.touches.length !== 1 || e.target.closest('video')) { b = null; return; }
+      b = t; sx = e.touches[0].clientX; sy = e.touches[0].clientY; dx = 0; lock = ''; hit = false; b.style.transition = '';
+    }, { passive:true });
+    box.addEventListener('touchmove', e => {
+      if (!b) return;
+      const x = e.touches[0].clientX - sx, y = e.touches[0].clientY - sy;
+      if (!lock){ if (Math.abs(x) < 8 && Math.abs(y) < 8) return; lock = (x > 0 && Math.abs(x) > Math.abs(y) * 1.4) ? 'h' : 'v'; }
+      if (lock !== 'h'){ if (b){ b.style.transform = ''; } b = null; return; }
+      dx = Math.max(0, Math.min(x, 90)); b.style.transform = 'translateX(' + dx + 'px)';
+      let ic = b.querySelector('.sw-ic');
+      if (!ic){ ic = document.createElement('span'); ic.className = 'sw-ic'; ic.textContent = '↩'; ic.style.cssText = 'position:absolute;left:-38px;top:50%;margin-top:-14px;width:28px;height:28px;border-radius:50%;background:rgba(120,120,140,.28);display:flex;align-items:center;justify-content:center;font-size:16px;transition:transform .12s'; if (getComputedStyle(b).position === 'static') b.style.position = 'relative'; b.appendChild(ic); }
+      const ok = dx >= 60; ic.style.transform = ok ? 'scale(1.15)' : 'scale(.8)'; ic.style.opacity = String(Math.min(1, dx / 50));
+      if (ok && !hit){ hit = true; if (navigator.vibrate) try{ navigator.vibrate(12); }catch(_){} } else if (!ok) hit = false;
+    }, { passive:true });
+    const end = () => { if (b && lock === 'h' && dx >= 60){ const id = b.dataset.mid; chatSwipedAt = Date.now(); reset(); chatReplyTo(id); } else reset(); };
+    box.addEventListener('touchend', end, { passive:true });
+    box.addEventListener('touchcancel', reset, { passive:true });
+    box.addEventListener('click', e => { if (Date.now() - chatSwipedAt < 400){ e.stopPropagation(); e.preventDefault(); } }, true);
+  })();
   ['pause', 'ended'].forEach(ev => box.addEventListener(ev, () => { if (S.chat.defer){ S.chat.defer = false; chatRenderMsgs(); } }, true));
   box.addEventListener('click', e => {
     const b = bub(e); if (!b || b.classList.contains('failed')) return;
@@ -5513,7 +5551,7 @@ function ludoReset(){ clearInterval(LU.timer); LU.timer = null; const gid = LU.g
 const LV_DEST = { sheets:['📊','Google Sheets'], cache:['⚡','Server memory'], oauth:['🔑','Google login'], calendar:['📅','Google Calendar'], drive:['☁️','Google Drive'],
   translate:['🌐','Translate'], github:['🐙','GitHub'], mail:['✉️','E-mail'], turn:['📞','Call relay'], other:['🔗','Other'] };
 const LV_NODES = ['sheets','calendar','drive','oauth','translate','github','mail','turn'];
-const LV_POLL = new Set(['chatLive','callPoll','ludoPoll','callConfig','chatPing','chatFetch','getAll','status']);
+const LV_POLL = new Set(['chatLive','chatTyping','callPoll','ludoPoll','callConfig','chatPing','chatFetch','getAll','status']);
 const LV_ACT = { login:'Sign in', logout:'Sign out', getAll:'Load / refresh all data', setAttendance:'Mark attendance', addExpense:'Add expense', updateExpense:'Edit expense', deleteExpense:'Delete expense',
   addWork:'Add work entry', updateWork:'Edit work entry', deleteWork:'Delete work entry', addVcs:'Add VCS complaint', updateVcs:'Update VCS complaint', addRack:'Add rack item', updateRack:'Edit rack item',
   deleteRack:'Delete rack item', saveRackData:'Save rack data', setTimetable:'Time table change', chatSend:'Send chat message', chatLive:'Chat live tick', chatFetch:'Load chat', chatPing:'Online ping',

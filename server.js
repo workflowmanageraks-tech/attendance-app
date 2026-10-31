@@ -29,8 +29,11 @@ function makeApp(store, env) {
   const secret = env.TOKEN_SECRET || crypto.createHash('sha256').update('tok:' + (env.GOOGLE_PRIVATE_KEY || env.SHEET_ID || 'dev')).digest('hex');
   const sign = p => crypto.createHmac('sha256', secret).update(p).digest('hex');
   const revoked = new Set();
+  // Token = uid | version | hard-expiry (30 days) | random | issued-at.  How long it really lasts is the user's own limit
+  // (set by an admin, default 6 h) and is checked on every request, so changing the limit works at once on phones already signed in.
   globalThis.newToken_ = function (uid) {
-    const p = uid + '|' + getVersion_(uid) + '|' + (Date.now() + TOKEN_TTL * 1000) + '|' + crypto.randomBytes(6).toString('hex');
+    const now = Date.now();
+    const p = uid + '|' + getVersion_(uid) + '|' + (now + 30 * 86400000) + '|' + crypto.randomBytes(6).toString('hex') + '|' + now;
     return Buffer.from(p).toString('base64url') + '.' + sign(p);
   };
   globalThis.checkToken_ = function (t) {
@@ -40,8 +43,10 @@ function makeApp(store, env) {
     const good = sign(p);
     if (s.length !== good.length || !crypto.timingSafeEqual(Buffer.from(s), Buffer.from(good))) return '';
     if (revoked.has(t)) return '';
-    const [uid, ver, exp] = p.split('|');
-    return (Number(exp) > Date.now() && ver === getVersion_(uid)) ? uid : '';
+    const [uid, ver, exp, , iss] = p.split('|');
+    const issued = Number(iss) || (Number(exp) - TOKEN_TTL * 1000);          // tokens made before this update carried the old 6 h expiry
+    let limit = TOKEN_TTL * 1000; try { limit = globalThis.sessLimitMs_(uid); } catch (e) {}
+    return (Number(exp) > Date.now() && Date.now() < issued + limit && ver === getVersion_(uid)) ? uid : '';
   };
 
   // ---------- Google Calendar (per-user OAuth; refresh tokens encrypted in the sheet) ----------
@@ -304,6 +309,7 @@ function makeApp(store, env) {
   // ---------- Fast chat ticks: sent / delivered / seen (runs OUTSIDE the sheet queue, like call polling) ----------
   // The open chat asks this every ~1.5 s: new messages + "has the other person got / seen my messages?".
   // "Seen" is kept in memory the moment the other person's screen shows the chat, so the blue tick never waits behind slow sheet saves.
+  const rtTyp = new Map();                               // 'typer>peer' -> last time the typer pressed a key
   const rtRead = new Map();                              // 'reader>peer' -> time of the newest message the reader has seen
   function chatLiveRoute(req) {
     const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
@@ -319,7 +325,16 @@ function makeApp(store, env) {
     if (!after && out.length > 300) out = out.slice(-300);
     const peerRead = Math.max(Number(globalThis.readPtr_(to)[uid] || 0), rtRead.get(to + '>' + uid) || 0);
     const ms = globalThis.seenMap_([to])[to] || 0;
-    return { ok: true, messages: out.map(r => ({ id: r.id, t: r.t, mine: r.from === uid, text: r.text })), peerRead, peerSeen: ms, now, presence: ms ? globalThis.presence_(ms, now) : null };
+    return { ok: true, messages: out.map(r => ({ id: r.id, t: r.t, mine: r.from === uid, text: r.text })), peerRead, peerSeen: ms, now, presence: ms ? globalThis.presence_(ms, now) : null,
+      typing: now - (rtTyp.get(to + '>' + uid) || 0) < 5000 };
+  }
+  function chatTypingRoute(req) {                        // "I am typing" signal from the open chat (kept in memory only)
+    const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    const to = String(req.with || '').trim();
+    if (!to || to === uid || globalThis.isChatGroupId_(to) || !globalThis.chatCanSee_(uid, to)) return { ok: true };
+    rtTyp.set(uid + '>' + to, Date.now());
+    if (rtTyp.size > 2000) { const t = Date.now(); for (const [k, v] of rtTyp) if (t - v > 60000) rtTyp.delete(k); }
+    return { ok: true };
   }
 
   // ---------- Ludo (2 to 4 players, kept in memory, the server is the referee: dice + rules run here) ----------
@@ -967,8 +982,8 @@ function makeApp(store, env) {
   const errOut = err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' });
   const fastLive = body => {                           // chat ticks never wait behind slow sheet saves
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
-    if (!r || r.action !== 'chatLive') return null;
-    return Promise.resolve().then(() => chatLiveRoute(r)).catch(errOut);
+    if (!r || (r.action !== 'chatLive' && r.action !== 'chatTyping')) return null;
+    return Promise.resolve().then(() => r.action === 'chatTyping' ? chatTypingRoute(r) : chatLiveRoute(r)).catch(errOut);
   };
   const handle = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
