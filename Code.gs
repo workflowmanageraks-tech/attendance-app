@@ -183,7 +183,7 @@ var NEED = {
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
-var ADMIN_ONLY = { saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1, driveStatus: 1, driveAuthUrl: 1, driveDisconnect: 1 };
+var ADMIN_ONLY = { setMySession: 1, saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1, driveStatus: 1, driveAuthUrl: 1, driveDisconnect: 1 };
 // Admins, and any user the admin ticked "Can add new users" for. Such a user only ever manages the users HE added.
 var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1 };
 
@@ -321,6 +321,7 @@ function route_(req) {
       case 'deleteTtCat':       out = deleteTtCat_(req); break;
       case 'listUsers':         return listUsers_();
       case 'saveUser':          out = saveUser_(req); break;
+      case 'setMySession':      out = setMySession_(req); break;
       case 'setAvatar':         out = setAvatar_(req); break;
       case 'deleteUser':        out = deleteUser_(req); break;
       case 'kickUser':          out = kickUser_(req); break;
@@ -517,6 +518,7 @@ function meOf_(values) {
     perms: CTX.viewing ? fullPerms_() : CTX.perms,
     actLog: CTX.role === 'admin' || actUsersOn_(), actUsers: actUsersOn_(),
     viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName, group: CTX.group ? groupInfo_(CTX.group) : null,
+    sessHours: sessHours_(CTX.uid),
     payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), serverNow: Date.now() };
 }
 
@@ -831,6 +833,8 @@ function sessHours_(uid) {
   return v > 0 ? v : 0;
 }
 function sessLimitMs_(uid) { var h = sessHours_(uid); return (h > 0 ? h * 3600 : TOKEN_TTL) * 1000; }
+// an admin sets how long HE stays signed in (every phone he is logged in on)
+function setMySession_(req) { setSessHours_(CTX.uid || 'ADMIN', req.hours); return { ok: true, hours: sessHours_(CTX.uid || 'ADMIN') }; }
 function setSessHours_(uid, h) {
   h = Number(h) || 0; if (h < 0 || h > 720) h = 0;           // 720 h = 30 days is the most
   var p = PropertiesService.getScriptProperties();

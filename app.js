@@ -443,7 +443,7 @@ function applyRO(v){
   if (!can('pw')) kill('[onclick*="pwForm"],[onclick*="pwDel"]');
   if (!can('tt')){ kill('[onclick*="ttCats"],[onclick*="ttClear"],[onclick*="ttCopyPrev"]'); v.querySelectorAll('[data-tt]').forEach(e => { e.disabled = true; }); }
   if (!can('link')) kill('[onclick*="linkForm"],[onclick*="linkDel"]');
-  if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"],[onclick*="licFieldsEdit"]');
+  if (!can('lic')) kill('[onclick*="licForm"],[onclick*="licDel"],[onclick*="licFieldsEdit"],[onclick*="licGroups"]');
   if (!can('vcs')){ kill('[onclick*="vcsForm"],[onclick*="vcsUpdate"],[onclick*="vcsReopen"]'); v.querySelectorAll('[data-vcs]').forEach(e => { e.disabled = true; }); }
   if (!can('rack')) kill('[onclick*="rackFieldsEdit"],[onclick*="rackRowsEdit"]');
   if (!can('work')){
@@ -2850,6 +2850,7 @@ function licMore(x){
 function filteredLic(){
   const q = (S.lic.q || '').trim().toLowerCase();
   return [...(S.d.lic || [])]
+    .filter(x => { const g = S.lic.g || ''; return !g || (g === 'none' ? !x.group : x.group === g); })
     .filter(x => !q || [x.name, x.policyNo, x.policyName, x.nominee, x.phone, ...Object.values(x.extra || {})].join(' ').toLowerCase().includes(q))
     .sort((a, b) => (a.endDate || '9999').localeCompare(b.endDate || '9999'));     // soonest-ending first
 }
@@ -2869,7 +2870,7 @@ function vLic(){
   });
   const remind = all.map(x => ({ x, rn: licRenewInfo(x) })).filter(o => o.rn.due && o.rn.days <= 30).sort((a, b) => a.rn.days - b.rn.days);
   const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
-      <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b>${licStatusTag(x.endDate)}</td>
+      <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b>${licStatusTag(x.endDate)}${licGroupTag(x)}</td>
       <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
       <td data-l="Policy Name" style="white-space:normal;word-break:break-word;min-width:120px">${esc(x.policyName) || '<span class="dim">—</span>'}</td>
       <td data-l="Premium Amount" class="n">${licAmt(x.amount)}</td>
@@ -2904,7 +2905,7 @@ function vLic(){
       <span style="flex:1"></span>
       <button class="btn soft" onclick="licExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="licExport('pdf')">⬇ PDF</button>
       <button class="btn ghost" onclick="licFieldsEdit()" title="Add or rename your own extra details for every policy">⚙ Extra fields</button>
-      <button class="btn" onclick="licForm()">＋ Add policy</button></div></div>
+      <button class="btn" onclick="licForm()">＋ Add policy</button></div>${licChips()}</div>
     <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
       ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Total Policy Amount</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
@@ -2938,6 +2939,77 @@ async function licCopy(id){
   if (!txt) return toast('Nothing to copy', true);
   (await copyText(txt)) ? toast('Customer data copied') : toast('Could not copy — please copy it manually', true);
 }
+/* ---------- LIC policy groups (Family, Friends …) ---------- */
+const licGName = id => ((S.d.licGroups || []).find(g => g.id === id) || {}).name || '';
+function licGroupTag(x){ const n = x.group && licGName(x.group); return n ? ` <span class="tag" style="background:rgba(99,102,241,.14);color:#6366f1">👪 ${esc(n)}</span>` : ''; }
+function licChips(){
+  const gs = S.d.licGroups || [], all = S.d.lic || [], cur = S.lic.g || '';
+  if (!gs.length && !can('lic')) return '';
+  const chip = (k, label, n) => `<button type="button" class="btn ${cur === k ? '' : 'soft'} sm" onclick="licGroupSel('${esc(k)}')">${esc(label)} <span style="opacity:.7">${n}</span></button>`;
+  const ungrouped = all.filter(x => !x.group).length;
+  return `<div class="actions" style="margin-top:12px;flex-wrap:wrap;gap:6px">${chip('', 'All', all.length)}${gs.map(g => chip(g.id, '👪 ' + g.name, all.filter(x => x.group === g.id).length)).join('')}${gs.length ? chip('none', 'No group', ungrouped) : ''}
+    <button type="button" class="btn ghost sm" onclick="licGroups()" title="Add, rename or delete groups">⚙ Groups</button></div>`;
+}
+function licGroupSel(k){ S.lic.g = k; render(); }
+function licAsk(title, val, ok){
+  return new Promise(res => {
+    const w = openModal(`<h3>${esc(title)}</h3><form id="laf"><div class="field"><input class="input" name="v" maxlength="60" value="${esc(val || '')}" autocomplete="off"></div><div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${esc(ok || 'Save')}</button></div></form>`);
+    const inp = w.querySelector('input'); setTimeout(() => { try{ inp.focus(); inp.select(); }catch(e){} }, 60);
+    w.querySelector('[data-x]').onclick = () => { w.remove(); res(null); };
+    w.querySelector('#laf').onsubmit = e => { e.preventDefault(); const v = inp.value.trim(); w.remove(); res(v || null); };
+  });
+}
+function licGroups(){
+  if (!can('lic')) return deny();
+  const gs = S.d.licGroups || [], cnt = id => (S.d.lic || []).filter(x => x.group === id).length;
+  const w = openModal(`<h3>👪 Policy groups</h3><p class="sub">Make groups like “Family” or “Friends”, then put policies in them. Deleting a group does not delete its policies.</p>
+    <form id="lgf" style="display:flex;gap:8px;margin-bottom:10px"><input class="input" name="name" maxlength="60" placeholder="New group name" autocomplete="off" style="flex:1"><button class="btn" type="submit">＋ Add</button></form>
+    ${gs.length ? gs.map(g => `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:9px 0;border-top:1px solid var(--line)" data-g="${esc(g.id)}"><div style="flex:1;min-width:120px"><b>${esc(g.name)}</b><div class="muted" style="font-size:calc(12px*var(--fs))">${cnt(g.id)} polic${cnt(g.id) === 1 ? 'y' : 'ies'}</div></div>
+      <button class="btn soft sm" data-pol>＋ Policies</button><button class="btn ghost sm" data-ren aria-label="Rename">✎</button><button class="btn ghost sm" data-del aria-label="Delete">🗑</button></div>`).join('') : '<div class="empty-state">No groups yet. Type a name above and tap Add.</div>'}
+    <div class="foot"><button type="button" class="btn ghost" data-x>Close</button></div>`);
+  const again = () => { w.remove(); render(); licGroups(); };
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#lgf').onsubmit = async ev => {
+    ev.preventDefault(); const name = new FormData(ev.target).get('name').trim(); if (!name) return;
+    const btn = ev.submitter; btn.disabled = true;
+    try{ const r = await api('saveLicGroup', { name }); S.d.licGroups = r.groups; again(); toast('Group added'); }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+  w.querySelectorAll('[data-g]').forEach(row => {
+    const id = row.dataset.g, g = gs.find(x => x.id === id);
+    row.querySelector('[data-pol]').onclick = () => { w.remove(); licGroupPick(id); };
+    row.querySelector('[data-ren]').onclick = async () => {
+      const n = await licAsk('Rename group', g.name, 'Save'); if (!n || n === g.name) return;
+      try{ const r = await api('saveLicGroup', { id, name:n }); S.d.licGroups = r.groups; again(); toast('Renamed'); }catch(e){ handleErr(e); }
+    };
+    row.querySelector('[data-del]').onclick = async () => {
+      if (!await confirmBox('Delete group “' + g.name + '”?', 'Its ' + cnt(id) + ' polic' + (cnt(id) === 1 ? 'y' : 'ies') + ' will stay in your list, just without a group.', 'Delete', true)) return;
+      try{ const r = await api('deleteLicGroup', { id }); S.d.licGroups = r.groups; (S.d.lic || []).forEach(x => { if (x.group === id) x.group = ''; }); if (S.lic.g === id) S.lic.g = ''; again(); toast('Group deleted'); }catch(e){ handleErr(e); }
+    };
+  });
+}
+/* tick the policies that belong in this group */
+function licGroupPick(gid){
+  const g = (S.d.licGroups || []).find(x => x.id === gid); if (!g) return licGroups();
+  const list = [...(S.d.lic || [])].sort((a, b) => (a.name || a.policyNo || '').localeCompare(b.name || b.policyNo || ''));
+  const w = openModal(`<h3>👪 ${esc(g.name)}</h3><p class="sub">Tick the policies that belong in this group.</p>
+    <input class="input" id="lgq" placeholder="Search…" autocomplete="off" style="margin-bottom:8px">
+    <form id="lgp"><div style="max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:4px 10px">${list.length ? list.map(x => `<label class="tog" data-s="${esc([x.name, x.policyNo, x.policyName].join(' ').toLowerCase())}"><input type="checkbox" value="${esc(x.id)}" ${x.group === gid ? 'checked' : ''}> ${esc(x.name || x.policyNo || 'Policy')}${x.policyNo && x.name ? ` <span class="muted">· ${esc(x.policyNo)}</span>` : ''}${x.group && x.group !== gid ? ` <span class="muted">(now in ${esc(licGName(x.group))})</span>` : ''}</label>`).join('') : '<div class="empty-state">No policies yet.</div>'}</div>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Back</button><button class="btn" type="submit">Save</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => { w.remove(); licGroups(); };
+  w.querySelector('#lgq').oninput = e => { const q = e.target.value.trim().toLowerCase(); w.querySelectorAll('label[data-s]').forEach(l => { l.style.display = !q || l.dataset.s.includes(q) ? '' : 'none'; }); };
+  w.querySelector('#lgp').onsubmit = async ev => {
+    ev.preventDefault(); const btn = ev.submitter; btn.disabled = true;
+    const on = [...w.querySelectorAll('input[type=checkbox]:checked')].map(i => i.value);
+    const off = list.filter(x => x.group === gid && !on.includes(x.id)).map(x => x.id);
+    const add = on.filter(id => (list.find(x => x.id === id) || {}).group !== gid);
+    try{
+      if (add.length) await api('setLicGroup', { ids:add, group:gid });
+      if (off.length) await api('setLicGroup', { ids:off, group:'' });
+      (S.d.lic || []).forEach(x => { if (add.includes(x.id)) x.group = gid; else if (off.includes(x.id)) x.group = ''; });
+      w.remove(); render(); toast('Group updated');
+    }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
 function licForm(id){ if (!can('lic')) return deny();
   const x = id ? S.d.lic.find(e => e.id === id) : null;
   const freqOpts = Object.keys(LIC_FREQ).map(k => `<option value="${k}" ${(x ? x.freq : '') === k ? 'selected' : ''}>${LIC_FREQ[k]}</option>`).join('');
@@ -2956,6 +3028,7 @@ function licForm(id){ if (!can('lic')) return deny();
         <div class="field"><label>Ending Date</label><input class="input" type="date" name="endDate" value="${esc(x ? x.endDate : '')}"></div>
       </div>
       <div class="field"><label>Renewal / Premium Due Date</label><input class="input" type="date" name="dueDate" value="${esc(x ? x.dueDate : '')}"></div>
+      <div class="field"><label>👪 Group <span class="muted">(e.g. Family, Friends)</span></label><select class="select" name="group"><option value="">No group</option>${(S.d.licGroups || []).map(g => `<option value="${esc(g.id)}" ${((x ? x.group : (S.lic.g && S.lic.g !== 'none' ? S.lic.g : '')) || '') === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>${(S.d.licGroups || []).length ? '' : '<div class="muted" style="font-size:calc(12px*var(--fs));margin-top:4px">No groups yet. Make one with “⚙ Groups” on the LIC page.</div>'}</div>
       ${(S.d.licFields || []).length ? `<div class="field" style="margin-top:4px"><label style="font-weight:800">📎 More details</label></div><div class="row2">${S.d.licFields.map((n, i) => `<div class="field"><label class="lf-l"><span>${esc(n)}</span><span class="lf-b"><button type="button" class="lf-btn" data-fren="${i}" title="Edit this option's name" aria-label="Edit option name">✎</button><button type="button" class="lf-btn" data-frem="${i}" title="Remove this option" aria-label="Remove option">🗑</button></span></label><input class="input" data-ex="${esc(n)}" maxlength="300" autocomplete="off" value="${esc(x && x.extra ? (x.extra[n] || '') : '')}"></div>`).join('')}</div>` : ''}
       <div class="actions" style="margin:0 0 8px"><button type="button" class="btn ghost sm" data-fadd>＋ Add new option</button> <button type="button" class="btn ghost sm" data-fields>⚙ Manage / reorder</button></div>
       <div id="licPrev" class="lic-prev"></div>
@@ -3299,6 +3372,19 @@ function vSettingsBase(){
 
   ${exportCard()}</div>`;
 }
+const SESS_OPTS = [['0','Normal (6 hours)'],['1','1 hour'],['2','2 hours'],['5','5 hours'],['12','12 hours'],['24','1 day'],['72','3 days'],['168','7 days'],['720','30 days']];
+function sessCard(){
+  const h = String((S.me && S.me.sessHours) || 0);
+  return `<div class="card"><h3>⏳ Stay signed in</h3>
+    <p class="muted" style="margin-bottom:12px">How long you stay logged in before the app asks for your password again. It works on every phone you are signed in on, straight away. (Other users’ time is set in Users &amp; access &gt; Edit user.)</p>
+    <div class="field"><select class="select" id="sessSel">${SESS_OPTS.map(o => `<option value="${o[0]}" ${h === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></div>
+    <div style="margin-top:12px"><button class="btn" type="button" onclick="sessSave()">Save</button></div></div>`;
+}
+async function sessSave(){
+  const v = Number(($('#sessSel') || {}).value) || 0;
+  try{ const r = await api('setMySession', { hours:v }); S.me.sessHours = r.hours; toast('Saved. You stay signed in for ' + (SESS_OPTS.find(o => o[0] === String(r.hours)) || SESS_OPTS[0])[1]); }
+  catch(e){ handleErr(e); }
+}
 function vSettings(){
   const dom = document.createElement('div'); dom.innerHTML = vSettingsBase();
   const grid = dom.firstElementChild;
@@ -3311,6 +3397,7 @@ function vSettings(){
   grid.insertAdjacentHTML('afterbegin', themeCard());
   grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
+  if (isAdmin()) grid.insertAdjacentHTML('beforeend', sessCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', trashCard());
@@ -3319,9 +3406,10 @@ function vSettings(){
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash']];
+const SET_MATCH = [['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash']];
 const SET_DEF = {
   photo:['🖼','Profile photo','Your picture shown in Chat'],
+  sess:['⏳','Stay signed in','How long you stay logged in'],
   security:['🔐','Login & security','Change username and password'],
   bio:['👆','Fingerprint / Face','Unlock the app with biometrics'],
   theme:['🎨','Appearance & layout','Colours, fonts, menu, dashboard look'],
@@ -3338,7 +3426,7 @@ const SET_DEF = {
   trash:['🗑️','Trash','Deleted chat messages, photos & videos']
 };
 const SET_GROUPS = [
-  ['Account & security', ['photo','security','bio']],
+  ['Account & security', ['photo','security','sess','bio']],
   ['Customize', ['theme','general']],
   ['People & access', ['emps','users','groups']],
   ['Attendance & expenses', ['status','cats']],
@@ -4328,7 +4416,14 @@ async function chatLoadUsers(){
   S.chat.loadingUsers = true;
   try{
     const r = await chatApi('chatUsers'), at = Date.now();
-    const incoming = r.unread > S.chat.unread && (S.view !== 'chat' || document.hidden) && S.chat.loaded;
+    let incoming = r.unread > S.chat.unread && (S.view !== 'chat' || document.hidden) && S.chat.loaded;
+    const seen = S.chat.popSeen = S.chat.popSeen || {}, all = (r.users || []).concat(r.groups || []);
+    if (S.chat.loaded && vcFull()){                              // in a full-screen call: show who wrote, on top of the call
+      const nu = all.filter(u => !u.lastMine && (u.lastTime || 0) > (seen[u.id] || 0)).sort((a, b) => (b.lastTime || 0) - (a.lastTime || 0))[0];
+      if (nu){ vcMsgPop(nu); chatAlert(); }
+      incoming = false;
+    }
+    all.forEach(u => { seen[u.id] = Math.max(seen[u.id] || 0, u.lastTime || 0); });
     S.chat.users = r.users.map(u => ({ ...u, at }));
     S.chat.groups = (r.groups || []).map(g => ({ ...g, at }));
     S.chat.users.concat(S.chat.groups).forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
@@ -4344,7 +4439,8 @@ async function chatLoadUsers(){
 async function chatPingNow(){
   try{
     const r = await chatApi('chatPing');
-    if (r.unread > S.chat.unread && (S.view !== 'chat' || document.hidden)){ toast('💬 New message'); chatAlert(); }
+    if (r.unread > S.chat.unread && vcFull()) chatLoadUsers();                 // in a call: the pop-up shows the sender
+    else if (r.unread > S.chat.unread && (S.view !== 'chat' || document.hidden)){ toast('💬 New message'); chatAlert(); }
     S.chat.unread = r.unread; chatBadge();
   }catch(e){ chatErr(e); }
 }
@@ -5081,6 +5177,23 @@ function vcRingStart(incoming){
 function vcRingStop(){ clearInterval(VC.ring); VC.ring = null; try { navigator.vibrate && navigator.vibrate(0); } catch {} }
 
 /* ---------- full-screen call screen ---------- */
+/* a new chat message while a call is full screen: small card at the top, so you never have to minimise the call to see who wrote */
+function vcFull(){ const el = document.getElementById('vcUI'); return !!(el && !el.classList.contains('hidden') && !el.classList.contains('vc-mini')); }
+let vcPopT = null;
+function vcMsgPop(u){
+  const el = document.getElementById('vcUI'); if (!el || !u) return;
+  if (!document.getElementById('vcPopCss')){
+    const st = document.createElement('style'); st.id = 'vcPopCss';
+    st.textContent = '.vc-pop{position:absolute;left:50%;top:calc(10px + env(safe-area-inset-top));width:calc(100% - 140px);max-width:380px;min-width:190px;transform:translate(-50%,-160%);transition:transform .3s;z-index:7;display:flex;align-items:center;gap:10px;padding:8px 12px 8px 8px;border-radius:16px;background:rgba(15,23,42,.94);box-shadow:0 8px 28px rgba(0,0,0,.5);color:#fff;cursor:pointer;text-align:left}.vc-pop.show{transform:translate(-50%,0)}.vc-pop .pa{flex:none;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;overflow:hidden}.vc-pop .pa img{width:100%;height:100%;object-fit:cover}.vc-pop .pt{min-width:0;display:flex;flex-direction:column}.vc-pop b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.vc-pop span{font-size:12.5px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}';
+    document.head.appendChild(st);
+  }
+  let p = el.querySelector('.vc-pop'); if (!p){ p = document.createElement('div'); p.className = 'vc-pop'; el.appendChild(p); }
+  p.innerHTML = `<div class="pa" style="background:${chColor(u.id)}">${chInit(u)}</div><div class="pt"><b>💬 ${esc(u.name || u.username)}${u.isGroup && u.lastFrom ? ' · ' + esc(u.lastFrom) : ''}</b><span>${esc(u.lastText || 'New message')}</span></div>`;
+  p.onpointerdown = e => e.stopPropagation();
+  p.onclick = () => { p.classList.remove('show'); vcMini(true); try{ if (S.view !== 'chat') go('chat'); if (chatPeer(u.id)) chatOpen(u.id); }catch(e){} };
+  void p.offsetWidth; p.classList.add('show');
+  clearTimeout(vcPopT); vcPopT = setTimeout(() => p.classList.remove('show'), 5500);
+}
 function vcRoot(){
   let el = document.getElementById('vcUI'); if (el) return el;
   el = document.createElement('div'); el.id = 'vcUI'; el.className = 'vc hidden';
