@@ -1444,8 +1444,72 @@ function photoCard(){
   return `<div class="card" id="phCard"><h3>🖼 Profile photo</h3>
     <p class="muted" style="margin-bottom:12px">This picture is shown next to your name in Chat, to the people who can see you.</p>
     <div class="ph-row"><div class="ch-av ph-big" style="background:${chColor(id || 'x')}">${src ? `<img class="ch-img" alt="" src="${esc(src)}">` : ''}${esc(nm.charAt(0).toUpperCase())}</div>
-      <div class="ph-btns"><label class="btn" for="phFile">📷 ${src ? 'Change photo' : 'Choose photo'}</label><input type="file" id="phFile" accept="image/*" hidden onchange="photoPick(this)">${src ? '<button class="btn ghost" type="button" onclick="photoRemove()">Remove</button>' : ''}<button class="btn ghost" type="button" onclick="photoPrivacy()">🔒 Who can see it</button></div></div></div>`;
+      <div class="ph-btns"><label class="btn" for="phFile">📷 ${src ? 'Change photo' : 'Choose photo'}</label><input type="file" id="phFile" accept="image/*" hidden onchange="photoPick(this)">${src ? '<button class="btn ghost" type="button" onclick="photoRemove()">Remove</button>' : ''}<button class="btn ghost" type="button" onclick="photoPrivacy()">🔒 Who can see it</button></div></div>${locCard()}</div>`;
 }
+
+/* ---------- my location (time zone) — other people see my local time under my name in chat ---------- */
+const KS_LOC = [
+  ['India','Asia/Kolkata','Delhi / Mumbai'],['Indonesia','Asia/Jakarta','Jakarta (WIB)'],['Indonesia','Asia/Makassar','Bali (WITA)'],['Indonesia','Asia/Jayapura','Papua (WIT)'],
+  ['Pakistan','Asia/Karachi',''],['Bangladesh','Asia/Dhaka',''],['Nepal','Asia/Kathmandu',''],['Sri Lanka','Asia/Colombo',''],['Bhutan','Asia/Thimphu',''],['Maldives','Indian/Maldives',''],
+  ['Afghanistan','Asia/Kabul',''],['Iran','Asia/Tehran',''],['Iraq','Asia/Baghdad',''],['Saudi Arabia','Asia/Riyadh',''],['United Arab Emirates','Asia/Dubai','Dubai'],['Qatar','Asia/Qatar',''],['Kuwait','Asia/Kuwait',''],['Oman','Asia/Muscat',''],['Bahrain','Asia/Bahrain',''],
+  ['Israel','Asia/Jerusalem',''],['Jordan','Asia/Amman',''],['Lebanon','Asia/Beirut',''],['Turkey','Europe/Istanbul',''],
+  ['Thailand','Asia/Bangkok',''],['Vietnam','Asia/Ho_Chi_Minh',''],['Cambodia','Asia/Phnom_Penh',''],['Laos','Asia/Vientiane',''],['Myanmar','Asia/Yangon',''],['Malaysia','Asia/Kuala_Lumpur',''],['Singapore','Asia/Singapore',''],['Philippines','Asia/Manila',''],['Brunei','Asia/Brunei',''],
+  ['China','Asia/Shanghai',''],['Hong Kong','Asia/Hong_Kong',''],['Taiwan','Asia/Taipei',''],['Japan','Asia/Tokyo',''],['South Korea','Asia/Seoul',''],['Mongolia','Asia/Ulaanbaatar',''],
+  ['Kazakhstan','Asia/Almaty',''],['Uzbekistan','Asia/Tashkent',''],
+  ['Australia','Australia/Sydney','Sydney'],['Australia','Australia/Perth','Perth'],['New Zealand','Pacific/Auckland',''],['Fiji','Pacific/Fiji',''],
+  ['United Kingdom','Europe/London',''],['Ireland','Europe/Dublin',''],['Portugal','Europe/Lisbon',''],['Spain','Europe/Madrid',''],['France','Europe/Paris',''],['Germany','Europe/Berlin',''],['Italy','Europe/Rome',''],['Netherlands','Europe/Amsterdam',''],['Belgium','Europe/Brussels',''],['Switzerland','Europe/Zurich',''],['Austria','Europe/Vienna',''],['Sweden','Europe/Stockholm',''],['Norway','Europe/Oslo',''],['Denmark','Europe/Copenhagen',''],['Finland','Europe/Helsinki',''],['Poland','Europe/Warsaw',''],['Czechia','Europe/Prague',''],['Hungary','Europe/Budapest',''],['Romania','Europe/Bucharest',''],['Greece','Europe/Athens',''],['Ukraine','Europe/Kyiv',''],['Russia','Europe/Moscow','Moscow'],
+  ['Egypt','Africa/Cairo',''],['Morocco','Africa/Casablanca',''],['Algeria','Africa/Algiers',''],['Nigeria','Africa/Lagos',''],['Ghana','Africa/Accra',''],['Kenya','Africa/Nairobi',''],['Ethiopia','Africa/Addis_Ababa',''],['Tanzania','Africa/Dar_es_Salaam',''],['Uganda','Africa/Kampala',''],['South Africa','Africa/Johannesburg',''],['Mauritius','Indian/Mauritius',''],
+  ['United States','America/New_York','New York'],['United States','America/Chicago','Chicago'],['United States','America/Denver','Denver'],['United States','America/Los_Angeles','Los Angeles'],['United States','America/Anchorage','Alaska'],['United States','Pacific/Honolulu','Hawaii'],
+  ['Canada','America/Toronto','Toronto'],['Canada','America/Vancouver','Vancouver'],['Mexico','America/Mexico_City',''],['Brazil','America/Sao_Paulo','São Paulo'],['Argentina','America/Argentina/Buenos_Aires',''],['Chile','America/Santiago',''],['Colombia','America/Bogota',''],['Peru','America/Lima',''],['Venezuela','America/Caracas','']
+];
+function locMine(){ const m = S.me && S.me.id; return S.myLoc && S.myLoc.uid === m ? S.myLoc : null; }
+function locTimeStr(tz){
+  try{
+    const now = new Date(), t = new Intl.DateTimeFormat(undefined, { timeZone:tz, hour:'numeric', minute:'2-digit' }).format(now);
+    const dk = z => new Intl.DateTimeFormat('en-CA', { timeZone:z, year:'numeric', month:'2-digit', day:'2-digit' }).format(now);
+    const a = dk(tz), b = dk(Intl.DateTimeFormat().resolvedOptions().timeZone), d = a === b ? '' : (a > b ? ' (tomorrow)' : ' (yesterday)');
+    return t + d;
+  }catch(e){ return ''; }
+}
+function locOptions(sel){
+  const seen = new Set(KS_LOC.map(x => x[1]));
+  let h = '<option value="">— Not set —</option>' + KS_LOC.map(x => `<option value="${esc(x[1])}" data-l="${esc(x[0])}" ${sel === x[1] ? 'selected' : ''}>${esc(x[0] + (x[2] ? ' · ' + x[2] : ''))}</option>`).join('');
+  let all = []; try{ all = (Intl.supportedValuesOf && Intl.supportedValuesOf('timeZone')) || []; }catch(e){}
+  const rest = all.filter(z => !seen.has(z) && /^[A-Za-z]+(\/[A-Za-z0-9_+\-]+){0,2}$/.test(z) && z.length <= 40);
+  if (sel && !seen.has(sel) && !rest.includes(sel)) rest.unshift(sel);
+  if (rest.length) h += '<optgroup label="Other time zones">' + rest.map(z => `<option value="${esc(z)}" data-l="${esc(z.split('/').pop().replace(/_/g, ' '))}" ${sel === z ? 'selected' : ''}>${esc(z.replace(/_/g, ' '))}</option>`).join('') + '</optgroup>';
+  return h;
+}
+function locCard(){
+  const m = locMine();
+  if (!m && S.me && S.me.id && !S._locLoading){
+    S._locLoading = 1;
+    api('getMyLocation').then(r => { S.myLoc = { uid:S.me.id, tz:r.tz || '', loc:r.loc || '' }; }).catch(() => { S.myLoc = { uid:S.me.id, tz:'', loc:'' }; })
+      .finally(() => { S._locLoading = 0; if (S.view === 'settings') render(); });
+  }
+  const tz = m ? m.tz : '';
+  return `<div class="loc-box"><div class="loc-h">📍 My location</div>
+    <p class="muted" style="margin:4px 0 10px">Choose the place you live in. The people you chat with will see your local time under your name, and you will see theirs.</p>
+    <select class="input" id="locSel" onchange="locSave(this)" ${m ? '' : 'disabled'}>${locOptions(tz)}</select>
+    <div class="loc-now muted" id="locNow">${tz ? '🕐 Your time there now: ' + esc(locTimeStr(tz)) : (m ? 'Not set — others will not see your time.' : 'Loading…')}</div></div>`;
+}
+async function locSave(sel){
+  const o = sel.options[sel.selectedIndex], tz = sel.value, loc = tz ? (o.dataset.l || '') : '';
+  sel.disabled = true;
+  try{
+    const r = await api('setMyLocation', { tz, loc });
+    S.myLoc = { uid:S.me.id, tz:r.tz || '', loc:r.loc || '' };
+    const n = document.getElementById('locNow'); if (n) n.textContent = r.tz ? '🕐 Your time there now: ' + locTimeStr(r.tz) : 'Not set — others will not see your time.';
+    toast(r.tz ? 'Location saved · ' + (r.loc || r.tz) : 'Location removed');
+  }catch(e){ handleErr(e); const m = locMine(); sel.value = m ? m.tz : ''; }
+  finally{ sel.disabled = false; }
+}
+/* the other person's local time, e.g. "🕐 4:15 PM · Indonesia" */
+function chatLocLine(u){
+  if (!u || u.isGroup || !u.tz) return '';
+  const t = locTimeStr(u.tz); return t ? '🕐 ' + t + (u.loc ? ' · ' + u.loc : '') : '';
+}
+setInterval(() => { try{ if (S.view === 'chat' && S.chat && S.chat.with) chatHeader(); }catch(e){} }, 20000);
 async function photoPick(inp){
   const f = inp.files && inp.files[0]; inp.value = ''; if (!f) return;
   if (!/^image\//.test(f.type)) return toast('Please choose a picture', true);
@@ -4158,6 +4222,7 @@ function chatProfileShow(u, full){
       <div class="pf-pic" id="pfPic" style="background:${chColor(u.id)}">${pic ? `<img id="pfImg" alt="" src="${esc(pic)}">` : `<span>${esc(nm.trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="pf-name">${esc(nm)}</div>
       <div class="ch-stat ${st.cls}" style="text-align:center">${esc(st.txt)}</div>
+      ${chatLocLine(u) ? `<div class="ch-tm" style="text-align:center">${esc(chatLocLine(u))}</div>` : ''}
       <div class="pf-acts">
         <button type="button" data-a="msg"><b>💬</b><span>Message</span></button>
         <button type="button" data-a="audio"><b>📞</b><span>Call</span></button>
@@ -4396,7 +4461,7 @@ function chatRenderPane(){
   pane.innerHTML = `<div class="ch-head">
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
       <div class="ch-av pf-hit" id="chHAv" onclick="chatProfile()" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
-      <div class="ch-info pf-hit" onclick="chatProfile()"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div></div>
+      <div class="ch-info pf-hit" onclick="chatProfile()"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div><div class="ch-tm" id="chHTime"></div></div>
       <div class="ch-calls"><button class="ch-cbtn" id="chMore" onclick="chatMoreMenu(event)" aria-label="More options" aria-haspopup="true">⋮</button></div>
     </div>
     <div class="ch-sel" id="chSel" style="display:none"></div>
@@ -4415,6 +4480,7 @@ function chatRenderPane(){
 function chatHeader(){
   const u = chatPeer(S.chat.with); if (!u) return;
   const st = chatStatus(u), t = $('#chHStat'); if (!t) return;
+  const tmEl = $('#chHTime'); if (tmEl){ const ln = chatLocLine(u); tmEl.textContent = ln; tmEl.style.display = ln ? '' : 'none'; }
   const typ = !u.isGroup && S.chat.typ && S.chat.typ[u.id] > Date.now();
   t.className = 'ch-stat ' + (typ ? 'on' : st.cls); t.textContent = typ ? 'typing…' : st.txt; t.style.fontStyle = typ ? 'italic' : '';
   if (u.isGroup){ $('#chHDot').style.display = 'none'; $('#chHAv .dot').style.display = 'none'; return; }
@@ -5398,7 +5464,7 @@ function chatAlert(){
   document.addEventListener('pointerdown', ask, true);
 })();
 const VC = { timer:null, polling:false, busy:false, cid:null, pc:null, local:null, role:'', kind:'audio', peer:null, incoming:null,
-  started:0, tick:null, ring:null, ice:null, muted:false, camOff:false, ending:false, lost:null, answered:false };
+  started:0, tick:null, ring:null, ice:null, muted:false, camOff:false, ending:false, lost:null, answered:false, facing:'user', flipping:false };
 let vcActx = null;
 function vcUnlock(){ try { vcActx = vcActx || new (window.AudioContext || window.webkitAudioContext)(); if (vcActx.state === 'suspended') vcActx.resume(); } catch {} }
 ['pointerdown', 'touchend', 'keydown'].forEach(ev => document.addEventListener(ev, vcUnlock, { passive:true }));
@@ -5516,7 +5582,7 @@ function vcRoot(){
   el.innerHTML = `<video id="vcRemote" class="vc-remote" autoplay playsinline></video>
     <video id="vcLocal" class="vc-lsrc" autoplay playsinline muted></video><canvas id="vcLocalCv" class="vc-local hidden" width="208" height="296"></canvas>
     <div class="vc-top"><div class="vc-av" id="vcAv"></div><div class="vc-name" id="vcName"></div><div class="vc-stat" id="vcStat"></div></div>
-    <button class="vc-minbtn" id="vcMin" type="button" aria-label="Back to chat" onclick="vcMini(true)">←</button>
+    <button class="vc-minbtn" id="vcMin" type="button" aria-label="Back to chat" onclick="vcMini(true)"><svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 5 8 12 15 19"/></svg></button>
     <div class="vc-bar" id="vcBar"></div>`;
   document.body.appendChild(el);
   let dr = null;                                              // small window: drag it anywhere, tap it to open the call full screen again
@@ -5541,22 +5607,34 @@ function vcOpen(name, id, stat){
   const el = vcRoot(); el.classList.remove('hidden', 'vc-live', 'vc-mini', 'vc-hide'); el.classList.toggle('vc-audio', VC.kind !== 'video');
   clearTimeout(vcHideT); el.style.left = el.style.top = el.style.right = el.style.bottom = '';
   document.getElementById('vcName').textContent = name || '';
-  const av = document.getElementById('vcAv'); av.textContent = (name || '?').trim().charAt(0).toUpperCase(); av.style.background = chColor(id || name);
+  const av = document.getElementById('vcAv'), pic = id ? avSrc(id) : '';
+  av.textContent = (name || '?').trim().charAt(0).toUpperCase(); av.style.background = chColor(id || name);
+  if (pic){ av.innerHTML = ''; const im = document.createElement('img'); im.alt = ''; im.src = pic; av.appendChild(im); el.style.setProperty('--vc-bg', 'url("' + pic + '")'); }
+  else el.style.removeProperty('--vc-bg');
   vcStat(stat || '');
   document.body.classList.add('vc-open');
 }
 const vcStat = t => { const e = document.getElementById('vcStat'); if (e) e.textContent = t; };
+const VC_IC = {
+  mic:'<svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>',
+  micoff:'<svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="3" y1="3" x2="21" y2="21"/></svg>',
+  cam:'<svg viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>',
+  camoff:'<svg viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/><line x1="3" y1="3" x2="21" y2="21"/></svg>',
+  flip:'<svg viewBox="0 0 24 24"><path d="M20 7h-3.2l-1.6-2H8.8L7.2 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M9 13a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2"/><polyline points="14.3 9.6 14.3 11.3 12.6 11.3"/><polyline points="9.7 16.4 9.7 14.7 11.4 14.7"/></svg>',
+  phone:'<svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>'
+};
 function vcBar(mode){
-  const b = (cls, ico, label, fn) => `<button class="vc-btn ${cls}" onclick="${fn}" aria-label="${label}"><span>${ico}</span><small>${label}</small></button>`;
+  const b = (cls, ico, label, fn) => `<button class="vc-btn ${cls}" onclick="${fn}" aria-label="${label}" title="${label}"><span>${ico}</span><small>${label}</small></button>`;
   let h = '';
-  if (mode === 'incoming') h = b('red', '✖', 'Decline', 'vcDecline()') + b('green', '📞', 'Accept', 'vcAccept()');
+  if (mode === 'incoming') h = b('red end', VC_IC.phone, 'Decline', 'vcDecline()') + b('green', VC_IC.phone, 'Accept', 'vcAccept()');
   else {
-    h = b('dark' + (VC.muted ? ' on' : ''), VC.muted ? '🔇' : '🎤', VC.muted ? 'Unmute' : 'Mute', 'vcMute()');
-    if (VC.kind === 'video') h += b('dark' + (VC.camOff ? ' on' : ''), VC.camOff ? '🚫' : '📷', VC.camOff ? 'Camera on' : 'Camera off', 'vcCam()');
+    if (VC.kind === 'video') h += b('dark', VC_IC.flip, VC.facing === 'environment' ? 'Front camera' : 'Back camera', 'vcFlip()');
+    if (VC.kind === 'video') h += b('dark' + (VC.camOff ? ' on' : ''), VC.camOff ? VC_IC.camoff : VC_IC.cam, VC.camOff ? 'Camera on' : 'Camera off', 'vcCam()');
+    h += b('dark' + (VC.muted ? ' on' : ''), VC.muted ? VC_IC.micoff : VC_IC.mic, VC.muted ? 'Unmute' : 'Mute', 'vcMute()');
     if (window.ksFx && ksFx.on()) h += b('dark', '😍', 'React', 'ksFx.tray()');
-    h += b('red', '✖', 'End', 'vcHangup()');
+    h += b('red end', VC_IC.phone, 'End', 'vcHangup()');
   }
-  document.getElementById('vcBar').innerHTML = h;
+  const bar = document.getElementById('vcBar'); bar.className = 'vc-bar ' + (mode === 'incoming' ? 'inc' : 'call'); bar.innerHTML = h;
 }
 function vcClose(){
   const el = document.getElementById('vcUI');
@@ -5599,14 +5677,22 @@ async function vcMedia(kind){
   else {
     /* Some phones switch their camera into a low-quality mode (wrong, bluish colours) when a small 640x480 picture is forced.
        So ask for a normal HD picture first and only fall back to simpler requests if the phone refuses. */
-    const tries = [{ facingMode:'user', width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:30, max:30 } }, { facingMode:'user' }, true];
+    const fm = VC.facing || 'user';
+    const tries = [{ facingMode:fm, width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:30, max:30 } }, { facingMode:fm }, true];
     let err = null;
     for (const v of tries){
       try{ VC.local = await navigator.mediaDevices.getUserMedia({ audio, video:v }); err = null; break; }
       catch(e){ err = e; if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'NotReadableError')) break; }
     }
     if (!VC.local) throw err || new Error('Could not start the camera.');
-    const vt = VC.local.getVideoTracks()[0];                     // switch the camera's own automatic colour balance / exposure / focus on
+    await vcTune(VC.local.getVideoTracks()[0]);
+  }
+  const lv = document.getElementById('vcLocal'), cv = document.getElementById('vcLocalCv');
+  if (kind === 'video'){ lv.srcObject = VC.local; lv.play && lv.play().catch(() => {}); cv.classList.remove('hidden'); vcLocalDraw(); }
+  else cv.classList.add('hidden');
+}
+async function vcTune(vt){            // switch the camera's own automatic colour balance / exposure / focus on
+  {
     if (vt && vt.getCapabilities){
       try{
         const cap = vt.getCapabilities() || {}, adv = {};
@@ -5617,9 +5703,39 @@ async function vcMedia(kind){
       }catch(e){}
     }
   }
-  const lv = document.getElementById('vcLocal'), cv = document.getElementById('vcLocalCv');
-  if (kind === 'video'){ lv.srcObject = VC.local; lv.play && lv.play().catch(() => {}); cv.classList.remove('hidden'); vcLocalDraw(); }
-  else cv.classList.add('hidden');
+}
+/* Switch between the front and the back camera during a video call (the other person keeps seeing the call without any break). */
+async function vcFlip(){
+  if (VC.kind !== 'video' || !VC.local || VC.flipping) return;
+  VC.flipping = true;
+  const cur = VC.facing || 'user', next = cur === 'user' ? 'environment' : 'user', old = VC.local.getVideoTracks()[0];
+  const get = async f => {
+    const tries = [{ facingMode:{ exact:f }, width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:30, max:30 } }, { facingMode:{ exact:f } }, { facingMode:{ ideal:f } }];
+    let err = null;
+    for (const v of tries){ try{ return await navigator.mediaDevices.getUserMedia({ audio:false, video:v }); }catch(e){ err = e; } }
+    throw err || new Error('Camera not available');
+  };
+  try{
+    if (old) old.stop();                                   // most phones cannot open two cameras at the same time
+    let ns = null, ok = true;
+    try{ ns = await get(next); }catch(e){ ok = false; }
+    if (ns){                                               // a phone with only one camera may silently give the same one again
+      const f = (ns.getVideoTracks()[0].getSettings() || {}).facingMode;
+      if (f && f !== next){ ok = false; ns.getTracks().forEach(t => t.stop()); ns = null; }
+    }
+    if (!ns) ns = await get(cur);                          // go back to the camera that was working
+    const nt = ns.getVideoTracks()[0];
+    nt.enabled = !VC.camOff;
+    await vcTune(nt);
+    const snd = VC.pc && VC.pc.getSenders().find(x => x.track && x.track.kind === 'video');
+    if (snd) await snd.replaceTrack(nt);
+    if (old) VC.local.removeTrack(old);
+    VC.local.addTrack(nt);
+    if (ok) VC.facing = next;
+    const lv = document.getElementById('vcLocal'); if (lv){ lv.srcObject = null; lv.srcObject = VC.local; lv.play && lv.play().catch(() => {}); }
+    if (!ok) toast(next === 'environment' ? 'Back camera not found on this phone' : 'Could not switch the camera', true);
+  }catch(e){ toast('Could not switch the camera', true); }
+  finally{ VC.flipping = false; vcBar('call'); vcPoke(); }
 }
 /* My own small picture is painted on a canvas (not shown as a <video>): on some Android phones a mirrored, rounded <video> is drawn with red and blue swapped
    (faces look blue). A canvas always shows the true colours. Double-tap the small picture to swap red/blue by hand if a phone still shows the wrong colours. */
@@ -5634,7 +5750,7 @@ function vcLocalDraw(){
     if (ts - last < 33 || document.hidden || lv.readyState < 2 || !lv.videoWidth) return;
     last = ts;
     const cw = cv.width, ch = cv.height, vw = lv.videoWidth, vh = lv.videoHeight, s = Math.max(cw / vw, ch / vh), sw = cw / s, sh = ch / s;
-    ctx.save(); ctx.translate(cw, 0); ctx.scale(-1, 1); ctx.drawImage(lv, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch); ctx.restore();
+    ctx.save(); if (VC.facing !== 'environment'){ ctx.translate(cw, 0); ctx.scale(-1, 1); } ctx.drawImage(lv, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch); ctx.restore();
     if (vcSwap()){ const im = ctx.getImageData(0, 0, cw, ch), d = im.data; for (let i = 0; i < d.length; i += 4){ const r = d[i]; d[i] = d[i + 2]; d[i + 2] = r; } ctx.putImageData(im, 0, 0); }
   };
   VC.lraf = requestAnimationFrame(step);
@@ -5684,7 +5800,7 @@ function vcCleanup(){
   try { VC.local && VC.local.getTracks().forEach(t => t.stop()); } catch {}
   ['vcRemote', 'vcLocal'].forEach(id => { const v = document.getElementById(id); if (v){ v.srcObject = null; } });
   const lcv = document.getElementById('vcLocalCv'); if (lcv) lcv.classList.add('hidden');
-  Object.assign(VC, { busy:false, cid:null, pc:null, local:null, role:'', peer:null, incoming:null, started:0, tick:null, muted:false, camOff:false, ending:false, answered:false });
+  Object.assign(VC, { busy:false, cid:null, pc:null, local:null, role:'', peer:null, incoming:null, started:0, tick:null, muted:false, camOff:false, ending:false, answered:false, facing:'user', flipping:false });
   vcClose();
 }
 async function vcFail(e){

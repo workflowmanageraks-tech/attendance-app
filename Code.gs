@@ -166,7 +166,7 @@ var WRITE_ACTIONS = {
   addVcs: 1, updateVcs: 1,
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
-  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, driveDisconnect: 1,
+  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, driveDisconnect: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
@@ -346,6 +346,8 @@ function route_(req) {
       case 'chatPhotos':        return chatPhotos_(req);
       case 'chatPhotoFull':     return chatPhotoFull_(req);
       case 'setMyPhoto':        out = setMyPhoto_(req); break;
+      case 'getMyLocation':     return getMyLocation_();
+      case 'setMyLocation':     out = setMyLocation_(req); break;
       case 'getPhotoPrivacy':   return getPhotoPrivacy_();
       case 'setPhotoPrivacy':   out = setPhotoPrivacy_(req); break;
       case 'driveStatus':       return driveStatus_();
@@ -2808,7 +2810,7 @@ function chatPeers_() {
 }
 function chatUsers_() {
   var now = Date.now(), peers = chatPeers_(), ids = peers.map(function (a) { return a.id; });
-  var seen = seenMap_(ids), ptr = readPtr_(CTX.uid), info = {}, total = 0, avm = avMap_();
+  var seen = seenMap_(ids), ptr = readPtr_(CTX.uid), info = {}, total = 0, avm = avMap_(), lcm = locMap_();
   var myG = myChatGroups_(), gset = {}, ginfo = {};
   myG.forEach(function (g) { gset[g.id] = g; });
   chatRows_().forEach(function (r) {                    // oldest -> newest
@@ -2829,6 +2831,7 @@ function chatUsers_() {
     var p = presence_(ms, now), o = info[a.id] || { unread: 0, last: null };
     total += o.unread;
     return { id: a.id, name: a.name || a.username, username: a.username, role: a.role, online: p.online, ago: p.ago, pv: avCanSee_(a.id, CTX.uid) ? avVer_(avm[a.id]) : 0,
+      tz: (lcm[a.id] || {}).tz || '', loc: (lcm[a.id] || {}).loc || '',
       unread: o.unread, lastText: o.last ? chatPreview_(o.last.text) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false };
   });
   var nm = chatNameMap_();
@@ -2840,6 +2843,27 @@ function chatUsers_() {
       lastFrom: o.last && o.last.from !== CTX.uid ? (nm[o.last.from] || 'Someone') : '' };
   });
   return { ok: true, users: users, groups: groups, unread: total, now: now, me: CTX.uid, mePv: avVer_(avm[CTX.uid]) };
+}
+// ---------- my location / time zone (shown under my name in other people's chat as my local time) ----------
+// LOC_<userId> = {"tz":"Asia/Kolkata","loc":"India"}
+function locMap_() {
+  var all = PropertiesService.getScriptProperties().getProperties(), out = {};
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf('LOC_') !== 0 || !all[k]) return;
+    try { var o = JSON.parse(String(all[k])); if (o && o.tz) out[k.slice(4)] = { tz: String(o.tz), loc: String(o.loc || '') }; } catch (e) {}
+  });
+  return out;
+}
+function getMyLocation_() {
+  var o = locMap_()[CTX.uid] || { tz: '', loc: '' };
+  return { ok: true, tz: o.tz, loc: o.loc };
+}
+function setMyLocation_(req) {
+  var tz = String(req.tz || '').trim(), loc = String(req.loc || '').trim().slice(0, 60), P = PropertiesService.getScriptProperties();
+  if (!tz) { P.deleteProperty('LOC_' + CTX.uid); return { ok: true, tz: '', loc: '' }; }
+  if (!/^[A-Za-z]+(\/[A-Za-z0-9_+\-]+){0,2}$/.test(tz) || tz.length > 40) fail_('Please choose a valid location.');
+  P.setProperty('LOC_' + CTX.uid, JSON.stringify({ tz: tz, loc: loc }));
+  return { ok: true, tz: tz, loc: loc };
 }
 // ---------- chat profile photos ----------
 // One small (<= ~8 KB) JPEG data-URL per user, kept in the script properties as  AVT_<userId> = "<timestamp>|<data-url>".
