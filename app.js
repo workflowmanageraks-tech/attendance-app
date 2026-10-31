@@ -405,6 +405,7 @@ async function boot(){
   let st;
   try { st = await api('status'); }
   catch(e){ showLogin(false, 'Cannot reach the server: ' + e.message); await bioP; bioShowBtn(); return; }
+  window.__lcSt = st; if (window.lcSync) { try { lcSync(st); } catch(e){} }     // login-page design saved by the admin (Settings › Login page)
   await bioP;
   if (st.needsSetup || t) showLogin(st.needsSetup, '', st.needsSetupCode);   // a new visitor already sees the sign-in card
   bioShowBtn();
@@ -1715,7 +1716,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); if (window.lcBind) lcBind(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
   liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise
 }
 
@@ -3444,6 +3445,7 @@ function vSettings(){
   grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   grid.insertAdjacentHTML('beforeend', window.ksOptCard ? ksOptCard() : '');
+  if (isAdmin() && window.lcCard) grid.insertAdjacentHTML('beforeend', lcCard());
   if (isAdmin()) grid.insertAdjacentHTML('beforeend', sessCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
@@ -3454,9 +3456,10 @@ function vSettings(){
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['smart','Smart options']];
+const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['smart','Smart options'],['login','Login page']];
 const SET_DEF = {
   smart:['✨','Smart options','Compact view, swipe back, call reactions, online alerts'],
+  login:['🔑','Login page','Pictures, texts, fonts and colours of the sign-in screen'],
   photo:['🖼','Profile photo','Your picture shown in Chat'],
   sess:['⏳','Stay signed in','How long you stay logged in'],
   security:['🔐','Login & security','Change username and password'],
@@ -3477,7 +3480,7 @@ const SET_DEF = {
 };
 const SET_GROUPS = [
   ['Account & security', ['photo','security','sess','bio']],
-  ['Customize', ['theme','smart','general']],
+  ['Customize', ['theme','login','smart','general']],
   ['People & access', ['emps','users','groups']],
   ['Attendance & expenses', ['status','cats']],
   ['Data & system', ['vcsproc','export','drive','activity','hist','trash']]
@@ -4056,7 +4059,7 @@ async function doExport(kind, fmt){
 })();
 
 thApply();        // the Passwords / Links / LIC tabs now exist: put them in the saved order / names
-boot();
+/* boot() is started once, at the end of the file (see below) */
 
 /* =====================================================================
    VIEW: CHAT  (WhatsApp-style messaging: user list -> tap -> conversation, online / offline + last seen)
@@ -5362,7 +5365,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S.
 })();
 
 thApply();        // the Passwords / Links / LIC tabs now exist: put them in the saved order / names
-boot();
+Promise.resolve().then(boot);   // start only after the whole file has loaded: boot() ran too early and failed with "Cannot access 'LV_POLL' before initialization" (it was also being called twice)
 
 /* =====================================================================
    VOICE / VIDEO CALLS  (WebRTC — the audio/video goes phone-to-phone; the server only passes the offer/answer)

@@ -156,7 +156,7 @@ function fail_(msg, code) {
 }
 
 var WRITE_ACTIONS = {
-  historyRestore: 1,
+  historyRestore: 1, saveLoginCfg: 1,
   setup: 1, setAttendance: 1, saveSettings: 1, saveStatuses: 1, changeCredentials: 1,
   addExpense: 1, updateExpense: 1, deleteExpense: 1,
   addCategory: 1, updateCategory: 1, deleteCategory: 1,
@@ -185,7 +185,7 @@ var NEED = {
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
-var ADMIN_ONLY = { setMySession: 1, saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1, driveStatus: 1, driveAuthUrl: 1, driveDisconnect: 1 };
+var ADMIN_ONLY = { saveLoginCfg: 1, setMySession: 1, saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1, driveStatus: 1, driveAuthUrl: 1, driveDisconnect: 1 };
 // Admins, and any user the admin ticked "Can add new users" for. Such a user only ever manages the users HE added.
 var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1 };
 
@@ -239,7 +239,13 @@ function route_(req) {
   // ---- public ----
   if (a === 'status') {
     var s = readSettings_().values;
-    return { ok: true, needsSetup: !(has_(s.username) && has_(s.password)), needsSetupCode: !!SETUP_CODE };
+    var LP = PropertiesService.getScriptProperties();
+    return { ok: true, needsSetup: !(has_(s.username) && has_(s.password)), needsSetupCode: !!SETUP_CODE,
+             loginCfg: LP.getProperty('LOGIN_CFG') || '', loginImgv: LP.getProperty('LOGIN_IMGV') || '' };
+  }
+  if (a === 'loginImgs') {            // the login-page pictures (public: the sign-in screen needs them before anyone is signed in)
+    var LI = PropertiesService.getScriptProperties();
+    return { ok: true, hero: LI.getProperty('LOGIN_IMG_HERO') || '', logo: LI.getProperty('LOGIN_IMG_LOGO') || '' };
   }
   if (a === 'login') return login_(req);
   if (a === 'requestReset') return requestReset_(req);
@@ -274,6 +280,7 @@ function route_(req) {
       case 'getAll':            return { ok: true, data: getAll_() };
       case 'setAttendance':     out = setAttendance_(req); break;
       case 'saveSettings':      out = saveSettings_(req); break;
+      case 'saveLoginCfg':      out = saveLoginCfg_(req); break;
       case 'saveStatuses':      out = saveStatuses_(req); break;
       case 'addStatus':         out = addStatus_(req); break;
       case 'deleteStatus':      out = deleteStatus_(req); break;
@@ -1424,6 +1431,28 @@ function settingsView_(s) {
   if (!CTX.primary) { out.username = CTX.username; out.name = CTX.name; }
   if (CTX.role !== 'admin') { out.email = ''; out.designation = ''; out.salary = 0; out.basis = 0; }
   return out;
+}
+
+// ---------- LOGIN PAGE DESIGN (Settings > Login page; admin only) ----------
+// cfg = JSON text of every text / colour / size choice; hero + logo = small data-URL pictures ('' = back to the default picture).
+function saveLoginCfg_(req) {
+  var P = PropertiesService.getScriptProperties();
+  var cfg = String(req.cfg || '{}');
+  if (cfg.length > 20000) fail_('The design is too large. Shorten some texts.');
+  try { JSON.parse(cfg); } catch (e) { fail_('The design data is not valid.'); }
+  P.setProperty('LOGIN_CFG', cfg);
+  var changed = false;
+  ['hero', 'logo'].forEach(function (k) {
+    if (req[k] === undefined || req[k] === null) return;          // not sent = keep the current picture
+    var v = String(req[k]);
+    if (v && !/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+\/=]+$/.test(v)) fail_('That picture is not valid.');
+    if (v.length > 60000) fail_('That picture is too big.');
+    P.setProperty('LOGIN_IMG_' + k.toUpperCase(), v);
+    changed = true;
+  });
+  var ver = P.getProperty('LOGIN_IMGV') || '';
+  if (changed) { ver = String(new Date().getTime()); P.setProperty('LOGIN_IMGV', ver); }
+  return { ok: true, loginImgv: ver };
 }
 
 function saveSettings_(req) {
