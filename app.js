@@ -89,7 +89,7 @@ function handleErr(e){
 /* ---------- session ---------- */
 function saveToken(t, remember){
   S.token = t;
-  store.set(TK, t, remember);
+  store.set(TK, t, true);                 // always kept on the phone: only the Log out button signs a user out
 }
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
@@ -138,7 +138,7 @@ $('#loginForm').addEventListener('submit', async ev => {
     const client = await collectClient();
     btn.textContent = 'Signing in…';
     const r = await api(S.setup ? 'setup' : 'login', { username:u, password:p, setupCode:$('#lc').value, client });
-    saveToken(r.token, $('#remember').checked);
+    saveToken(r.token, true);
     await loadAll();
     enterApp();
   }catch(e){
@@ -226,7 +226,7 @@ async function bioLoginGo(silent){
     const client = await collectClient();
     const r = await api('bioLogin', { chId:c.chId, credId:b64e(a.rawId), clientDataJSON:b64e(a.response.clientDataJSON),
       authenticatorData:b64e(a.response.authenticatorData), signature:b64e(a.response.signature), client });
-    saveToken(r.token, $('#remember').checked);
+    saveToken(r.token, true);
     await loadAll(); enterApp();
   }catch(e){
     const quiet = e && (e.name === 'NotAllowedError' || e.name === 'AbortError');
@@ -316,7 +316,7 @@ $('#resetForm').addEventListener('submit', async ev => {
   const btn = $('#rsGo'); btn.disabled = true; rsErr('');
   try{
     const r = await api('resetPassword', { otp, newPassword:p, username:$('#rsUser').value.trim(), client:await collectClient() });
-    saveToken(r.token, $('#remember').checked);
+    saveToken(r.token, true);
     await loadAll(); enterApp(); toast('Password changed');
   }catch(e){ rsErr(e.message); }
   finally{ btn.disabled = false; }
@@ -3581,7 +3581,7 @@ function bindSettings(){
     if (f.newPassword && f.newPassword !== f.confirm) return toast('New passwords do not match', true);
     try{
       const r = await api('changeCredentials', f);
-      if (r.token) saveToken(r.token, store.isLocal(TK));
+      if (r.token) saveToken(r.token, true);
       S.d.settings.username = r.username; if (S.me) S.me.username = r.username; toast('Login updated'); render();
     }catch(e){ handleErr(e); }
   };
@@ -4433,7 +4433,7 @@ function chatRenderMsgs(toBottom){
       if (m.state === 'pending') meta = 'Sending…';
       else if (m.state === 'failed') meta = 'Not sent · tap to retry';
       else { const rdn = m.t <= pr, dlv = rdn || m.t <= ps;     // ✓ sent · ✓✓ grey = delivered (they were online) · ✓✓ blue = seen
-        meta += ` <span class="tick ${rdn ? 'read' : dlv ? 'dlv' : ''}">${dlv ? '✓✓' : '✓'}</span>`; }
+        const tk = chTicks(); meta += ` <span class="tick em ${rdn ? 'read' : dlv ? 'dlv' : ''}">${esc(rdn ? tk.read : dlv ? tk.dlv : tk.sent)}</span>`; }
     }
     const v = chatView(m), sl = S.chat.sel.has(m.id);
     const tg = v.busy ? '<div class="tg">🌐 Translating…</div>' : v.fail ? '<div class="tg bad">🌐 Could not translate · tap to retry</div>' : v.lang ? `<div class="tg">🌐 ${esc(CH_LANGS[v.lang].short)} · tap for options</div>` : '';
@@ -4674,6 +4674,7 @@ function chatMoreMenu(ev){
   m.innerHTML = item('🌐', 'Translate chat', 'tr', S.chat.lang ? 'On · ' + esc(CH_LANGS[S.chat.lang].name) : 'Off')
     + item('🎨', 'Chat theme', 'theme', chThemeGet() ? esc((CH_THEMES.find(x => x[0] === chThemeGet()) || [0, ''])[1]) : 'Default')
     + item('💬', 'Message pop-up', 'pop', 'Size, layout, colour, transparency')
+    + item('🤩', 'Message ticks', 'ticks', (() => { const k = chTicks(); return k.sent + ' ' + k.dlv + ' ' + k.read; })())
     + item('🎲', 'Play Ludo', 'ludo')
     + (u.isGroup ? item('ℹ️', 'Group info', 'grp') : item('📞', 'Voice call', 'audio') + item('🎥', 'Video call', 'video'));
   head.appendChild(m);
@@ -4681,9 +4682,39 @@ function chatMoreMenu(ev){
   m.onclick = e => {
     const b = e.target.closest('[data-fn]'); if (!b) return;
     const f = b.dataset.fn; close();
-    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'pop') chatPopMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
+    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'pop') chatPopMenu(); else if (f === 'ticks') chatTickMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
+}
+/* ---------- message ticks: emoji instead of ✓ / ✓✓ (each user can change them: chat ⋮ menu > Message ticks; saved on this phone) ---------- */
+const CH_TICK_DEF = { sent:'🤔', dlv:'👀', read:'🤩' };
+const CH_TICK_SETS = [['🤔 👀 🤩', { sent:'🤔', dlv:'👀', read:'🤩' }], ['✓ ✓✓ ✓✓', { sent:'✓', dlv:'✓✓', read:'✓✓' }], ['🕐 📨 ✅', { sent:'🕐', dlv:'📨', read:'✅' }],
+  ['😶 🙂 😍', { sent:'😶', dlv:'🙂', read:'😍' }], ['⏳ 👍 💖', { sent:'⏳', dlv:'👍', read:'💖' }], ['🐣 🐥 🦚', { sent:'🐣', dlv:'🐥', read:'🦚' }]];
+const chTickKey = () => 'ks_ticks_' + ((S.me && S.me.id) || 'x');
+function chTicks(){
+  let o = {}; try{ o = JSON.parse(localStorage.getItem(chTickKey()) || '{}') || {}; }catch(e){}
+  return { sent:o.sent || CH_TICK_DEF.sent, dlv:o.dlv || CH_TICK_DEF.dlv, read:o.read || CH_TICK_DEF.read };
+}
+function chatTickMenu(){
+  const first = s => String(s || '').trim().slice(0, 4);
+  const w = openModal(`<h3>🤩 Message ticks</h3><p class="sub">Choose what shows under your messages: sent, delivered and seen. Only you see this.</p>
+    <div class="ch-opts" id="tkSets">${CH_TICK_SETS.map((x, i) => `<button class="btn ghost" type="button" data-i="${i}">${esc(x[0])}</button>`).join('')}</div>
+    <div class="field"><label>Sent (their phone has not got it yet)</label><input class="input" id="tkSent" maxlength="4"></div>
+    <div class="field"><label>Delivered (they are online)</label><input class="input" id="tkDlv" maxlength="4"></div>
+    <div class="field"><label>Seen (they opened the chat)</label><input class="input" id="tkRead" maxlength="4"></div>
+    <div class="actions" style="margin-top:12px"><button class="btn ghost" type="button" id="tkReset">Reset</button><button class="btn ghost" type="button" id="tkX">Close</button><button class="btn" type="button" id="tkSave">Save</button></div>`);
+  w.classList.add('pw-over');
+  const f = { sent:w.querySelector('#tkSent'), dlv:w.querySelector('#tkDlv'), read:w.querySelector('#tkRead') };
+  const fill = o => { f.sent.value = o.sent; f.dlv.value = o.dlv; f.read.value = o.read; };
+  fill(chTicks());
+  w.querySelector('#tkSets').onclick = e => { const b = e.target.closest('[data-i]'); if (b) fill(CH_TICK_SETS[+b.dataset.i][1]); };
+  w.querySelector('#tkReset').onclick = () => fill(CH_TICK_DEF);
+  w.querySelector('#tkX').onclick = () => w.remove();
+  w.querySelector('#tkSave').onclick = () => {
+    const o = { sent:first(f.sent.value) || CH_TICK_DEF.sent, dlv:first(f.dlv.value) || CH_TICK_DEF.dlv, read:first(f.read.value) || CH_TICK_DEF.read };
+    try{ localStorage.setItem(chTickKey(), JSON.stringify(o)); }catch(e){}
+    w.remove(); chatRenderMsgs(); toast('Message ticks saved');
+  };
 }
 function chatLangMenu(){
   const cur = S.chat.lang;

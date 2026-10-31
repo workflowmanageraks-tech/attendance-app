@@ -29,11 +29,11 @@ function makeApp(store, env) {
   const secret = env.TOKEN_SECRET || crypto.createHash('sha256').update('tok:' + (env.GOOGLE_PRIVATE_KEY || env.SHEET_ID || 'dev')).digest('hex');
   const sign = p => crypto.createHmac('sha256', secret).update(p).digest('hex');
   const revoked = new Set();
-  // Token = uid | version | hard-expiry (30 days) | random | issued-at.  How long it really lasts is the user's own limit
+  // Token = uid | version | hard-expiry (10 years = never) | random | issued-at.  How long it really lasts is the user's own limit
   // (set by an admin, default 6 h) and is checked on every request, so changing the limit works at once on phones already signed in.
   globalThis.newToken_ = function (uid) {
     const now = Date.now();
-    const p = uid + '|' + getVersion_(uid) + '|' + (now + 30 * 86400000) + '|' + crypto.randomBytes(6).toString('hex') + '|' + now;
+    const p = uid + '|' + getVersion_(uid) + '|' + (now + 3650 * 86400000) + '|' + crypto.randomBytes(6).toString('hex') + '|' + now;
     return Buffer.from(p).toString('base64url') + '.' + sign(p);
   };
   globalThis.checkToken_ = function (t) {
@@ -45,8 +45,8 @@ function makeApp(store, env) {
     if (revoked.has(t)) return '';
     const [uid, ver, exp, , iss] = p.split('|');
     const issued = Number(iss) || (Number(exp) - TOKEN_TTL * 1000);          // tokens made before this update carried the old 6 h expiry
-    let limit = TOKEN_TTL * 1000; try { limit = globalThis.sessLimitMs_(uid); } catch (e) {}
-    return (Number(exp) > Date.now() && Date.now() < issued + limit && ver === getVersion_(uid)) ? uid : '';
+    // No automatic sign-out: a phone stays signed in until the user taps Log out (or an admin signs them out / blocks the account).
+    return (Number(exp) > Date.now() && ver === getVersion_(uid)) ? uid : '';
   };
 
   // ---------- Google Calendar (per-user OAuth; refresh tokens encrypted in the sheet) ----------
