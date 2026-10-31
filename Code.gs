@@ -3008,7 +3008,7 @@ function chatMediaParse_(text) {
 function chatPreview_(text) {
   var o = chatMediaParse_(text);
   if (!o) return String(text).slice(0, 80);
-  return ((o.k === 'vid' ? '🎥 Video' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80);
+  return ((o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80);
 }
 function chatMediaCheck_(req) {
   if (isChatGroupId_(req.to)) chatGroupOk_(String(req.to).trim()); else chatPeerOk_(req.to);

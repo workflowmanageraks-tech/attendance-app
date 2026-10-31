@@ -881,7 +881,7 @@ function makeApp(store, env) {
   // ---------- Chat photos & videos -> the main admin's Google Drive ----------
   // The main admin connects Drive once (Settings). Files go to a folder "KS Chat Media" (scope drive.file: this app only sees files it made itself).
   // A photo / video message is created ONLY through this route, so nobody can fake one. Viewing uses short-lived signed links (see chatMediaTicket_).
-  const MEDIA_MAX = 45 * 1048576, MEDIA_RE = /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime|3gpp|x-m4v))$/;
+  const MEDIA_MAX = 45 * 1048576, MEDIA_RE = /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime|3gpp|x-m4v)|audio\/(webm|ogg|mp4|mpeg|aac|x-m4a|m4a|wav|x-wav|3gpp))$/;
   const gp = () => globalThis.PropertiesService.getScriptProperties();
   async function drvAccess() {
     if (drvTok && drvTok.exp > Date.now() + 60000) return drvTok.v;
@@ -911,13 +911,13 @@ function makeApp(store, env) {
   async function mediaUpload(token, q, buf) {
     const uid = globalThis.checkToken_(token);
     if (!uid) { const e = new Error('Session expired. Please log in again.'); e.code = 'AUTH'; throw e; }
-    const mime = String(q.mime || '').toLowerCase().split(';')[0], vid = mime.indexOf('video/') === 0, to = String(q.to || ''), cid = String(q.cid || '');
-    if (!MEDIA_RE.test(mime)) throw new Error('Only photos and videos can be sent.');
+    const mime = String(q.mime || '').toLowerCase().split(';')[0], vid = mime.indexOf('video/') === 0, aud = mime.indexOf('audio/') === 0, to = String(q.to || ''), cid = String(q.cid || '');
+    if (!MEDIA_RE.test(mime)) throw new Error('Only photos, videos and voice notes can be sent.');
     if (!buf.length) throw new Error('The file is empty.');
-    if (!vid && buf.length > 15 * 1048576) throw new Error('This photo is too big (max 15 MB).');
+    if (!vid && !aud && buf.length > 15 * 1048576) throw new Error('This photo is too big (max 15 MB).');
     await withWb(() => globalThis.route_({ action: 'chatMediaCheck', token, to }));          // is this person allowed to write to this chat?
     let tok = await drvAccess(), folder = await drvFolder(tok);
-    const nm = String(q.name || (vid ? 'video' : 'photo')).replace(/[^\w.\- ]+/g, '_').slice(0, 80);
+    const nm = String(q.name || (vid ? 'video' : aud ? 'voice' : 'photo')).replace(/[^\w.\- ]+/g, '_').slice(0, 80);
     const meta = { name: new Date().toISOString().slice(0, 10) + '_' + uid + '_' + nm, parents: [folder], mimeType: mime, description: 'KS chat media sent by ' + uid };
     const bnd = 'ksb' + crypto.randomBytes(8).toString('hex');
     const body = Buffer.concat([Buffer.from('--' + bnd + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(meta) + '\r\n--' + bnd + '\r\nContent-Type: ' + mime + '\r\n\r\n'), buf, Buffer.from('\r\n--' + bnd + '--')]);
@@ -925,7 +925,7 @@ function makeApp(store, env) {
       headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'multipart/related; boundary=' + bnd }, body });
     const j = await r.json().catch(() => ({}));
     if (!j.id) { if (r.status === 401) drvTok = null; throw new Error('Google Drive did not accept the file: ' + ((j.error && j.error.message) || r.status)); }
-    const text = 'ksmedia:' + JSON.stringify({ i: j.id, k: vid ? 'vid' : 'img', n: nm, s: buf.length, c: String(q.c || '').replace(/\s+/g, ' ').trim().slice(0, 300) });
+    const text = 'ksmedia:' + JSON.stringify({ i: j.id, k: vid ? 'vid' : aud ? 'aud' : 'img', n: nm, s: buf.length, d: aud ? Math.max(0, Math.min(3600, Math.round(Number(q.d) || 0))) : undefined, c: String(q.c || '').replace(/\s+/g, ' ').trim().slice(0, 300) });
     return withWb(() => { globalThis.MEDIA_OK_ = true; try { return globalThis.route_({ action: 'chatSend', token, to, cid, text }); } finally { globalThis.MEDIA_OK_ = false; } });
   }
   async function mediaOpen(q, range) {

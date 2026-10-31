@@ -3,13 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#4f46e5">
+<meta name="theme-color" content="#0b1220">
 <title>KS</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script>try{var t=JSON.parse(localStorage.getItem('ks_theme_v1')||'null');if(t&&(t.mode==='dark'||(t.mode==='auto'&&window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)))document.documentElement.setAttribute('data-mode','dark')}catch(e){}</script>
 <link rel="preconnect" href="https://attendance-api-yjtj.onrender.com" crossorigin>
 <link rel="dns-prefetch" href="https://attendance-api-yjtj.onrender.com">
-<link rel="preload" href="app.js?v=51" as="script">
-<link rel="stylesheet" href="style.css?v=31">
+<link rel="preload" href="app.js?v=52" as="script">
+<link rel="stylesheet" href="style.css?v=32">
 </head>
 <body>
 <div id="bar"></div>
@@ -17,26 +20,36 @@
 
 <!-- ================= LOGIN ================= -->
 <div id="login" class="hidden">
+ <div class="lg-shell">
+  <section class="lg-hero" aria-hidden="true">
+    <h2>Welcome Back</h2>
+    <p>Enter the workspace of AKS_VCS</p>
+    <img class="lg-heroimg" src="logo.png" alt="">
+    <div class="lg-word">AKS_VCS</div>
+    <ul class="lg-chips"><li>🗓️ Attendance</li><li>💬 Chat &amp; calls</li><li>📋 VCS complaints</li><li>🔒 Secure login</li></ul>
+  </section>
+  <div class="lg-side">
   <form class="login-card" id="loginForm" autocomplete="on">
-    <div class="logo">🗓️</div>
+    <div class="lg-brand"><img src="logo-sm.png" alt=""><span>AKS_VCS</span></div>
     <h1 id="loginTitle">Welcome back</h1>
     <p class="sub" id="loginSub">Sign in to open your attendance dashboard</p>
     <div id="loginErr" class="err hidden"></div>
-    <div class="field"><label for="lu">Username</label><input class="input" id="lu" name="username" autocomplete="username" required></div>
-    <div class="field"><label for="lp">Password</label>
-      <div class="pw"><input class="input" id="lp" name="password" type="password" autocomplete="current-password" required>
+    <div class="field has-ico"><label for="lu" class="sr">Username</label><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c.8-4 4-6 7.5-6s6.7 2 7.5 6"/></svg></span><input class="input" id="lu" name="username" placeholder="Email or Username" autocomplete="username" autocapitalize="off" required></div>
+    <div class="field has-ico"><label for="lp" class="sr">Password</label><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="3.6"/><path d="M10.6 12.4 19 4m-3 3 2.5 2.5M13 10l2 2"/></svg></span>
+      <div class="pw"><input class="input" id="lp" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
         <button type="button" id="togglePw">Show</button></div></div>
     <div class="field setup-only hidden"><label for="lp2">Confirm password</label><input class="input" id="lp2" type="password" autocomplete="new-password"></div>
     <div class="field setup-code hidden"><label for="lc">Setup code</label><input class="input" id="lc" type="password" autocomplete="off"></div>
-    <div class="linkrow"><label class="check"><input type="checkbox" id="remember" checked> Keep me signed in</label>
+    <div class="linkrow"><label class="check"><input type="checkbox" id="remember" checked> Remember me</label>
       <button type="button" class="linkbtn" id="forgotBtn">Forgot password?</button></div>
     <button class="btn block" id="loginBtn" type="submit">Sign in</button>
     <button class="btn ghost block hidden" id="bioBtn" type="button" style="margin-top:10px">👆 Unlock with fingerprint / face</button>
+    <p class="lg-foot">Don’t have an account? <b>Ask your admin</b></p>
     <p class="note">🔒 For security, your sign-in time, location and device are recorded for the admin.</p>
   </form>
 
   <form class="login-card hidden" id="resetForm" autocomplete="off">
-    <div class="logo">🔑</div>
+    <div class="lg-brand"><img src="logo-sm.png" alt=""><span>AKS_VCS</span></div>
     <h1>Reset password</h1>
     <p class="sub" id="rsSub">We will e-mail a 6-digit OTP to your registered e-mail.</p>
     <div id="rsErr" class="err hidden"></div>
@@ -50,6 +63,8 @@
     </div>
     <div style="text-align:center;margin-top:14px"><button type="button" class="linkbtn" id="rsBack">← Back to sign in</button></div>
   </form>
+  </div>
+ </div>
 </div>
 
 <!-- ================= APP ================= -->
@@ -57,7 +72,7 @@
   <button type="button" id="menuToggle" class="menu-toggle" aria-label="Open menu" aria-expanded="false">›</button>
   <div id="scrim" class="scrim"></div>
   <aside>
-    <div class="brand"><div class="logo">🗓️</div><div id="brandTxt" style="font-size:22px;font-weight:800;letter-spacing:1.5px">KS</div></div>
+    <div class="brand"><img class="brand-logo" src="logo-sm.png" alt=""><div id="brandTxt" style="font-size:22px;font-weight:800;letter-spacing:1.5px">KS</div></div>
     <nav class="nav" id="nav">
       <button data-v="dashboard"><span class="ico">📊</span>Dashboard</button>
       <button data-v="attendance"><span class="ico">🗓️</span>Attendance</button>
@@ -95,7 +110,7 @@
   </main>
 </div>
 
-<script src="app.js?v=51"></script>
+<script src="app.js?v=52"></script>
 <script src="ui-plus.js?v=1" defer></script>
 </body>
 </html>

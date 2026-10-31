@@ -110,8 +110,8 @@ function showLogin(needsSetup, message, needsCode){
   $('#login').classList.remove('hidden');
   $('#resetForm').classList.add('hidden'); $('#loginForm').classList.remove('hidden');
   $('#forgotBtn').classList.toggle('hidden', !!needsSetup);
-  $('#loginTitle').textContent = needsSetup ? 'Create your login' : 'Welcome back';
-  $('#loginSub').textContent = needsSetup ? 'First time here — choose a username and password' : 'Sign in to open your attendance dashboard';
+  $('#loginTitle').textContent = needsSetup ? 'Create your login' : 'Sign in to your account';
+  $('#loginSub').textContent = needsSetup ? 'First time here — choose a username and password' : 'Enter your username and password';
   $('#loginBtn').textContent = needsSetup ? 'Create login & continue' : 'Sign in';
   document.querySelectorAll('.setup-only').forEach(e => e.classList.toggle('hidden', !needsSetup));
   document.querySelectorAll('.setup-code').forEach(e => e.classList.toggle('hidden', !(needsSetup && needsCode)));
@@ -4378,6 +4378,7 @@ function chatTypingPing(u){                       // tells the other person "I a
 }
 function chatRenderPane(){
   const pane = $('#chPane'); if (!pane) return;
+  if (typeof VN !== 'undefined' && VN.rec) chatVoiceStop(true);
   const u = chatPeer(S.chat.with);
   if (!S.chat.with || !u){
     pane.innerHTML = '<div class="ch-empty"><div><div class="big">💬</div><b>Select a user to start chatting</b><div style="margin-top:4px">Your messages will appear here.</div></div></div>';
@@ -4393,7 +4394,7 @@ function chatRenderPane(){
     <div class="ch-sel" id="chSel" style="display:none"></div>
     <div class="ch-msgs" id="chMsgs"></div>
     <div class="ch-ctx" id="chCtx" style="display:none"></div>
-    <div class="ch-comp"><button class="ch-att" type="button" onclick="document.getElementById('chFile').click()" aria-label="Send photo or video">📎</button><input type="file" id="chFile" accept="image/*,video/*" multiple hidden onchange="chatAttach(this)"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
+    <div class="ch-comp"><button class="ch-att" type="button" onclick="chatPlusMenu(event)" aria-label="Attach">＋</button><input type="file" id="chFile" accept="image/*,video/*" multiple hidden onchange="chatAttach(this)"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
       <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
   const ta = $('#chInput');
   ta.value = S.chat.drafts[u.id] || '';
@@ -4416,7 +4417,7 @@ function chatRenderMsgs(toBottom){
   const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0, ps = S.chat.peerSeen[id] || 0;
   const sig = arr.map(m => m.id + (m.state || '') + (m.mine ? (m.t <= pr ? 'r' : m.t <= ps ? 'd' : '') : '')).join(',') + '|' + S.chat.histLoaded[id] + '|' + S.chat.lang + '|' + S.chat.trv;
   if (sig === S.chat.sig && !toBottom) return;
-  if (!toBottom && [...box.querySelectorAll('video')].some(v => !v.paused && !v.ended)){ S.chat.defer = true; return; }   // never rebuild the chat under a playing video
+  if (!toBottom && [...box.querySelectorAll('video,audio')].some(v => !v.paused && !v.ended)){ S.chat.defer = true; return; }   // never rebuild the chat under a playing video
   S.chat.sig = sig;
   const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90, keepTop = box.scrollTop;
   if (!arr.length){
@@ -4672,6 +4673,7 @@ function chatMoreMenu(ev){
   const item = (ic, label, fn, sub) => `<button type="button" role="menuitem" data-fn="${fn}"><span class="ic">${ic}</span><span>${label}${sub ? `<small>${sub}</small>` : ''}</span></button>`;
   m.innerHTML = item('🌐', 'Translate chat', 'tr', S.chat.lang ? 'On · ' + esc(CH_LANGS[S.chat.lang].name) : 'Off')
     + item('🎨', 'Chat theme', 'theme', chThemeGet() ? esc((CH_THEMES.find(x => x[0] === chThemeGet()) || [0, ''])[1]) : 'Default')
+    + item('💬', 'Message pop-up', 'pop', 'Size, layout, colour, transparency')
     + item('🎲', 'Play Ludo', 'ludo')
     + (u.isGroup ? item('ℹ️', 'Group info', 'grp') : item('📞', 'Voice call', 'audio') + item('🎥', 'Video call', 'video'));
   head.appendChild(m);
@@ -4679,7 +4681,7 @@ function chatMoreMenu(ev){
   m.onclick = e => {
     const b = e.target.closest('[data-fn]'); if (!b) return;
     const f = b.dataset.fn; close();
-    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
+    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'pop') chatPopMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
 }
@@ -4876,7 +4878,7 @@ function chatSelAll(){ (S.chat.msgs[S.chat.with] || []).forEach(m => { if (!m.st
 function chatSelCopy(){
   const u = chatPeer(S.chat.with), arr = (S.chat.msgs[S.chat.with] || []).filter(m => S.chat.sel.has(m.id));
   if (!arr.length) return;
-  const tx = m => chatView(m).text || (chMedia(m) ? (chMedia(m).k === 'vid' ? '[Video]' : '[Photo]') : '');
+  const tx = m => chatView(m).text || (chMedia(m) ? (chMedia(m).k === 'vid' ? '[Video]' : chMedia(m).k === 'aud' ? '[Voice message]' : '[Photo]') : '');
   const t = arr.length === 1 ? tx(arr[0]) : arr.map(m => (m.mine ? 'Me' : (m.from || (u && (u.name || u.username)) || '')) + ': ' + tx(m)).join('\n');
   chatCopyText(t); chatSelClear();
 }
@@ -4956,18 +4958,19 @@ function chMedia(m){
   try{ const o = JSON.parse(t.slice(8)); return o && typeof o === 'object' ? o : null; }catch(e){ return null; }
 }
 const chTxt = m => { const o = chMedia(m); return o ? String(o.c || '') : m.text; };
-const chPrev = t => { const o = chMedia({ text:t }); return o ? ((o.k === 'vid' ? '🎥 Video' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80) : String(t).slice(0, 80); };
+const chPrev = t => { const o = chMedia({ text:t }); return o ? ((o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80) : String(t).slice(0, 80); };
 function chMediaUrl(m, dl){
   const o = chMedia(m), u = o && o.i && S.chat.mu[o.i]; if (!u) return '';
   return dl ? u + '&dl=1&n=' + encodeURIComponent(o.n || (o.k === 'vid' ? 'video' : 'photo')) : u;
 }
 function chMediaHtml(m){
   const o = chMedia(m); if (!o) return '';
-  const vid = o.k === 'vid', ic = vid ? '🎥' : '📷';
+  const vid = o.k === 'vid', aud = o.k === 'aud', ic = vid ? '🎥' : aud ? '🎤' : '📷';
   if (!o.i) return `<div class=\"mm ph\">${ic} ${esc(o.n || '')}<br><b>${m.state === 'failed' ? '⚠️ Not sent' : '⏫ ' + (m.up != null ? m.up + '%' : 'Uploading…')}</b></div>`;
   const u = S.chat.mu[o.i];
   if (u === undefined) return `<div class=\"mm ph\">${ic} Loading…</div>`;
   if (u === null) return `<div class=\"mm ph err\">⚠️ Could not load · tap to retry</div>`;
+  if (aud) return `<audio class=\"mm ch-maud\" src=\"${esc(u)}\" controls preload=\"metadata\"></audio>${o.d ? `<small class=\"ch-adur\">🎤 ${Math.floor(o.d / 60)}:${String(o.d % 60).padStart(2, '0')}</small>` : ''}`;
   return vid ? `<video class=\"mm ch-mvid\" src=\"${esc(u)}\" controls preload=\"metadata\" playsinline></video>`
     : `<img class=\"mm ch-mimg\" src=\"${esc(u)}\" alt=\"\" loading=\"lazy\" onerror=\"chMediaErr('${esc(o.i)}')\">`;
 }
@@ -5012,21 +5015,73 @@ async function chatAttach(inp){
   if (cap && ta){ ta.value = ''; S.chat.drafts[to] = ''; ta.style.height = 'auto'; }        // what you typed becomes the caption of the first file
   for (const f of files){ await chatUpload(to, f, cap); cap = ''; }
 }
-async function chatUpload(to, f, cap, again){
-  const c = S.chat, vid = /^video\//.test(f.type), img = /^image\//.test(f.type);
-  if (!vid && !img) return toast('Only photos and videos can be sent', true);
+/* ---------- ＋ menu in the chat box: photo / video and voice note ---------- */
+function chatPlusMenu(ev){
+  if (ev) ev.stopPropagation();
+  const old = $('#chPlus'); if (old){ old.remove(); return; }
+  const comp = $('.ch-comp'); if (!comp) return;
+  const m = document.createElement('div'); m.id = 'chPlus'; m.className = 'ch-menu ch-plus'; m.setAttribute('role', 'menu');
+  const item = (ic, label, fn, sub) => `<button type="button" role="menuitem" data-fn="${fn}"><span class="ic">${ic}</span><span>${label}${sub ? `<small>${sub}</small>` : ''}</span></button>`;
+  m.innerHTML = item('🖼️', 'Photo / Video', 'file', 'From your gallery') + item('🎤', 'Voice note', 'voice', 'Record and send');
+  comp.appendChild(m);
+  const close = () => { m.remove(); document.removeEventListener('click', close, true); };
+  m.onclick = e => { const b = e.target.closest('[data-fn]'); if (!b) return; const f = b.dataset.fn; close(); if (f === 'file') document.getElementById('chFile').click(); else chatVoiceStart(); };
+  setTimeout(() => document.addEventListener('click', close, true), 0);
+}
+/* ---------- voice note recorder ---------- */
+const VN = { rec:null, chunks:[], stream:null, t0:0, tick:null, to:null, cancel:false, mime:'' };
+function vnMime(){
+  if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+  return ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+}
+async function chatVoiceStart(){
+  const to = S.chat.with, comp = $('.ch-comp'); if (!to || !comp || VN.rec) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) return toast('This browser cannot record voice notes', true);
+  if (typeof VC !== 'undefined' && VC.pc) return toast('Finish the call first, then record a voice note', true);
+  let st; try{ st = await navigator.mediaDevices.getUserMedia({ audio:true }); }catch(e){ return toast('Allow the microphone to record voice notes', true); }
+  VN.mime = vnMime(); VN.stream = st; VN.chunks = []; VN.to = to; VN.cancel = false;
+  try{ VN.rec = VN.mime ? new MediaRecorder(st, { mimeType:VN.mime }) : new MediaRecorder(st); }catch(e){ st.getTracks().forEach(t => t.stop()); return toast('Could not start recording', true); }
+  VN.rec.ondataavailable = e => { if (e.data && e.data.size) VN.chunks.push(e.data); };
+  VN.rec.onstop = vnFinish;
+  VN.rec.start(250); VN.t0 = Date.now();
+  const bar = document.createElement('div'); bar.className = 'vn-bar'; bar.id = 'vnBar';
+  bar.innerHTML = '<button class="vn-x" type="button" aria-label="Cancel" onclick="chatVoiceStop(true)">🗑</button><span class="vn-dot"></span><b id="vnT">0:00</b><span class="vn-wave"></span><button class="ch-send" type="button" aria-label="Send voice note" onclick="chatVoiceStop(false)">➤</button>';
+  comp.classList.add('vn-on'); comp.appendChild(bar);
+  VN.tick = setInterval(() => { const s = Math.floor((Date.now() - VN.t0) / 1000), t = $('#vnT'); if (t) t.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); if (s >= 300) chatVoiceStop(false); }, 250);
+}
+function chatVoiceStop(cancel){
+  if (!VN.rec) return;
+  VN.cancel = !!cancel; clearInterval(VN.tick);
+  try{ if (VN.rec.state !== 'inactive') VN.rec.stop(); else vnFinish(); }catch(e){ vnFinish(); }
+}
+function vnFinish(){
+  const rec = VN.rec; if (!rec) return;
+  const secs = Math.round((Date.now() - VN.t0) / 1000), chunks = VN.chunks, to = VN.to, cancel = VN.cancel, mime = (VN.mime || rec.mimeType || 'audio/webm').split(';')[0];
+  try{ VN.stream && VN.stream.getTracks().forEach(t => t.stop()); }catch(e){}
+  VN.rec = null; VN.stream = null; VN.chunks = [];
+  const bar = $('#vnBar'); if (bar) bar.remove(); const comp = $('.ch-comp'); if (comp) comp.classList.remove('vn-on');
+  if (cancel) return;
+  if (secs < 1 || !chunks.length) return toast('Hold a little longer — voice note was too short', true);
+  const ext = /mp4/.test(mime) ? 'm4a' : /ogg/.test(mime) ? 'ogg' : 'webm';
+  const f = new File([new Blob(chunks, { type:mime })], 'voice-note.' + ext, { type:mime });
+  chatUpload(to, f, '', null, { d:secs });
+}
+
+async function chatUpload(to, f, cap, again, extra){
+  const c = S.chat, vid = /^video\//.test(f.type), img = /^image\//.test(f.type), aud = /^audio\//.test(f.type);
+  if (!vid && !img && !aud) return toast('Only photos, videos and voice notes can be sent', true);
   if (vid && f.size > CH_MEDIA_MAX) return toast('This video is too big (max ' + Math.round(CH_MEDIA_MAX / 1048576) + ' MB). Trim it and try again.', true);
   let m = again;
   if (!m){
     const cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
-    m = { id:cid, t:Date.now(), mine:true, text:'ksmedia:' + JSON.stringify({ k:vid ? 'vid' : 'img', n:f.name || (vid ? 'video' : 'photo'), c:cap }), state:'pending', up:0, _file:f };
+    m = { id:cid, t:Date.now(), mine:true, text:'ksmedia:' + JSON.stringify({ k:vid ? 'vid' : aud ? 'aud' : 'img', n:f.name || (vid ? 'video' : aud ? 'voice-note' : 'photo'), c:cap, d:(extra && extra.d) || undefined }), state:'pending', up:0, _file:f };
     (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
   } else { m.state = 'pending'; m.up = 0; }
   chatRenderMsgs(true);
   try{
-    let blob = f, mime = f.type || (vid ? 'video/mp4' : 'image/jpeg'), name = f.name || (vid ? 'video.mp4' : 'photo.jpg');
+    let blob = f, mime = f.type || (vid ? 'video/mp4' : aud ? 'audio/webm' : 'image/jpeg'), name = f.name || (vid ? 'video.mp4' : aud ? 'voice-note.webm' : 'photo.jpg');
     if (img && f.type !== 'image/gif'){ blob = await chImgShrink(f); mime = 'image/jpeg'; name = name.replace(/\.\w+$/, '') + '.jpg'; }
-    const q = new URLSearchParams({ to, cid:m.id, name, mime, c:(chMedia(m) || {}).c || '' });
+    const q = new URLSearchParams({ to, cid:m.id, name, mime, c:(chMedia(m) || {}).c || '', d:(chMedia(m) || {}).d || '' });
     const r = await new Promise((resolve, reject) => {
       const x = new XMLHttpRequest(); x.open('POST', API_URL + '/chat/media/upload?' + q.toString());
       x.setRequestHeader('Authorization', 'Bearer ' + S.token); x.setRequestHeader('Content-Type', 'application/octet-stream');
@@ -5147,8 +5202,9 @@ const trWhen = ms => ms ? new Date(ms).toLocaleString('en-IN', { day:'2-digit', 
 function trashItem(x){
   const o = chMedia({ text:x.text }); let body;
   if (o){
-    const ic = o.k === 'vid' ? '🎥' : '📷', u = S.trash.mu[o.i];
+    const ic = o.k === 'vid' ? '🎥' : o.k === 'aud' ? '🎤' : '📷', u = S.trash.mu[o.i];
     const med = u === undefined ? `<div class="tr-ph">${ic} Loading…</div>` : u === null ? `<div class="tr-ph">⚠️ ${ic} Could not load</div>`
+      : o.k === 'aud' ? `<audio class="tr-media" src="${esc(u)}" controls preload="metadata"></audio>`
       : o.k === 'vid' ? `<video class="tr-media" src="${esc(u)}" controls preload="metadata" playsinline></video>`
       : `<img class="tr-media" src="${esc(u)}" alt="" loading="lazy" onclick="trashView('${esc(o.i)}')">`;
     body = med + (o.c ? `<div class="tr-tx">${esc(o.c)}</div>` : '');
@@ -5329,20 +5385,90 @@ function vcRingStop(){ clearInterval(VC.ring); VC.ring = null; try { navigator.v
 /* a new chat message while a call is full screen: small card at the top, so you never have to minimise the call to see who wrote */
 function vcFull(){ const el = document.getElementById('vcUI'); return !!(el && !el.classList.contains('hidden') && !el.classList.contains('vc-mini')); }
 let vcPopT = null;
+/* ---------- message pop-up on top of a full-screen call: size, position, layout, colours, transparency (⋮ menu > Message pop-up) ---------- */
+const POP_DEF = { pos:'top', al:'center', lay:'card', bd:'1', sh:'1', w:440, fs:15, rad:14, op:100, blur:0, dur:6, bg:'#111827', tx:'#ffffff', nm:'#a5b4fc', ac:'#6366f1' };
+const POP_PRE = { dark:{ bg:'#111827', tx:'#ffffff', nm:'#a5b4fc', ac:'#6366f1', op:100, blur:0 }, glass:{ bg:'#ffffff', tx:'#ffffff', nm:'#e0e7ff', ac:'#ffffff', op:16, blur:16, bd:'2' },
+  clear:{ bg:'#000000', tx:'#ffffff', nm:'#fde68a', ac:'#fde68a', op:0, blur:0, bd:'0', sh:'0' }, light:{ bg:'#ffffff', tx:'#0f172a', nm:'#4f46e5', ac:'#4f46e5', op:100, blur:0 },
+  green:{ bg:'#052e1a', tx:'#ecfdf5', nm:'#4ade80', ac:'#22c55e', op:92, blur:0 } };
+function popGet(){ let o = {}; try{ o = JSON.parse(localStorage.getItem('ks_pop_v1') || '{}') || {}; }catch(e){} return Object.assign({}, POP_DEF, o); }
+function popSave(o){ try{ localStorage.setItem('ks_pop_v1', JSON.stringify(o)); }catch(e){} }
+function popRgba(h, a){ const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(h || ''); return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})` : `rgba(17,24,39,${a})`; }
+function popCss(){
+  if (document.getElementById('vcPopCss3')) return;
+  const st = document.createElement('style'); st.id = 'vcPopCss3';
+  st.textContent = '.vc-pop{position:absolute;left:0;right:0;box-sizing:border-box;height:fit-content;width:min(calc(100% - 24px),var(--pw,440px));z-index:9;padding:11px 16px 12px;border-radius:var(--prad,14px);background:var(--pbg,#111827);color:var(--ptx,#fff);cursor:pointer;text-align:left;opacity:0;pointer-events:none;transition:opacity .28s,transform .28s;-webkit-backdrop-filter:blur(var(--pbl,0px));backdrop-filter:blur(var(--pbl,0px))}'
+    + '.vc-pop[data-pos=top]{top:calc(12px + env(safe-area-inset-top,0px));transform:translateY(-16px) scale(.97)}.vc-pop[data-pos=mid]{top:0;bottom:0;margin-top:auto;margin-bottom:auto;transform:scale(.94)}.vc-pop[data-pos=bot]{bottom:calc(125px + env(safe-area-inset-bottom,0px));transform:translateY(16px) scale(.97)}'
+    + '.vc-pop[data-al=left]{margin-left:12px;margin-right:auto}.vc-pop[data-al=center]{margin-left:auto;margin-right:auto}.vc-pop[data-al=right]{margin-left:auto;margin-right:12px}'
+    + '.vc-pop[data-bd="1"]{border:1px solid rgba(255,255,255,.14);border-left:4px solid var(--pac,#6366f1)}.vc-pop[data-bd="2"]{border:2px solid var(--pac,#6366f1)}.vc-pop[data-sh="1"]{box-shadow:0 10px 30px rgba(0,0,0,.55)}.vc-pop[data-clr="1"]{text-shadow:0 1px 4px rgba(0,0,0,.95)}'
+    + '.vc-pop.pv[data-pos=top]{top:10px}.vc-pop.pv[data-pos=bot]{bottom:10px}.vc-pop.pv{cursor:default}'
+    + '.vc-pop.show[data-pos]{opacity:1;pointer-events:auto;transform:none}'
+    + '.vc-pop .pn{display:block;font-size:calc(var(--pfs,15px)*.87);font-weight:700;letter-spacing:.2px;color:var(--pnm,#a5b4fc);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+    + '.vc-pop .pm{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:var(--pfs,15px);line-height:1.35;font-weight:500;color:var(--ptx,#fff);word-break:break-word}'
+    + '.vc-pop.lay-line{padding:8px 14px}.vc-pop.lay-line .pm{-webkit-line-clamp:1}.vc-pop.lay-line .pn{display:inline;margin:0 4px 0 0;font-size:inherit}.vc-pop.lay-mini{padding:9px 14px}'
+    + '.vc-pop.lay-bubble{display:flex;align-items:center;gap:10px;padding:8px 16px 8px 8px}.vc-pop.lay-bubble .pb{min-width:0;flex:1}.vc-pop .pa{width:38px;height:38px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:800;color:#fff;font-size:16px}';
+  document.head.appendChild(st);
+}
+function popPreviewText(u){
+  const m = String(u.lastText || ''), o = m.indexOf('ksmedia:') === 0 ? chMedia({ text:m }) : null;
+  return o ? (o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') : (m || 'New message');
+}
+function popFill(p, u, C, preview){
+  const nm = esc(u.name || u.username || '') + (u.isGroup && u.lastFrom ? ' · ' + esc(u.lastFrom) : ''), tx = esc(popPreviewText(u));
+  p.className = 'vc-pop lay-' + C.lay + (preview ? ' pv' : '');
+  p.setAttribute('data-pos', C.pos); p.setAttribute('data-al', C.al); p.setAttribute('data-bd', C.bd); p.setAttribute('data-sh', C.sh);
+  p.setAttribute('data-clr', C.op < 40 ? '1' : '');
+  p.style.cssText = `--pw:${C.w}px;--pfs:${C.fs}px;--prad:${C.lay === 'bubble' ? Math.max(C.rad, 24) : C.rad}px;--pbg:${popRgba(C.bg, C.op / 100)};--ptx:${C.tx};--pnm:${C.nm};--pac:${C.ac};--pbl:${C.blur}px`;
+  p.innerHTML = C.lay === 'line' ? `<span class="pm"><b class="pn">${nm}:</b> ${tx}</span>`
+    : C.lay === 'mini' ? `<span class="pm">${tx}</span>`
+    : C.lay === 'bubble' ? `<span class="pa" style="background:${chColor(u.id || u.name)}">${esc((u.name || u.username || '?').trim().charAt(0).toUpperCase())}</span><span class="pb"><span class="pn">${nm}</span><span class="pm">${tx}</span></span>`
+    : `<span class="pn">${nm}</span><span class="pm">${tx}</span>`;
+}
 function vcMsgPop(u){
   const el = document.getElementById('vcUI'); if (!el || !u) return;
-  if (!document.getElementById('vcPopCss2')){
-    const st = document.createElement('style'); st.id = 'vcPopCss2';
-    st.textContent = '.vc-pop{position:absolute;left:50%;top:calc(12px + env(safe-area-inset-top));width:min(calc(100% - 24px),440px);box-sizing:border-box;transform:translate(-50%,-180%);transition:transform .3s;z-index:9;padding:11px 16px 12px 16px;border-radius:14px;background:#111827;border:1px solid rgba(255,255,255,.12);border-left:4px solid #6366f1;box-shadow:0 10px 30px rgba(0,0,0,.55);color:#fff;cursor:pointer;text-align:left}.vc-pop.show{transform:translate(-50%,0)}.vc-pop .pn{display:block;font-size:13px;font-weight:700;letter-spacing:.2px;color:#a5b4fc;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.vc-pop .pm{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15px;line-height:1.35;font-weight:500;color:#fff;word-break:break-word}';
-    document.head.appendChild(st);
-  }
-  let p = el.querySelector('.vc-pop'); if (!p){ p = document.createElement('div'); p.className = 'vc-pop'; el.appendChild(p); }
-  const m = String(u.lastText || ''), txt = m.indexOf('ksmedia:') === 0 ? '📷 Photo / video' : (m || 'New message');
-  p.innerHTML = `<span class="pn">${esc(u.name || u.username || '')}${u.isGroup && u.lastFrom ? ' · ' + esc(u.lastFrom) : ''}</span><span class="pm">${esc(txt)}</span>`;
+  popCss(); const C = popGet();
+  let p = el.querySelector('.vc-pop'); if (!p){ p = document.createElement('div'); el.appendChild(p); }
+  popFill(p, u, C, false);
   p.onpointerdown = e => e.stopPropagation();
   p.onclick = () => { p.classList.remove('show'); vcMini(true); try{ if (S.view !== 'chat') go('chat'); if (chatPeer(u.id)) chatOpen(u.id); }catch(e){} };
   void p.offsetWidth; p.classList.add('show');
-  clearTimeout(vcPopT); vcPopT = setTimeout(() => p.classList.remove('show'), 6000);
+  clearTimeout(vcPopT); vcPopT = setTimeout(() => p.classList.remove('show'), Math.max(2, C.dur) * 1000);
+}
+function chatPopMenu(){
+  popCss(); const C = popGet(), sample = { id:(S.me && S.me.id) || 'a', name:(S.me && (S.me.name || S.me.username)) || 'Admin', lastText:'Hello! This is how your message pop-up looks.' };
+  const seg = (k, opts) => `<div class="seg" data-pk="${k}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${String(C[k]) === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const rng = (k, label, min, max, unit) => `<div class="th-row"><div class="th-lbl"><span>${label}</span><b id="pop_${k}">${C[k]}${unit}</b></div><input type="range" data-pr="${k}" data-u="${unit}" min="${min}" max="${max}" step="1" value="${C[k]}"></div>`;
+  const col = (k, label) => `<label class="th-col"><input type="color" data-pc="${k}" value="${C[k]}"><span>${label}</span></label>`;
+  const w = openModal(`<h3>💬 Message pop-up</h3><p class="sub">The card that appears on top of a call when a message arrives. Saved on this phone.</p>
+    <div class="pop-pv" id="popPv"></div>
+    <div class="th-row"><div class="th-lbl"><span>Quick styles</span></div><div class="seg" id="popPre">${[['dark', 'Dark'], ['glass', 'Glass'], ['clear', 'Transparent'], ['light', 'Light'], ['green', 'Green']].map(([k, l]) => `<button type="button" data-pre="${k}">${l}</button>`).join('')}</div></div>
+    <div class="th-row"><div class="th-lbl"><span>Layout</span></div>${seg('lay', [['card', 'Card'], ['line', 'One line'], ['bubble', 'Bubble'], ['mini', 'Message only']])}</div>
+    <div class="th-row"><div class="th-lbl"><span>Position</span></div>${seg('pos', [['top', 'Top'], ['mid', 'Middle'], ['bot', 'Bottom']])}</div>
+    <div class="th-row"><div class="th-lbl"><span>Side</span></div>${seg('al', [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']])}</div>
+    <div class="th-row"><div class="th-lbl"><span>Border</span></div>${seg('bd', [['0', 'None'], ['1', 'Side bar'], ['2', 'Full']])}</div>
+    <div class="th-row"><div class="th-lbl"><span>Shadow</span></div>${seg('sh', [['1', 'On'], ['0', 'Off']])}</div>
+    <div class="th-row"><div class="th-lbl"><span>Colours</span></div><div class="th-cols">${col('bg', 'Background')}${col('tx', 'Message text')}${col('nm', 'Name')}${col('ac', 'Border')}</div></div>
+    ${rng('op', 'Background opacity (0 = see-through)', 0, 100, '%')}${rng('blur', 'Glass blur', 0, 24, 'px')}${rng('w', 'Width', 200, 520, 'px')}${rng('fs', 'Text size', 11, 24, 'px')}${rng('rad', 'Roundness', 0, 30, 'px')}${rng('dur', 'Stays on screen', 2, 15, ' s')}
+    <div class="actions" style="margin-top:10px"><button class="btn ghost" type="button" id="popReset">↺ Reset</button><button class="btn ghost" type="button" id="popTest">▶ Test</button><button class="btn" type="button" id="popDone">Done</button></div>`);
+  w.classList.add('pw-over');
+  const pv = w.querySelector('#popPv'), p = document.createElement('div'); pv.appendChild(p);
+  const draw = (anim) => { popFill(p, sample, C, true); if (anim){ p.classList.remove('show'); void p.offsetWidth; } p.classList.add('show'); };
+  const save = () => { popSave(C); draw(false); };
+  draw(true);
+  w.querySelector('#popDone').onclick = () => w.remove();
+  w.querySelector('#popTest').onclick = () => draw(true);
+  w.querySelector('#popReset').onclick = () => { try{ localStorage.removeItem('ks_pop_v1'); }catch(e){} w.remove(); chatPopMenu(); };
+  w.addEventListener('input', e => {
+    const r = e.target.closest('[data-pr]'), c = e.target.closest('[data-pc]');
+    if (r){ C[r.dataset.pr] = +r.value; const b = w.querySelector('#pop_' + r.dataset.pr); if (b) b.textContent = r.value + r.dataset.u; save(); }
+    else if (c){ C[c.dataset.pc] = c.value; save(); }
+  });
+  w.addEventListener('click', e => {
+    const pre = e.target.closest('[data-pre]');
+    if (pre){ Object.assign(C, POP_DEF, POP_PRE[pre.dataset.pre]); popSave(C); w.remove(); chatPopMenu(); return; }
+    const b = e.target.closest('.seg[data-pk] button'); if (!b) return;
+    const sg = b.closest('.seg'); C[sg.dataset.pk] = b.dataset.v;
+    sg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); draw(true); popSave(C);
+  });
 }
 function vcRoot(){
   let el = document.getElementById('vcUI'); if (el) return el;
