@@ -1637,20 +1637,23 @@ function setMenu(on){ document.body.classList.toggle('menu-open', !!on); const t
 $('#menuToggle').onclick = () => setMenu(true);
 $('#scrim').onclick = () => setMenu(false);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(false); });
-(function swipeMenu(){                       // swipe right from the left edge opens, swipe left closes
-  let x0 = null, y0 = 0;
-  document.addEventListener('touchstart', e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; }, { passive:true });
+(function swipeMenu(){                       // swipe in from the left OR right edge = Back ; at the very first screen the left edge opens the menu
+  let x0 = null, y0 = 0, t0 = 0;
+  document.addEventListener('touchstart', e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; t0 = Date.now(); }, { passive:true });
   document.addEventListener('touchend', e => {
     if (x0 === null) return;
-    const t = e.changedTouches[0], dx = t.clientX - x0, dy = Math.abs(t.clientY - y0), open = document.body.classList.contains('menu-open');
-    if (window.innerWidth <= 860 && dy < 50){
-      const R = document.body.dataset.sb === 'right', edge = R ? x0 > window.innerWidth - 24 : x0 < 24, toward = R ? -dx : dx;
-      if (!open && edge && toward > 60 && !$('#app').classList.contains('hidden')) setMenu(true);
-      else if (open && toward < -60) setMenu(false);
-    }
-    x0 = null;
+    const t = e.changedTouches[0], dx = t.clientX - x0, dy = Math.abs(t.clientY - y0), W = window.innerWidth, open = document.body.classList.contains('menu-open');
+    const sx = x0; x0 = null;
+    if ($('#app').classList.contains('hidden') || dy > 60 || Date.now() - t0 > 900) return;
+    const R = document.body.dataset.sb === 'right';
+    if (open){ if ((R ? dx : -dx) > 60) setMenu(false); return; }          // swipe the open menu away
+    const fromL = sx < 28, fromR = sx > W - 28, inward = fromL ? dx : fromR ? -dx : 0;
+    if (inward < 70) return;
+    if (window.ksBack && ksBack()) return;                                   // went back one step
+    if (W <= 860 && ((fromL && !R) || (fromR && R))) setMenu(true);          // nothing to go back to: open the menu
   }, { passive:true });
 })();
+
 function go(v){
   setMenu(false);
   if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
@@ -3440,6 +3443,7 @@ function vSettings(){
   grid.insertAdjacentHTML('afterbegin', themeCard());
   grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
+  grid.insertAdjacentHTML('beforeend', window.ksOptCard ? ksOptCard() : '');
   if (isAdmin()) grid.insertAdjacentHTML('beforeend', sessCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
@@ -3450,8 +3454,9 @@ function vSettings(){
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash']];
+const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['smart','Smart options']];
 const SET_DEF = {
+  smart:['✨','Smart options','Compact view, swipe back, call reactions, online alerts'],
   photo:['🖼','Profile photo','Your picture shown in Chat'],
   sess:['⏳','Stay signed in','How long you stay logged in'],
   security:['🔐','Login & security','Change username and password'],
@@ -3472,7 +3477,7 @@ const SET_DEF = {
 };
 const SET_GROUPS = [
   ['Account & security', ['photo','security','sess','bio']],
-  ['Customize', ['theme','general']],
+  ['Customize', ['theme','smart','general']],
   ['People & access', ['emps','users','groups']],
   ['Attendance & expenses', ['status','cats']],
   ['Data & system', ['vcsproc','export','drive','activity','hist','trash']]
@@ -5285,6 +5290,7 @@ function chatBack(){
 async function chatSend(){
   const c = S.chat, to = c.with, ta = $('#chInput'); if (!to || !ta) return;
   const text = ta.value.trim(); if (!text) return;
+  try { window.ksFx && ksFx.chatHook(text); } catch (e) {}
   if (c.ed[to]) return chatEditDo(to, text);
   ta.value = ''; c.drafts[to] = ''; ta.style.height = 'auto'; ta.focus();
   const cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
@@ -5544,6 +5550,7 @@ function vcBar(mode){
   else {
     h = b('dark' + (VC.muted ? ' on' : ''), VC.muted ? '🔇' : '🎤', VC.muted ? 'Unmute' : 'Mute', 'vcMute()');
     if (VC.kind === 'video') h += b('dark' + (VC.camOff ? ' on' : ''), VC.camOff ? '🚫' : '📷', VC.camOff ? 'Camera on' : 'Camera off', 'vcCam()');
+    if (window.ksFx && ksFx.on()) h += b('dark', '😍', 'React', 'ksFx.tray()');
     h += b('red', '✖', 'End', 'vcHangup()');
   }
   document.getElementById('vcBar').innerHTML = h;
@@ -5632,6 +5639,7 @@ function vcLocalDraw(){
 function vcMakePc(){
   const pc = new RTCPeerConnection({ iceServers: VC.ice }), remote = new MediaStream(), rv = document.getElementById('vcRemote');
   rv.srcObject = remote;
+  try { window.ksFx && ksFx.attach(pc); } catch (e) {}
   pc.ontrack = e => { remote.addTrack(e.track); rv.play && rv.play().catch(() => {}); };
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
@@ -5667,6 +5675,7 @@ function vcErrText(e){
   return (e && e.message) || 'Could not start the call.';
 }
 function vcCleanup(){
+  try { window.ksFx && ksFx.detach(); } catch (e) {}
   vcRingStop(); clearInterval(VC.tick); clearTimeout(VC.lost); cancelAnimationFrame(VC.lraf);
   try { VC.pc && VC.pc.close(); } catch {}
   try { VC.local && VC.local.getTracks().forEach(t => t.stop()); } catch {}
@@ -5971,7 +5980,7 @@ function ludoReset(){ clearInterval(LU.timer); LU.timer = null; const gid = LU.g
 const LV_DEST = { sheets:['📊','Google Sheets'], cache:['⚡','Server memory'], oauth:['🔑','Google login'], calendar:['📅','Google Calendar'], drive:['☁️','Google Drive'],
   translate:['🌐','Translate'], github:['🐙','GitHub'], mail:['✉️','E-mail'], turn:['📞','Call relay'], other:['🔗','Other'] };
 const LV_NODES = ['sheets','calendar','drive','oauth','translate','github','mail','turn'];
-const LV_POLL = new Set(['chatLive','chatTyping','callPoll','ludoPoll','callConfig','chatPing','chatFetch','getAll','status']);
+const LV_POLL = new Set(['chatUsers','chatLive','chatTyping','callPoll','ludoPoll','callConfig','chatPing','chatFetch','getAll','status']);
 const LV_ACT = { login:'Sign in', logout:'Sign out', getAll:'Load / refresh all data', setAttendance:'Mark attendance', addExpense:'Add expense', updateExpense:'Edit expense', deleteExpense:'Delete expense',
   addWork:'Add work entry', updateWork:'Edit work entry', deleteWork:'Delete work entry', addVcs:'Add VCS complaint', updateVcs:'Update VCS complaint', addRack:'Add rack item', updateRack:'Edit rack item',
   deleteRack:'Delete rack item', saveRackData:'Save rack data', setTimetable:'Time table change', chatSend:'Send chat message', chatLive:'Chat live tick', chatFetch:'Load chat', chatPing:'Online ping',

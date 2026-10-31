@@ -11,7 +11,7 @@ const info = { integrations: [], started: Date.now() };
 let seq = 0, lag = 0;
 
 // background polling the app does all the time (hidden by default in the viewer)
-const POLL = new Set(['chatLive', 'chatTyping', 'callPoll', 'ludoPoll', 'callConfig', 'chatPing', 'chatFetch', 'getAll', 'status']);
+const POLL = new Set(['chatUsers','chatLive', 'chatTyping', 'callPoll', 'ludoPoll', 'callConfig', 'chatPing', 'chatFetch', 'getAll', 'status']);
 // only these request fields are ever shown (names of fields are shown for everything else, never their values)
 const SAFE = new Set(['date', 'month', 'year', 'emp', 'code', 'status', 'id', 'to', 'with', 'kind', 'purpose', 'cat', 'category', 'type', 'amount', 'slot', 'group', 'username']);
 
