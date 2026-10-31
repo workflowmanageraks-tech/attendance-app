@@ -4436,7 +4436,7 @@ function chatRenderMsgs(toBottom){
     }
     const v = chatView(m), sl = S.chat.sel.has(m.id);
     const tg = v.busy ? '<div class="tg">🌐 Translating…</div>' : v.fail ? '<div class="tg bad">🌐 Could not translate · tap to retry</div>' : v.lang ? `<div class="tg">🌐 ${esc(CH_LANGS[v.lang].short)} · tap for options</div>` : '';
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chRqHtml(m)}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${v.text ? tg : ''}<div class="mt">${meta}</div></div>`;
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chRqHtml(m)}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${v.text ? tg : ''}${chRxHtml(m)}<div class="mt">${meta}</div></div>`;
   });
   box.innerHTML = html;
   if (toBottom || near) box.scrollTop = box.scrollHeight; else box.scrollTop = keepTop;
@@ -4446,7 +4446,7 @@ function chatMerge(id, list){
   const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
   list.forEach(m => {
     const i = a.findIndex(x => x.id === m.id);
-    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text || a[i].from !== m.from || a[i].edited !== m.edited){
+    if (i >= 0){ if (a[i].state || a[i].t !== m.t || a[i].text !== m.text || a[i].from !== m.from || a[i].edited !== m.edited || JSON.stringify(a[i].rx || null) !== JSON.stringify(m.rx || null)){
       if (a[i].text !== m.text){ [S.chat.tr, S.chat.trFail].forEach(o => Object.keys(o).forEach(k => { if (k.endsWith('|' + m.id)) delete o[k]; })); }
       a[i] = m; changed = true; } }
     else { a.push(m); changed = true; }
@@ -4723,6 +4723,67 @@ function chatMsgMenu(id){
     w.remove(); S.chat.trv++; chatRenderMsgs();
   });
 }
+/* ---------- reactions: hold a message, pick an emoji (like WhatsApp) ---------- */
+const RX_QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const RX_ALL = ['👍','👎','❤️','🔥','😂','🤣','😊','😍','😘','🥰','😎','🤩','😮','😲','😢','😭','😡','🤔','🙏','👏','🙌','💪','🎉','✅','❌','💯','👌','🤝','👀','😅','😉','😁','😇','🥳','😴','🤗','😬','😐','🙄','😤','😱','🤯','🥺','😌','😋','🤪','🤭','🫡','👋','✌️','🤞','🫶','💔','💙','💚','💛','🧡','💜','🖤','⭐','✨','🌟','⚡','🎁','🎂','🍕','☕','🍺','🌹','🌞','🌙','🚀','📞','📌','🏆','💰','⏰','👍🏻','🙏🏻','😂','🤦','🤷','🤲','🫠','😏','😒','😞','😔','😟','😳','🥵','🥶','🤒','🤕'];
+function chRxHtml(m){
+  const rx = m.rx; if (!rx || m.state) return '';
+  const k = Object.keys(rx); if (!k.length) return '';
+  return `<div class="rx">${k.map(e => `<span class="rxc ${rx[e].me ? 'me' : ''}" data-rx="${esc(e)}">${esc(e)}${rx[e].n > 1 ? ' ' + rx[e].n : ''}</span>`).join('')}</div>`;
+}
+function chRxCss(){
+  if (document.getElementById('rxCss')) return;
+  const st = document.createElement('style'); st.id = 'rxCss';
+  st.textContent = '.rx{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}.rxc{font-size:13px;line-height:1;padding:3px 8px;border-radius:12px;background:rgba(120,120,140,.2);cursor:pointer;-webkit-tap-highlight-color:transparent}.rxc.me{background:rgba(99,102,241,.3);box-shadow:inset 0 0 0 1px rgba(99,102,241,.6)}'
+    + '.rxbk{position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.28)}.rxbar{position:fixed;z-index:2001;display:flex;gap:2px;align-items:center;padding:6px 8px;border-radius:30px;background:var(--card,#fff);box-shadow:0 8px 28px rgba(0,0,0,.35);animation:rxin .14s ease-out}.rxbar button{border:0;background:none;font-size:26px;line-height:1;padding:5px 6px;border-radius:50%;cursor:pointer}.rxbar button.on{background:rgba(99,102,241,.22)}.rxbar button.plus{font-size:20px;background:rgba(120,120,140,.2);width:36px;height:36px;padding:0;color:inherit}'
+    + '.rxact{position:fixed;z-index:2001;min-width:180px;border-radius:14px;background:var(--card,#fff);box-shadow:0 8px 28px rgba(0,0,0,.35);overflow:hidden;animation:rxin .14s ease-out}.rxact button{display:block;width:100%;text-align:left;border:0;background:none;color:inherit;font:inherit;padding:12px 16px;cursor:pointer}.rxact button+button{border-top:1px solid var(--line,rgba(120,120,140,.25))}'
+    + '@keyframes rxin{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}.rxgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;max-height:50vh;overflow:auto}.rxgrid button{border:0;background:none;font-size:26px;padding:7px 0;border-radius:10px;cursor:pointer}';
+  document.head.appendChild(st);
+}
+function chatReactBar(b){
+  const id = b.dataset.mid, m = chatMsg(id); if (!m) return;
+  if (m.state){ chatTogglePick(id); return; }
+  chRxCss();
+  const mine = Object.keys(m.rx || {}).find(e => m.rx[e].me) || '';
+  const bk = document.createElement('div'); bk.className = 'rxbk';
+  const bar = document.createElement('div'); bar.className = 'rxbar';
+  bar.innerHTML = RX_QUICK.map(e => `<button type="button" data-e="${e}" class="${mine === e ? 'on' : ''}">${e}</button>`).join('') + '<button type="button" class="plus" data-more aria-label="More emoji">＋</button>';
+  const v = chatView(m);
+  const act = document.createElement('div'); act.className = 'rxact';
+  act.innerHTML = `<button type="button" data-a="reply">↩ Reply</button>${v.text ? '<button type="button" data-a="copy">📋 Copy</button>' : ''}<button type="button" data-a="pick">☑ Select</button><button type="button" data-a="more">⋯ More (translate, edit, delete)</button>`;
+  document.body.append(bk, bar, act);
+  const r = b.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
+  const bw = bar.offsetWidth, bh = bar.offsetHeight, ah = act.offsetHeight, aw = act.offsetWidth;
+  let top = r.top - bh - 8; if (top < 64) top = Math.min(r.bottom + 8, vh - bh - ah - 20);
+  bar.style.top = top + 'px'; bar.style.left = Math.max(8, Math.min(vw - bw - 8, r.left + r.width / 2 - bw / 2)) + 'px';
+  let at = top + bh + 8; if (at + ah > vh - 8) at = Math.max(8, top - ah - 8);
+  act.style.top = at + 'px'; act.style.left = Math.max(8, Math.min(vw - aw - 8, r.left + r.width / 2 - aw / 2)) + 'px';
+  const close = () => { bk.remove(); bar.remove(); act.remove(); };
+  bk.onclick = close;
+  bar.querySelectorAll('[data-e]').forEach(x => x.onclick = () => { close(); chatReact(id, x.dataset.e); });
+  bar.querySelector('[data-more]').onclick = () => { close(); chatReactPicker(id); };
+  act.querySelectorAll('[data-a]').forEach(x => x.onclick = () => {
+    close(); const k = x.dataset.a;
+    if (k === 'reply') chatReplyTo(id); else if (k === 'copy') chatCopyText(chatView(m).text); else if (k === 'pick') chatTogglePick(id); else chatMsgMenu(id);
+  });
+}
+function chatReactPicker(id){
+  chRxCss();
+  const w = openModal(`<h3>Choose a reaction</h3><div class="rxgrid">${RX_ALL.map(e => `<button type="button" data-e="${e}">${e}</button>`).join('')}</div><div class="foot"><button type="button" class="btn ghost" data-x>Close</button></div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelectorAll('[data-e]').forEach(x => x.onclick = () => { w.remove(); chatReact(id, x.dataset.e); });
+}
+async function chatReact(id, emoji){
+  const m = chatMsg(id), conv = S.chat.with; if (!m || m.state) return;
+  const old = m.rx, rx = {}; Object.keys(old || {}).forEach(k => { rx[k] = { n:old[k].n, me:old[k].me }; });
+  const mine = Object.keys(rx).find(k => rx[k].me);
+  if (mine){ rx[mine].n--; rx[mine].me = 0; if (rx[mine].n <= 0) delete rx[mine]; }
+  if (mine !== emoji){ rx[emoji] = { n:(rx[emoji] ? rx[emoji].n : 0) + 1, me:1 }; }
+  m.rx = Object.keys(rx).length ? rx : undefined; S.chat.trv++; chatRenderMsgs();
+  try{ const r = await chatApi('chatReact', { with:conv, id, emoji }); m.rx = r.rx && Object.keys(r.rx).length ? r.rx : undefined; }
+  catch(e){ m.rx = old; chatErr(e); }
+  S.chat.trv++; chatRenderMsgs();
+}
 /* ---------- reply (quote) and edit ---------- */
 function chRqHtml(m){
   const q = m && m.reply; if (!q) return '';
@@ -4841,11 +4902,12 @@ function chatBindMsgs(){
     const b = bub(e); if (!b || b.classList.contains('failed')) return;
     if (e.target.closest('video')) return;
     long = false; x0 = e.clientX; y0 = e.clientY; stop();
-    tm = setTimeout(() => { long = true; tm = null; if (navigator.vibrate) try{ navigator.vibrate(15); }catch(_){}; chatTogglePick(b.dataset.mid); }, 450);
+    tm = setTimeout(() => { long = true; tm = null; if (navigator.vibrate) try{ navigator.vibrate(15); }catch(_){}; if (S.chat.sel.size) chatTogglePick(b.dataset.mid); else chatReactBar(b); }, 450);
   });
   box.addEventListener('pointermove', e => { if (tm && (Math.abs(e.clientX - x0) > 8 || Math.abs(e.clientY - y0) > 8)) stop(); });
   ['pointerup', 'pointercancel', 'pointerleave', 'scroll'].forEach(ev => box.addEventListener(ev, stop, true));
   box.addEventListener('contextmenu', e => { if (bub(e)) e.preventDefault(); });
+  box.addEventListener('click', e => { const c = e.target.closest && e.target.closest('.rxc'); if (!c) return; e.stopPropagation(); e.preventDefault(); const b = c.closest('.ch-b'); if (b) chatReact(b.dataset.mid, c.dataset.rx); }, true);
   /* swipe a message to the right = reply (like WhatsApp / Telegram) */
   (function swipeReply(){
     let b = null, sx = 0, sy = 0, dx = 0, lock = '', hit = false;
@@ -5269,17 +5331,18 @@ function vcFull(){ const el = document.getElementById('vcUI'); return !!(el && !
 let vcPopT = null;
 function vcMsgPop(u){
   const el = document.getElementById('vcUI'); if (!el || !u) return;
-  if (!document.getElementById('vcPopCss')){
-    const st = document.createElement('style'); st.id = 'vcPopCss';
-    st.textContent = '.vc-pop{position:absolute;left:50%;top:calc(10px + env(safe-area-inset-top));width:calc(100% - 140px);max-width:380px;min-width:190px;transform:translate(-50%,-160%);transition:transform .3s;z-index:7;display:flex;align-items:center;gap:10px;padding:8px 12px 8px 8px;border-radius:16px;background:rgba(15,23,42,.94);box-shadow:0 8px 28px rgba(0,0,0,.5);color:#fff;cursor:pointer;text-align:left}.vc-pop.show{transform:translate(-50%,0)}.vc-pop .pa{flex:none;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;overflow:hidden}.vc-pop .pa img{width:100%;height:100%;object-fit:cover}.vc-pop .pt{min-width:0;display:flex;flex-direction:column}.vc-pop b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.vc-pop span{font-size:12.5px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}';
+  if (!document.getElementById('vcPopCss2')){
+    const st = document.createElement('style'); st.id = 'vcPopCss2';
+    st.textContent = '.vc-pop{position:absolute;left:50%;top:calc(12px + env(safe-area-inset-top));width:min(calc(100% - 24px),440px);box-sizing:border-box;transform:translate(-50%,-180%);transition:transform .3s;z-index:9;padding:11px 16px 12px 16px;border-radius:14px;background:#111827;border:1px solid rgba(255,255,255,.12);border-left:4px solid #6366f1;box-shadow:0 10px 30px rgba(0,0,0,.55);color:#fff;cursor:pointer;text-align:left}.vc-pop.show{transform:translate(-50%,0)}.vc-pop .pn{display:block;font-size:13px;font-weight:700;letter-spacing:.2px;color:#a5b4fc;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.vc-pop .pm{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15px;line-height:1.35;font-weight:500;color:#fff;word-break:break-word}';
     document.head.appendChild(st);
   }
   let p = el.querySelector('.vc-pop'); if (!p){ p = document.createElement('div'); p.className = 'vc-pop'; el.appendChild(p); }
-  p.innerHTML = `<div class="pa" style="background:${chColor(u.id)}">${chInit(u)}</div><div class="pt"><b>💬 ${esc(u.name || u.username)}${u.isGroup && u.lastFrom ? ' · ' + esc(u.lastFrom) : ''}</b><span>${esc(u.lastText || 'New message')}</span></div>`;
+  const m = String(u.lastText || ''), txt = m.indexOf('ksmedia:') === 0 ? '📷 Photo / video' : (m || 'New message');
+  p.innerHTML = `<span class="pn">${esc(u.name || u.username || '')}${u.isGroup && u.lastFrom ? ' · ' + esc(u.lastFrom) : ''}</span><span class="pm">${esc(txt)}</span>`;
   p.onpointerdown = e => e.stopPropagation();
   p.onclick = () => { p.classList.remove('show'); vcMini(true); try{ if (S.view !== 'chat') go('chat'); if (chatPeer(u.id)) chatOpen(u.id); }catch(e){} };
   void p.offsetWidth; p.classList.add('show');
-  clearTimeout(vcPopT); vcPopT = setTimeout(() => p.classList.remove('show'), 5500);
+  clearTimeout(vcPopT); vcPopT = setTimeout(() => p.classList.remove('show'), 6000);
 }
 function vcRoot(){
   let el = document.getElementById('vcUI'); if (el) return el;

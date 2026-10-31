@@ -167,7 +167,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, setActivityAccess: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -334,6 +334,7 @@ function route_(req) {
       case 'setActivityAccess': out = setActivityAccess_(req); break;
       case 'chatDelete':        out = chatDelete_(req); break;
       case 'chatEdit':          out = chatEdit_(req); break;
+      case 'chatReact':         out = chatReact_(req); break;
       case 'chatUsers':         return chatUsers_();
       case 'chatPhotos':        return chatPhotos_(req);
       case 'chatPhotoFull':     return chatPhotoFull_(req);
@@ -1271,7 +1272,7 @@ function createSheet_(k) {
     sh.getRange('A:D').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'CHAT') {
-    sh.getRange(1, 1, 1, 8).setValues([['ID', 'Time (ms)', 'From (user ID)', 'To (user ID)', 'Message', 'Sent at', 'Reply to (JSON)', 'Edited at (ms)']]);
+    sh.getRange(1, 1, 1, 10).setValues([['ID', 'Time (ms)', 'From (user ID)', 'To (user ID)', 'Message', 'Sent at', 'Reply to (JSON)', 'Edited at (ms)', 'Reactions (JSON)', 'Reacted at (ms)']]);
     sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:G').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
     sh.setFrozenRows(1);
   } else if (k === 'HIST') {
@@ -2764,10 +2765,11 @@ function chatRows_() {
   var sh = getSheet_('CHAT'), last = sh.getLastRow();
   if (last < 2) return [];
   var n = Math.min(last - 1, CHAT_SCAN);
-  return sh.getRange(last - n + 1, 1, n, 8).getValues().map(function (r) {
-    var rep = null;
+  return sh.getRange(last - n + 1, 1, n, 10).getValues().map(function (r) {
+    var rep = null, rx = null;
     if (r[6]) { try { rep = JSON.parse(String(r[6])); } catch (e) { rep = null; } }
-    return { id: String(r[0]), t: Number(r[1]) || 0, from: String(r[2]), to: String(r[3]), text: String(r[4]), reply: rep, edited: Number(r[7]) || 0 };
+    if (r[8]) { try { rx = JSON.parse(String(r[8])); } catch (e) { rx = null; } }
+    return { id: String(r[0]), t: Number(r[1]) || 0, from: String(r[2]), to: String(r[3]), text: String(r[4]), reply: rep, edited: Number(r[7]) || 0, rx: rx, rxAt: Number(r[9]) || 0 };
   });
 }
 function chatPeers_() {
@@ -2913,13 +2915,21 @@ function chatMsgOut_(r) {
   var o = { id: r.id, t: r.t, mine: r.from === CTX.uid, text: r.text };
   if (r.reply && r.reply.i) o.reply = { i: String(r.reply.i), n: String(r.reply.n || ''), t: String(r.reply.t || ''), mine: r.reply.f === CTX.uid };
   if (r.edited) o.edited = r.edited;
+  var rx = chatRxOut_(r.rx); if (rx) o.rx = rx;
   return o;
+}
+// reactions: stored as {userId: emoji}; sent to the app as {emoji: {n: how many, me: 1 if I reacted with it}}
+function chatRxOut_(map) {
+  if (!map) return null;
+  var o = {}, any = false;
+  Object.keys(map).forEach(function (u) { var e = String(map[u] || ''); if (!e) return; var x = o[e] || (o[e] = { n: 0, me: 0 }); x.n++; if (u === CTX.uid) x.me = 1; any = true; });
+  return any ? o : null;
 }
 // messages EDITED since the app last heard from the server (so the other phone shows the new text); same "since" time as the deleted list
 function chatEdited_(req, rows, nm) {
   var since = Number(req.gs) || 0;
   if (!since) return [];
-  return rows.filter(function (r) { return r.edited > since; }).map(function (r) {
+  return rows.filter(function (r) { return r.edited > since || r.rxAt > since; }).map(function (r) {
     var o = chatMsgOut_(r);
     if (nm) o.from = r.from === CTX.uid ? '' : (nm[r.from] || 'Someone');
     return o;
@@ -2930,6 +2940,10 @@ function chatEnsureCols_(sh) {
     if (!String(sh.getRange(1, 7).getValue() || '').trim()) {
       sh.getRange(1, 7, 1, 2).setValues([['Reply to (JSON)', 'Edited at (ms)']]);
       sh.getRange(1, 7, 1, 2).setFontWeight('bold');
+    }
+    if (!String(sh.getRange(1, 9).getValue() || '').trim()) {
+      sh.getRange(1, 9, 1, 2).setValues([['Reactions (JSON)', 'Reacted at (ms)']]);
+      sh.getRange(1, 9, 1, 2).setFontWeight('bold');
     }
   } catch (e) {}
 }
@@ -3075,6 +3089,31 @@ function chatSend_(req) {
 }
 
 // ---------- EDIT a message (only your own text messages; the other person sees the new text and a small \"edited\" mark) ----------
+// Tap an emoji on a message (people in that chat only). Same emoji again takes it back; another emoji replaces the old one.
+function chatReact_(req) {
+  var conv = String(req.with || '').trim(), isG = isChatGroupId_(conv);
+  var peer = isG ? chatGroupOk_(conv) : chatPeerOk_(conv);
+  var id = String(req.id || '').trim(), emoji = String(req.emoji || '').trim();
+  if (!id) fail_('Choose a message first.');
+  if (!emoji || emoji.length > 16 || !/\p{Extended_Pictographic}/u.test(emoji)) fail_('Choose an emoji.');
+  var sh = getSheet_('CHAT'), last = sh.getLastRow();
+  if (last < 2) fail_('That message was not found.');
+  var n = Math.min(last - 1, CHAT_SCAN), top = last - n + 1;
+  var vals = sh.getRange(top, 1, n, 10).getValues(), hit = -1;
+  vals.forEach(function (r, i) {
+    if (String(r[0]) !== id) return;
+    var from = String(r[2]), to = String(r[3]);
+    if (isG ? to === conv : ((from === CTX.uid && to === peer.id) || (from === peer.id && to === CTX.uid))) hit = i;
+  });
+  if (hit < 0) fail_('That message was not found (it may have been deleted).');
+  chatEnsureCols_(sh);
+  var row = vals[hit], map = {};
+  if (row[8]) { try { map = JSON.parse(String(row[8])) || {}; } catch (e) { map = {}; } }
+  if (map[CTX.uid] === emoji) delete map[CTX.uid]; else map[CTX.uid] = emoji;
+  var r0 = top + hit, c9 = sh.getRange(r0, 9); c9.setNumberFormat('@'); c9.setValue(Object.keys(map).length ? JSON.stringify(map) : '');
+  sh.getRange(r0, 10).setValue(Date.now());
+  return { ok: true, rx: chatRxOut_(map) || {} };
+}
 function chatEdit_(req) {
   var conv = String(req.with || '').trim(), isG = isChatGroupId_(conv);
   var peer = isG ? chatGroupOk_(conv) : chatPeerOk_(conv);
