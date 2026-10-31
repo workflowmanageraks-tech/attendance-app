@@ -32,6 +32,7 @@ class Range {
   }
   getValue() { return this.getValues()[0][0]; }
   _put(vals, mk) {
+    this.sh._jr();
     this.sh._grow(this.r + this.nr - 1, this.c + this.nc - 1);
     const rows = [];
     for (let i = 0; i < this.nr; i++) {
@@ -86,12 +87,18 @@ class Sheet {
   }
   getDataRange() { return this.getRange(1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn())); }
   appendRow(arr) { return this.getRange(this.getLastRow() + 1, 1, 1, arr.length).setValues([arr]); }
+  _jr() {   // change journal: remember how this sheet looked before the first change of the request
+    const J = this.wb.jr;
+    if (J && !J.has(this) && !(this.wb.jrSkip && this.wb.jrSkip(this.name))) J.set(this, Array.from(this.v, r => (r || []).slice()));
+  }
   deleteRows(r, n) {
+    this._jr();
     this.v.splice(r - 1, n); this.rows = Math.max(1, this.rows - n);
     this.wb.ops.push({ deleteDimension: { range: { sheetId: this.id, dimension: 'ROWS', startIndex: r - 1, endIndex: r - 1 + n } } });
   }
   deleteRow(r) { this.deleteRows(r, 1); }
   _insertAt(idx) {
+    this._jr();
     this._grow(idx, 0); this.v.splice(idx, 0, []); this.rows++;
     this.wb.ops.push({ insertDimension: { range: { sheetId: this.id, dimension: 'ROWS', startIndex: idx, endIndex: idx + 1 }, inheritFromBefore: false } });
   }
@@ -171,6 +178,32 @@ function install(wb, env, rt) {
       const i = vals.findIndex(x => String(x[0]) === k);
       if (i >= 0) s.getRange(i + 2, 2).setValue(String(v)); else s.appendRow([k, String(v)]);
     }
+  };
+  // ---- change journal (powers Settings > Change history): what a request changed, row by row, so an admin can undo it ----
+  const JR_SKIP = /activity log|login log|login security|chat|group conversations|trash bin|change history|_app properties/i;
+  wb.jrSkip = n => JR_SKIP.test(n);
+  const jrNorm = r => {
+    const a = Array.from(r || [], x => x === null || x === undefined ? '' : (x && typeof x.getTime === 'function' ? new Date(x.getTime()).toISOString() : x));
+    while (a.length && a[a.length - 1] === '') a.pop();
+    return a;
+  };
+  const jrSame = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+  globalThis.JR_begin_ = () => { wb.jr = new Map(); return true; };
+  globalThis.JR_abort_ = () => { wb.jr = null; };
+  globalThis.JR_end_ = () => {
+    const J = wb.jr; wb.jr = null; const out = [];
+    if (!J) return out;
+    for (const [sh, before] of J) {
+      if (!wb.sheets.includes(sh)) continue;
+      const b = Array.from(before, jrNorm), a = Array.from(sh.v, jrNorm);
+      while (b.length && !b[b.length - 1].length) b.pop();
+      while (a.length && !a[a.length - 1].length) a.pop();
+      let p = 0; while (p < b.length && p < a.length && jrSame(b[p], a[p])) p++;
+      let eb = b.length, ea = a.length; while (eb > p && ea > p && jrSame(b[eb - 1], a[ea - 1])) { eb--; ea--; }
+      if (eb === p && ea === p) continue;
+      out.push({ sheet: sh.name, start: p, before: b.slice(p, eb), after: a.slice(p, ea), prev: p > 0 ? b[p - 1] : null, next: eb < b.length ? b[eb] : null });
+    }
+    return out;
   };
   globalThis.CAL_RT_ = rt;                       // Google Calendar jobs queued by Code.gs, run by server.js
   Object.assign(globalThis, {

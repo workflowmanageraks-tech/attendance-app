@@ -1712,7 +1712,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindTrash(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
   liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise
 }
 
@@ -3443,13 +3443,14 @@ function vSettings(){
   if (isAdmin()) grid.insertAdjacentHTML('beforeend', sessCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
+  if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', histCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', trashCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return settingsHub(grid);
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash']];
+const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash']];
 const SET_DEF = {
   photo:['🖼','Profile photo','Your picture shown in Chat'],
   sess:['⏳','Stay signed in','How long you stay logged in'],
@@ -3466,6 +3467,7 @@ const SET_DEF = {
   vcsproc:['📡','VCS Processing','Live: every request, Render & Google services'],
   drive:['☁️','Google Drive','Where chat photos & videos are stored'],
   activity:['📋','Activity log','Who did what, and when'],
+  hist:['🕘','Change history','Undo edits & deletes'],
   trash:['🗑️','Trash','Deleted chat messages, photos & videos']
 };
 const SET_GROUPS = [
@@ -3473,7 +3475,7 @@ const SET_GROUPS = [
   ['Customize', ['theme','general']],
   ['People & access', ['emps','users','groups']],
   ['Attendance & expenses', ['status','cats']],
-  ['Data & system', ['vcsproc','export','drive','activity','trash']]
+  ['Data & system', ['vcsproc','export','drive','activity','hist','trash']]
 ];
 function setHint(k){
   try {
@@ -5007,6 +5009,48 @@ async function photoPrivacy(){
 }
 
 /* ---------- Settings: connect Google Drive for chat media (main admin) ---------- */
+/* ---------- Change history (main admin): put back anything a user edited or deleted ---------- */
+S.hist = { items:null, q:'', busy:false, err:'' };
+function histCard(){
+  return `<div class="card" id="hiCard"><h3>🕘 Change history <span><button class="btn ghost sm" type="button" onclick="histLoad()">↻ Refresh</button></span></h3>
+    <p class="muted" style="margin-bottom:12px">Every edit, add and delete made by any user is remembered here, with who did it and when. Tap <b>↩ Restore</b> to bring the data back to how it was before that change (a deleted user, expense, work entry, policy, attendance … anything). Restoring is itself recorded, so you can undo it too. Only you can see this.</p>
+    <input class="input" id="hiQ" placeholder="Search user, action or detail…" style="margin-bottom:12px" value="${esc(S.hist.q)}">
+    <div id="hiList"><div class="empty-state">Loading…</div></div></div>`;
+}
+function bindHist(){
+  if (!(S.me && S.me.primary) || S.setSec !== 'hist') return;
+  const q = document.querySelector('#hiQ'); if (q) q.oninput = e => { S.hist.q = e.target.value; histDraw(); };
+  histLoad();
+}
+async function histLoad(){
+  const H = S.hist; if (H.busy) return; H.busy = true;
+  try{ const r = await api('historyList'); H.items = r.items || []; H.err = ''; histDraw(); }
+  catch(e){ H.err = (e && e.message) || 'Could not load the history'; histDraw(); if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
+  H.busy = false;
+}
+function histItem(x){
+  const ch = (x.changes || []).map(c => `<div style="margin-top:6px;font-size:calc(12.5px*var(--fs))"><b>${esc(c.kind)}</b> ${c.n} row${c.n === 1 ? '' : 's'} in <b>${esc(c.sheet)}</b>
+      ${c.before.length ? `<div class="muted" style="word-break:break-word">Before: ${c.before.map(esc).join(' &nbsp;|&nbsp; ')}</div>` : ''}${c.after.length ? `<div class="muted" style="word-break:break-word">After: ${c.after.map(esc).join(' &nbsp;|&nbsp; ')}</div>` : ''}</div>`).join('');
+  const btn = x.restored ? `<div class="muted" style="margin-top:8px">✅ Restored ${esc(x.restored)}</div>`
+    : x.can ? `<div style="margin-top:8px"><button class="btn soft sm" type="button" onclick="histRestore('${esc(x.id)}')">↩ Restore</button></div>`
+    : `<div class="muted" style="margin-top:8px">Too large to restore automatically</div>`;
+  return `<div style="padding:11px 0;border-top:1px solid var(--line)"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(x.action)}</b><span class="muted" style="font-size:calc(12px*var(--fs))">${esc(x.time)}</span></div>
+    <div class="muted" style="font-size:calc(12.5px*var(--fs))">${esc(x.name || x.uid)}${x.detail ? ' · ' + esc(x.detail) : ''}</div>${ch}${btn}</div>`;
+}
+function histDraw(){
+  const el = document.querySelector('#hiList'); if (!el) return;
+  const H = S.hist; if (H.err){ el.innerHTML = `<div class="empty-state">${esc(H.err)}</div>`; return; }
+  if (!H.items){ el.innerHTML = '<div class="empty-state">Loading…</div>'; return; }
+  const q = H.q.trim().toLowerCase();
+  const list = !q ? H.items : H.items.filter(x => [x.action, x.name, x.uid, x.detail, x.time].concat((x.changes || []).map(c => c.sheet + ' ' + c.before.join(' ') + ' ' + c.after.join(' '))).join(' ').toLowerCase().includes(q));
+  el.innerHTML = list.length ? list.map(histItem).join('') : `<div class="empty-state">${H.items.length ? 'Nothing matches your search.' : 'No changes recorded yet. From now on every edit and delete will appear here.'}</div>`;
+}
+async function histRestore(id){
+  const x = (S.hist.items || []).find(i => i.id === id); if (!x) return;
+  if (!await confirmBox('Restore this change?', `${x.action} by ${x.name || x.uid} (${x.time}) will be undone and the data goes back to how it was before.`, 'Restore')) return;
+  try{ await api('historyRestore', { id }); S.hist.items = null; await loadAll(); render(); toast('Restored'); }
+  catch(e){ if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) return handleErr(e); toast((e && e.message) || 'Could not restore', true); histLoad(); }
+}
 /* ---------- Trash (main admin only): chat messages / photos / videos that users deleted ---------- */
 S.trash = { items:null, total:0, mu:{}, q:'', busy:false, err:'' };
 function trashCard(){

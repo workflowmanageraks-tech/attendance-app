@@ -48,6 +48,7 @@ const SHEET_KEYS = {
   CHAT: ['chat'],
   CGRP: ['group conversations'],
   TRASH: ['trash bin'],
+  HIST: ['change history'],
   ACT: ['activity log', 'activity'],
   LPH: ['login security photos', 'security photos', 'login photos'],
   LIC: ['lic', 'lic policies', 'policies'],
@@ -55,7 +56,7 @@ const SHEET_KEYS = {
   RACK: ['rack mapping'],
   RACKCFG: ['rack config']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ACT: 'Activity Log', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ACT: 'Activity Log', HIST: 'Change History', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -155,6 +156,7 @@ function fail_(msg, code) {
 }
 
 var WRITE_ACTIONS = {
+  historyRestore: 1,
   setup: 1, setAttendance: 1, saveSettings: 1, saveStatuses: 1, changeCredentials: 1,
   addExpense: 1, updateExpense: 1, deleteExpense: 1,
   addCategory: 1, updateCategory: 1, deleteCategory: 1,
@@ -265,6 +267,7 @@ function route_(req) {
   }
   try {
     var out;
+    var jr = (ACTIVITY_LABEL_[a] && typeof JR_begin_ === 'function') ? JR_begin_() : false;   // start noting which rows this action changes
     switch (a) {
       case 'setup':             return setup_(req);
       case 'logout':            CacheService.getScriptCache().remove('tok_' + req.token); markOffline_(CTX.uid); return { ok: true };
@@ -345,6 +348,8 @@ function route_(req) {
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
       case 'chatLive':          return chatLive_(req);
+      case 'historyList':       return historyList_();
+      case 'historyRestore':    out = historyRestore_(req); break;
       case 'trashList':         return trashList_();
       case 'trashMediaTicket':  return trashMediaTicket_(req);
       case 'chatTranslate':     return chatTranslate_(req);
@@ -357,9 +362,11 @@ function route_(req) {
       case 'activityLog':       if (!isAdminCtx_() && !actUsersOn_()) fail_('The activity log is only for admins.', 'PERM'); return { ok: true, logs: teamRows_(readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid)) };
       default: fail_('Unknown action: ' + a);
     }
+    if (jr) { var jch = JR_end_(); if (out && out.ok !== false) recordHistory_(a, req, jch); }
     if (out && out.ok !== false) logActivity_(a, CTX, req);     // only log actions that actually succeeded
     return out;
   } finally {
+    if (typeof JR_abort_ === 'function') JR_abort_();
     if (lock) lock.releaseLock();
   }
 }
@@ -643,11 +650,105 @@ function readLog_(limit, uid) {
   return out;
 }
 
+// ---------- CHANGE HISTORY (main admin): every edit / delete is remembered row by row and can be put back ----------
+var HIST_KEEP = 1200;
+function histNorm_(r) {
+  var a = [];
+  for (var i = 0; i < r.length; i++) { var x = r[i]; a.push(x === null || x === undefined ? '' : (x && typeof x.getTime === 'function' ? new Date(x.getTime()).toISOString() : x)); }
+  while (a.length && a[a.length - 1] === '') a.pop();
+  return a;
+}
+function recordHistory_(a, req, ch) {
+  try {
+    if (!ch || !ch.length) return;
+    var total = 0; ch.forEach(function (c) { total += c.before.length + c.after.length; });
+    var json = JSON.stringify(ch), detail = activityDetail_(a, req || {});
+    if (total > 400 || json.length > 45000) { json = '[]'; detail = (detail ? detail + ' · ' : '') + 'too large to restore automatically'; }
+    var sh = getSheet_('HIST');
+    sh.appendRow(['H' + Utilities.getUuid().replace(/-/g, '').slice(0, 9), Date.now(), nowStr_(), CTX.uid, CTX.name || CTX.username || '', ACTIVITY_LABEL_[a] || a, detail, json, '']);
+    if (sh.getLastRow() > HIST_KEEP) sh.deleteRows(2, 400);
+  } catch (e) {}
+}
+function histPreview_(rows, hide) {
+  if (hide) return rows.length ? ['(hidden: ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ')'] : [];
+  return rows.slice(0, 3).map(function (r) { return r.filter(function (x) { return x !== ''; }).slice(0, 6).join(' · ').slice(0, 140); });
+}
+function historyList_() {
+  if (!CTX.primary) fail_('Only the main admin can open the change history.', 'PERM');
+  var sh = getSheet_('HIST'), last = sh.getLastRow(), items = [];
+  if (last < 2) return { ok: true, items: items };
+  var n = Math.min(last - 1, 300);
+  var vals = sh.getRange(last - n + 1, 1, n, 9).getValues();
+  for (var i = vals.length - 1; i >= 0; i--) {
+    var r = vals[i], ch = [];
+    try { ch = JSON.parse(String(r[7] || '[]')); } catch (e) { ch = []; }
+    items.push({
+      id: String(r[0]), time: tsStr_(r[2]), uid: String(r[3]), name: String(r[4]), action: String(r[5]), detail: String(r[6]), restored: String(r[8] || ''), can: ch.length > 0,
+      changes: ch.map(function (c) {
+        var hide = /password|users|settings|login/i.test(c.sheet);
+        return { sheet: c.sheet, kind: !c.before.length ? 'Added' : (!c.after.length ? 'Deleted' : 'Edited'), n: Math.max(c.before.length, c.after.length), before: histPreview_(c.before, hide), after: histPreview_(c.after, hide) };
+      })
+    });
+  }
+  return { ok: true, items: items };
+}
+// where does this change sit in the sheet NOW? (-1 = the data was changed again since, so it cannot be put back safely)
+function histLocate_(cur, c) {
+  var J = JSON.stringify, n = c.after.length, i, d;
+  if (n > 0) {
+    var A = c.after.map(J);
+    var match = function (p) { if (p < 0) return false; for (var k = 0; k < n; k++) if (!cur[p + k] || J(cur[p + k]) !== A[k]) return false; return true; };
+    if (match(c.start)) return c.start;
+    for (d = 1; d <= cur.length; d++) { if (match(c.start - d)) return c.start - d; if (match(c.start + d)) return c.start + d; }
+    return -1;
+  }
+  var P = c.prev ? J(c.prev) : null, N = c.next ? J(c.next) : null;     // a pure delete: put the rows back between the same neighbours
+  var fits = function (p) { return p >= 0 && p <= cur.length && (p === 0 ? P === null : (cur[p - 1] && J(cur[p - 1]) === P)) && (p >= cur.length ? N === null : (cur[p] && J(cur[p]) === N)); };
+  if (fits(c.start)) return c.start;
+  for (d = 1; d <= cur.length; d++) { if (fits(c.start - d)) return c.start - d; if (fits(c.start + d)) return c.start + d; }
+  return Math.min(c.start, cur.length);                                   // neighbours changed too: still bring the rows back, close to where they were
+}
+function historyRestore_(req) {
+  if (!CTX.primary) fail_('Only the main admin can restore changes.', 'PERM');
+  var id = String(req.id || '').trim();
+  var hs = getSheet_('HIST'), last = hs.getLastRow();
+  if (last < 2) fail_('Nothing to restore.');
+  var vals = hs.getRange(2, 1, last - 1, 9).getValues(), row = -1, i;
+  for (i = vals.length - 1; i >= 0; i--) if (String(vals[i][0]) === id) { row = i + 2; break; }
+  if (row < 0) fail_('This entry is no longer in the history.');
+  var rec = vals[row - 2];
+  if (String(rec[8] || '')) fail_('This change was already restored.');
+  var ch = []; try { ch = JSON.parse(String(rec[7] || '[]')); } catch (e) { ch = []; }
+  if (!ch.length) fail_('This change is too large to restore automatically.');
+  var plan = [];
+  for (i = 0; i < ch.length; i++) {
+    var c = ch[i], sh = null, all = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+    for (var j = 0; j < all.length; j++) if (all[j].getName() === c.sheet) { sh = all[j]; break; }
+    if (!sh) fail_('The sheet “' + c.sheet + '” no longer exists.');
+    var lr = sh.getLastRow(), cur = lr ? sh.getRange(1, 1, lr, Math.max(1, sh.getLastColumn())).getValues().map(histNorm_) : [];
+    var pos = histLocate_(cur, c);
+    if (pos < 0) fail_('Cannot restore this one: the same rows in “' + c.sheet + '” were changed again afterwards. Restore the newer change first.');
+    plan.push({ sh: sh, c: c, pos: pos });
+  }
+  plan.forEach(function (p) {
+    var n = p.c.after.length, m = p.c.before.length, k;
+    if (m > n) { for (k = 0; k < m - n; k++) p.sh.insertRowAfter(p.pos + n); }
+    else if (m < n) p.sh.deleteRows(p.pos + m + 1, n - m);
+    if (m > 0) {
+      var w = 1; p.c.before.forEach(function (r) { if (r.length > w) w = r.length; });
+      var rows = p.c.before.map(function (r) { var o = r.slice(); while (o.length < w) o.push(''); return o; });
+      var rg = p.sh.getRange(p.pos + 1, 1, m, w); rg.setValues(rows);
+    }
+  });
+  hs.getRange(row, 9).setValue(nowStr_() + ' by ' + (CTX.name || CTX.username || ''));
+  return { ok: true, restored: ch.length };
+}
+
 // ---------- ACTIVITY LOG (what each user did: every save / add / delete, not just sign-ins) ----------
 // Human-readable label + a short detail builder for each action the app can log.
 var ACTIVITY_LABEL_ = {
   setAttendance: 'Updated attendance', saveSettings: 'Changed settings', saveStatuses: 'Changed status codes',
-  addStatus: 'Added a status code', deleteStatus: 'Deleted a status code',
+  addStatus: 'Added a status code', deleteStatus: 'Deleted a status code', historyRestore: 'Restored an earlier change',
   addEmployee: 'Added an employee', updateEmployee: 'Updated an employee', deleteEmployee: 'Deleted an employee',
   changeCredentials: 'Changed login password', addExpense: 'Added an expense', updateExpense: 'Updated an expense', deleteExpense: 'Deleted an expense',
   addCategory: 'Added a category', updateCategory: 'Updated a category', deleteCategory: 'Deleted a category',
@@ -1173,6 +1274,9 @@ function createSheet_(k) {
     sh.getRange(1, 1, 1, 8).setValues([['ID', 'Time (ms)', 'From (user ID)', 'To (user ID)', 'Message', 'Sent at', 'Reply to (JSON)', 'Edited at (ms)']]);
     sh.getRange('A:A').setNumberFormat('@'); sh.getRange('C:G').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0');
     sh.setFrozenRows(1);
+  } else if (k === 'HIST') {
+    sh.getRange(1, 1, 1, 9).setValues([['Change ID', 'Time (ms)', 'Time', 'User ID', 'User name', 'Action', 'Detail', 'Changes (JSON)', 'Restored']]);
+    sh.getRange('A:I').setNumberFormat('@'); sh.setFrozenRows(1);
   } else if (k === 'TRASH') {
     sh.getRange(1, 1, 1, 12).setValues([['Trash ID', 'Deleted at (ms)', 'Deleted by (user ID)', 'Deleted by (name)', 'From (user ID)', 'From (name)', 'To (user ID / group)', 'To (name)', 'Message', 'Sent at (ms)', 'Sent at', 'Original message ID']]);
     sh.getRange('A:L').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0'); sh.getRange('J:J').setNumberFormat('0');
