@@ -1010,7 +1010,13 @@ function start(app, env) {
   const origin = env.ALLOWED_ORIGIN || '*';
   const cors = { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' };
   return http.createServer((rq, rs) => live.http(rq, rs, () => {
-    const send = (code, obj) => { rs.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, cors)); rs.end(JSON.stringify(obj)); };
+    const send = (code, obj) => {
+      const body = Buffer.from(JSON.stringify(obj)), h = Object.assign({ 'Content-Type': 'application/json', 'Vary': 'Accept-Encoding' }, cors);
+      if (body.length > 1024 && /\bgzip\b/.test(String(rq.headers['accept-encoding'] || ''))){    // smaller replies = faster on mobile data
+        try { const z = require('zlib').gzipSync(body, { level: 5 }); h['Content-Encoding'] = 'gzip'; h['Content-Length'] = z.length; rs.writeHead(code, h); return rs.end(z); } catch (e) {}
+      }
+      rs.writeHead(code, h); rs.end(body);
+    };
     if (rq.method === 'OPTIONS') { rs.writeHead(204, cors); return rs.end(); }
     const url = new URL(rq.url, 'http://x');
     if (rq.method === 'GET' && url.pathname === '/live/stream') return live.stream(rq, rs, cors, String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''));

@@ -154,3 +154,44 @@ html[data-mode="dark"] .pa{background:#1e293b;color:#e2e8f0;border-color:rgba(14
 #lcCard textarea.input{min-height:84px;resize:vertical}
 #lcCard .lc-save{position:sticky;bottom:8px;z-index:4;display:flex;gap:8px;margin-top:14px;padding:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
 #lcCard .lc-save .btn{flex:1}
+
+/* ---------- Settings: headings that open / close (accordion) ---------- */
+.set-hub .set-grp{margin:0 0 8px;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.set-hub .set-gt{display:flex;align-items:center;gap:10px;width:100%;margin:0;padding:11px 12px;background:none;border:0;color:var(--ink);font:inherit;font-size:calc(14.5px*var(--fs));font-weight:700;text-transform:none;letter-spacing:0;text-align:left;cursor:pointer}
+.set-hub .set-gt::after{content:none}
+.set-hub .set-gi{flex:none;width:30px;height:30px;border-radius:9px;background:var(--brand-soft);display:grid;place-items:center;font-size:calc(16px*var(--fs))}
+.set-hub .set-gn{flex:1;min-width:0}
+.set-hub .set-gt i{order:0;font-style:normal;min-width:20px;padding:1px 7px;border-radius:999px;background:var(--brand-soft);color:var(--brand-ink);font-size:11px;font-weight:800;text-align:center}
+.set-hub .set-chev{flex:none;font-size:22px;line-height:1;color:var(--muted);transition:transform .2s}
+.set-hub .set-grp.open .set-chev{transform:rotate(90deg)}
+.set-hub .set-tiles{display:none;border-top:1px solid var(--line)}
+.set-hub .set-grp.open .set-tiles{display:block}
+.set-hub .set-tile{display:flex;flex-direction:row;align-items:center;gap:10px;min-height:0;padding:9px 12px;border:0;border-radius:0;box-shadow:none;background:none;transform:none}
+.set-hub .set-tile+.set-tile{border-top:1px solid var(--line)}
+.set-hub .set-tile:hover{box-shadow:none;transform:none;background:var(--soft)}
+.set-hub .set-ic{width:32px;height:32px;border-radius:9px;font-size:calc(16px*var(--fs))}
+.set-hub .set-tx b{font-size:calc(14px*var(--fs))}
+.set-hub .set-tx small{font-size:calc(11.5px*var(--fs));display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.set-hub .set-go{display:block;font-size:20px}
+.set-hub .set-search{margin-bottom:10px;max-width:none}
+.set-hub .set-search .input{padding-top:8px;padding-bottom:8px}
+
+/* ---------- smaller cards / fields / buttons so more fits on a phone screen ---------- */
+@media (max-width:640px){
+  html.ks-compact .card h3{font-size:calc(14.5px*var(--fs));margin-bottom:8px}
+  html.ks-compact .field{margin-bottom:8px}
+  html.ks-compact .field label{font-size:calc(12px*var(--fs));margin-bottom:3px}
+  html.ks-compact .input,html.ks-compact .select{padding:8px 11px;font-size:calc(14px*var(--fs))}
+  html.ks-compact .btn{padding:7px 12px;font-size:calc(13.5px*var(--fs))}
+  html.ks-compact .btn.sm{padding:5px 9px}
+  html.ks-compact th,html.ks-compact td{padding:6px 8px}
+  html.ks-compact .set-detail>.card{padding-top:10px;margin-bottom:8px}
+  html.ks-compact .set-detail>.card>h3{padding-bottom:8px;margin-bottom:8px}
+  html.ks-compact .set-bar{padding:7px 10px;margin-bottom:8px}
+  html.ks-compact .set-bic{width:32px;height:32px}
+  html.ks-compact .row2{gap:8px}
+  html.ks-compact .modal{max-height:92vh}
+  html.ks-compact .th-row{margin-bottom:8px}
+  html.ks-compact .regbox>summary{padding:8px 10px}
+  html.ks-compact .loc-box{margin-top:10px;padding-top:10px}
+}
