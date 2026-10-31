@@ -11,7 +11,7 @@ const info = { integrations: [], started: Date.now() };
 let seq = 0, lag = 0;
 
 // background polling the app does all the time (hidden by default in the viewer)
-const POLL = new Set(['chatLive', 'callPoll', 'ludoPoll', 'callConfig', 'chatPing', 'chatFetch', 'getAll', 'status']);
+const POLL = new Set(['chatLive', 'chatTyping', 'callPoll', 'ludoPoll', 'callConfig', 'chatPing', 'chatFetch', 'getAll', 'status']);
 // only these request fields are ever shown (names of fields are shown for everything else, never their values)
 const SAFE = new Set(['date', 'month', 'year', 'emp', 'code', 'status', 'id', 'to', 'with', 'kind', 'purpose', 'cat', 'category', 'type', 'amount', 'slot', 'group', 'username']);
 
@@ -85,7 +85,7 @@ function classify(rawUrl, method) {
   const h = u.hostname, p = u.pathname, m = String(method || 'GET').toUpperCase();
   if (h === 'sheets.googleapis.com') return null;                        // shown by the store wrapper (load / save)
   if (h === 'oauth2.googleapis.com' || p.startsWith('/oauth2/')) return { d: 'oauth', l: m + ' ' + p };
-  if (h === 'translate.googleapis.com' || h === 'translation.googleapis.com' || h === 'clients5.google.com' || h === 'api.mymemory.translated.net' || h === 'lingva.ml') return { d: 'translate', l: 'Translate text (' + h.replace(/^(translate|translation)\.googleapis\.com$/, 'google').replace('clients5.google.com', 'google backup') + ')' };
+  if (h === 'translate.googleapis.com') return { d: 'translate', l: 'Translate text' };
   if (h === 'www.googleapis.com' && p.startsWith('/calendar/')) return { d: 'calendar', l: m + ' ' + p.replace(/^\/calendar\/v3\/calendars\/primary\//, '') };
   if (h === 'www.googleapis.com' && /^\/(upload\/)?drive\//.test(p)) return { d: 'drive', l: m + ' ' + p.replace(/^\/(upload\/)?drive\/v3\//, '') };
   if (h === 'api.github.com') return { d: 'github', l: m + ' ' + p.replace(/^\/repos\/[^/]+\/[^/]+/, '') };
