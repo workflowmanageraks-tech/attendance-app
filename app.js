@@ -1498,7 +1498,7 @@ async function locSave(sel){
   sel.disabled = true;
   try{
     const r = await api('setMyLocation', { tz, loc });
-    S.myLoc = { uid:S.me.id, tz:r.tz || '', loc:r.loc || '' };
+    S.myLoc = { uid:S.me.id, tz:r.tz || '', loc:r.loc || '' }; if (S.chat) S.chat.meTz = r.tz || '';
     const n = document.getElementById('locNow'); if (n) n.textContent = r.tz ? '🕐 Your time there now: ' + locTimeStr(r.tz) : 'Not set — others will not see your time.';
     toast(r.tz ? 'Location saved · ' + (r.loc || r.tz) : 'Location removed');
   }catch(e){ handleErr(e); const m = locMine(); sel.value = m ? m.tz : ''; }
@@ -4282,7 +4282,7 @@ function photoViewer(nm, src){
 document.addEventListener('keydown', e => { if (e.key === 'Escape'){ if ($('#pvView')) closePhotoViewer(); else if ($('#pfView')) closeProfile(); } });
 
 /* ---------- chat themes (each user picks their own; saved on this phone) ---------- */
-const CH_THEMES = [['', 'Default', ['#efeae2', '#d9fdd3', '#ffffff']], ['dark', 'Dark', ['#0b141a', '#005c4b', '#202c33']], ['midnight', 'Midnight', ['#0a0f24', '#4f46e5', '#1a2145']],
+const CH_THEMES = [['tg', 'Violet night', ['#0e0b14', 'linear-gradient(135deg,#6d4aa8,#a0518a)', '#201d27']], ['', 'Classic', ['#efeae2', '#d9fdd3', '#ffffff']], ['dark', 'Dark', ['#0b141a', '#005c4b', '#202c33']], ['midnight', 'Midnight', ['#0a0f24', '#4f46e5', '#1a2145']],
   ['ocean', 'Ocean', ['#d7eefc', '#8fd3ff', '#ffffff']], ['forest', 'Forest', ['#e3f1e0', '#b7e4a8', '#ffffff']], ['sunset', 'Sunset', ['#ffe5d4', '#ffb88a', '#fffaf6']],
   ['rose', 'Rose', ['#fde4ee', '#f9a8c9', '#ffffff']], ['neon', 'Neon', ['#0d0221', '#8b2bff', '#1b0b3a']], ['gold', 'Royal gold', ['#1c1710', '#b8892b', '#2a2218']],
   ['leather', 'Black leather', ['#16130f', '#6b5326', '#2c2822']], ['glass', 'Gold glass', ['linear-gradient(135deg,#ecdcb9,#cfae76)', 'rgba(255,255,255,.35)', 'rgba(255,255,255,.7)']],
@@ -4291,7 +4291,7 @@ const CH_THEMES = [['', 'Default', ['#efeae2', '#d9fdd3', '#ffffff']], ['dark', 
   ['mocha', 'Mocha', ['#2b211b', '#8a5a3b', '#3a2d25']], ['amoled', 'AMOLED black', ['#000000', '#14532d', '#141414']],
   ['lavender', 'Lavender', ['#ede7fb', '#c9b6f5', '#ffffff']], ['mint', 'Mint', ['#dff5ec', '#a7e8cd', '#ffffff']], ['crimson', 'Crimson night', ['#1a0b0e', '#9f1239', '#2b1217']]];
 const chThemeKey = () => 'ks_chat_theme_' + ((S.me && S.me.id) || 'x');
-function chThemeGet(){ try{ return localStorage.getItem(chThemeKey()) || ''; }catch(e){ return ''; } }
+function chThemeGet(){ try{ const v = localStorage.getItem(chThemeKey()); return v === null ? 'tg' : v; }catch(e){ return 'tg'; } }      // never chosen = the new violet look
 function chatThemeApply(){
   const root = $('#chatRoot'); if (!root) return;
   const t = chThemeGet();
@@ -4303,7 +4303,7 @@ const chCustKey = () => 'ks_chat_thc_' + ((S.me && S.me.id) || 'x'), chWpKey = (
 function chCustGet(){ try{ return JSON.parse(localStorage.getItem(chCustKey()) || '{}') || {}; }catch(e){ return {}; } }
 function chCustSet(o){ try{ localStorage.setItem(chCustKey(), JSON.stringify(o)); }catch(e){} }
 function chWpImg(){ try{ return localStorage.getItem(chWpKey()) || ''; }catch(e){ return ''; } }
-const CH_DEF = { leather:{ bs:'outline', rad:16, wp:'leather', acc:'#d6a24b' }, glass:{ bs:'outline', rad:16, wp:'marble', acc:'#c9962f' },
+const CH_DEF = { tg:{ wp:'doodle', acc:'#8b5cf6' }, leather:{ bs:'outline', rad:16, wp:'leather', acc:'#d6a24b' }, glass:{ bs:'outline', rad:16, wp:'marble', acc:'#c9962f' },
   ios:{ rad:18, acc:'#0a84ff' }, iosdark:{ rad:18, acc:'#0a84ff' }, aurora:{ rad:18, wp:'aurora', gl:1, acc:'#a78bfa' }, sky:{ rad:18, wp:'sky', gl:1, acc:'#2a8cf0' } };
 const CH_LEATHER_SVG = encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='a'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' seed='7'/><feColorMatrix values='0 0 0 0 .85 0 0 0 0 .7 0 0 0 0 .45 0 0 0 .20 0'/></filter><filter id='b'><feTurbulence type='fractalNoise' baseFrequency='.012' numOctaves='3' seed='3'/><feColorMatrix values='0 0 0 0 .9 0 0 0 0 .75 0 0 0 0 .5 0 0 0 .16 0'/></filter><rect width='100%' height='100%' filter='url(%23a)'/><rect width='100%' height='100%' filter='url(%23b)'/></svg>");
 const CH_WP = {
@@ -4314,6 +4314,21 @@ const CH_WP = {
   wood:'repeating-linear-gradient(92deg,rgba(50,25,8,.14) 0 3px,rgba(0,0,0,0) 3px 12px) 0 0/100% 100%,linear-gradient(180deg,#a1703f,#7d5129 60%,#935f33)',
   leather:'radial-gradient(ellipse at 50% 25%,rgba(255,255,255,.06),rgba(0,0,0,.5) 90%) 0 0/100% 100% no-repeat,url("data:image/svg+xml;utf8,' + CH_LEATHER_SVG + '") 0 0/240px 240px repeat,#17140f'
 };
+
+const CH_DOODLE_SVG = encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='260' height='260' viewBox='0 0 260 260' fill='none' stroke='rgba(255,255,255,.085)' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'>"
+  + "<g transform='translate(34 36) rotate(-12)'><path d='M0 -4C-6 -12 -15 -2 0 9C15 -2 6 -12 0 -4Z'/></g>"
+  + "<g transform='translate(120 24)'><path d='M0 -9L2.5 -2.5L9 0L2.5 2.5L0 9L-2.5 2.5L-9 0L-2.5 -2.5Z'/></g>"
+  + "<g transform='translate(205 48) rotate(14)'><circle cx='-6' cy='6' r='5'/><circle cx='7' cy='8' r='5'/><path d='M-6 1C-4 -8 2 -12 8 -14M7 3C7 -4 8 -10 8 -14'/></g>"
+  + "<g transform='translate(70 108)'><circle r='11'/><circle r='4'/></g>"
+  + "<g transform='translate(160 100) rotate(-8)'><path d='M-14 -8H14V8H2L-6 15V8H-14Z'/></g>"
+  + "<g transform='translate(236 124)'><path d='M0 -4C-6 -12 -15 -2 0 9C15 -2 6 -12 0 -4Z'/></g>"
+  + "<g transform='translate(28 170) rotate(10)'><path d='M0 -9L2.5 -2.5L9 0L2.5 2.5L0 9L-2.5 2.5L-9 0L-2.5 -2.5Z'/></g>"
+  + "<g transform='translate(108 188)'><circle r='3'/><path d='M0 -14V-8M0 8V14M-14 0H-8M8 0H14M-10 -10L-6 -6M6 6L10 10M10 -10L6 -6M-6 6L-10 10'/></g>"
+  + "<g transform='translate(190 176) rotate(-14)'><path d='M-12 -4C-12 -12 0 -12 0 -4C0 -12 12 -12 12 -4C12 6 0 12 0 14C0 12 -12 6 -12 -4Z'/></g>"
+  + "<g transform='translate(238 222)'><path d='M0 -9L2.5 -2.5L9 0L2.5 2.5L0 9L-2.5 2.5L-9 0L-2.5 -2.5Z'/></g>"
+  + "<g transform='translate(60 238) rotate(8)'><path d='M-10 -6H10V6H-10Z'/><path d='M-10 -6L0 2L10 -6'/></g>"
+  + "<g transform='translate(150 240)'><circle r='7'/></g></svg>");
+CH_WP.doodle = 'url("data:image/svg+xml;utf8,' + CH_DOODLE_SVG + '") 0 0/260px 260px repeat,radial-gradient(ellipse at 50% 15%,#1b1528,#0c0a12 75%)';
 function chWpCss(wp, dim){
   const dm = dim > 0 ? `linear-gradient(rgba(0,0,0,${dim / 100}),rgba(0,0,0,${dim / 100})) 0 0/100% 100% no-repeat,` : '';
   if (wp === 'photo'){ const img = chWpImg(); return img ? dm + `url("${img}") center/cover no-repeat,#000` : ''; }
@@ -4344,7 +4359,7 @@ function chatThemeCustom(){
       <label class="th-col"><input type="color" data-cc="tx" value="${C.tx || (t === 'glass' ? '#3d2a10' : (t && t !== '' ? '#f3e3c3' : '#0f172a'))}"><span>Message text</span></label></div></div>
     <div class="th-row"><div class="th-lbl"><span>🍏 iPhone glass effect</span></div>${seg('gl', [['', 'Theme'], ['on', 'On'], ['off', 'Off']])}<div class="th-note" style="margin:6px 0 0">Frosted, see-through bars and bubbles. Looks best with a wallpaper.</div></div>
     <div class="th-row"><div class="th-lbl"><span>My message style</span></div>${seg('bs', [['', 'Theme'], ['outline', 'Outline'], ['filled', 'Filled']])}</div>
-    <div class="th-row"><div class="th-lbl"><span>Wallpaper</span></div>${seg('wp', [['', 'Theme'], ['aurora', 'Aurora'], ['sky', 'Sky'], ['sunset', 'Sunset'], ['marble', 'Marble'], ['wood', 'Wood'], ['leather', 'Leather'], ['none', 'Plain'], ['photo', '📷 My photo']])}<input type="file" id="chWpFile" accept="image/*" hidden></div>
+    <div class="th-row"><div class="th-lbl"><span>Wallpaper</span></div>${seg('wp', [['', 'Theme'], ['doodle', 'Doodle'], ['aurora', 'Aurora'], ['sky', 'Sky'], ['sunset', 'Sunset'], ['marble', 'Marble'], ['wood', 'Wood'], ['leather', 'Leather'], ['none', 'Plain'], ['photo', '📷 My photo']])}<input type="file" id="chWpFile" accept="image/*" hidden></div>
     ${rng('rad', 'Bubble roundness', 4, 28, D.rad !== undefined ? D.rad : 12, 'px')}
     ${rng('blur', 'Glass blur', 0, 24, 14, 'px')}
     ${rng('dim', 'Darken wallpaper', 0, 70, 0, '%')}
@@ -4378,6 +4393,81 @@ function chatThemeCustom(){
       localStorage.setItem(chWpKey(), cv.toDataURL('image/jpeg', .65));
       C.wp = 'photo'; save();
       w.querySelectorAll('[data-ck="wp"] button').forEach(x => x.classList.toggle('on', x.dataset.v === 'photo'));
+    }catch(x){ toast('Could not use this picture. Try another one.', true); }
+  };
+}
+
+/* ---------- two times on every message: left = sender's local time, right = receiver's local time ---------- */
+const chFmt = {};
+function chClockTz(t, tz){ try{ const f = chFmt[tz] || (chFmt[tz] = new Intl.DateTimeFormat('en-IN', { timeZone:tz, hour:'numeric', minute:'2-digit' })); return f.format(new Date(t)); }catch(e){ return ''; } }
+function chMyTz(){ const m = locMine(); return (S.chat && S.chat.meTz) || (m && m.tz) || Intl.DateTimeFormat().resolvedOptions().timeZone; }
+function chDual(m, u){
+  if (!u || u.isGroup || !u.tz) return null;                       // needs the other person's location (Settings → Profile photo → My location)
+  const me = chMyTz(), a = m.mine ? me : u.tz, b = m.mine ? u.tz : me, x = chClockTz(m.t, a), y = chClockTz(m.t, b);
+  return x && y ? { s:x, r:y } : null;
+}
+/* ---------- composer: emoji panel, mic <-> send button ---------- */
+const CH_EMO = ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','😉','😍','🥰','😘','😋','😜','🤪','😎','🤩','🥳','😏','😒','😞','😔','😢','😭','😤','😡','🤯','😱','😴','🤗','🤔','🙄','😬','👍','👎','👌','✌️','🤞','🙏','👏','🙌','💪','🔥','✨','❤️','🧡','💛','💚','💙','💜','🖤','💔','💕','💯','🎉','🎂','🌹'];
+function chatEmoji(ev){
+  if (ev) ev.stopPropagation();
+  const old = $('#chEmo'); if (old){ old.remove(); return; }
+  const comp = $('.ch-comp'), ta = $('#chInput'); if (!comp || !ta) return;
+  const p = document.createElement('div'); p.id = 'chEmo'; p.className = 'ch-emo';
+  p.innerHTML = CH_EMO.map(e => `<button type="button">${e}</button>`).join('');
+  comp.appendChild(p);
+  p.onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const a = ta.selectionStart == null ? ta.value.length : ta.selectionStart, z = ta.selectionEnd == null ? a : ta.selectionEnd;
+    ta.value = ta.value.slice(0, a) + b.textContent + ta.value.slice(z);
+    const c = a + b.textContent.length; try{ ta.setSelectionRange(c, c); }catch(x){}
+    ta.dispatchEvent(new Event('input'));
+  };
+  const close = e => { if (e && e.target && e.target.closest && e.target.closest('#chEmo')) return; p.remove(); document.removeEventListener('click', close, true); };
+  setTimeout(() => document.addEventListener('click', close, true), 0);
+}
+function chSyncBtn(){
+  const b = $('#chSend'), ta = $('#chInput'); if (!b || !ta) return;
+  const mic = !ta.value.trim() && !(S.chat.ed && S.chat.ed[S.chat.with]), want = mic ? 'mic' : 'send';
+  if (b.dataset.m === want) return;
+  b.dataset.m = want; b.innerHTML = mic ? VC_IC.mic : '➤'; b.setAttribute('aria-label', mic ? 'Voice note' : 'Send');
+}
+function chatSendOrVoice(){
+  const ta = $('#chInput'), u = chatPeer(S.chat.with);
+  if ((ta && ta.value.trim()) || (u && S.chat.ed && S.chat.ed[u.id])) chatSend(); else chatVoiceStart();
+  setTimeout(chSyncBtn, 0); setTimeout(chSyncBtn, 400);
+}
+/* ---------- chat wallpaper (quick picker) ---------- */
+function chatWallpaperMenu(){
+  const C = chCustGet(), D = CH_DEF[chThemeGet()] || {}, cur = C.wp || D.wp || '';
+  const opts = [['doodle', 'Doodle'], ['aurora', 'Aurora'], ['sky', 'Sky'], ['sunset', 'Sunset'], ['marble', 'Marble'], ['wood', 'Wood'], ['leather', 'Leather'], ['none', 'Plain']];
+  const w = openModal(`<h3>🖼 Chat wallpaper</h3><p class="sub">Pick a background for your chats. Only you see this.</p>
+    <div class="cth-grid">${opts.map(([k, n]) => `<button type="button" class="cth-it ${k === cur ? 'on' : ''}" data-w="${k}"><span class="cth-pv" style="background:${k === 'none' ? '#2a2a30' : CH_WP[k]}"></span><span class="cth-n">${n}</span></button>`).join('')}
+      <button type="button" class="cth-it ${cur === 'photo' ? 'on' : ''}" data-w="photo"><span class="cth-pv" style="background:#3a3550;display:grid;place-items:center;font-size:22px">📷</span><span class="cth-n">My photo</span></button></div>
+    <div class="th-row" style="margin-top:12px"><div class="th-lbl"><span>Darken wallpaper</span><b id="wpDimV">${C.dim || 0}%</b></div><input type="range" id="wpDim" min="0" max="70" step="1" value="${C.dim || 0}"></div>
+    <input type="file" id="wpFile" accept="image/*" hidden>
+    <div class="actions" style="margin-top:12px"><button class="btn ghost" type="button" id="wpReset">↺ Reset</button><button class="btn" type="button" id="wpOk">Done</button></div>`);
+  w.classList.add('pw-over');
+  const save = () => { chCustSet(C); chatThemeApply(); };
+  const mark = k => w.querySelectorAll('.cth-it').forEach(x => x.classList.toggle('on', x.dataset.w === k));
+  w.querySelector('#wpOk').onclick = () => w.remove();
+  w.querySelector('#wpReset').onclick = () => { delete C.wp; delete C.dim; save(); w.remove(); toast('Wallpaper reset'); };
+  w.querySelector('#wpDim').oninput = e => { C.dim = +e.target.value; w.querySelector('#wpDimV').textContent = C.dim + '%'; save(); };
+  w.querySelector('.cth-grid').onclick = e => {
+    const b = e.target.closest('[data-w]'); if (!b) return;
+    if (b.dataset.w === 'photo'){ w.querySelector('#wpFile').click(); return; }
+    C.wp = b.dataset.w; mark(C.wp); save();
+  };
+  w.querySelector('#wpFile').onchange = async e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    try{
+      const url = URL.createObjectURL(f);
+      const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('read')); i.src = url; });
+      URL.revokeObjectURL(url);
+      const k = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight)), cv = document.createElement('canvas');
+      cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      localStorage.setItem(chWpKey(), cv.toDataURL('image/jpeg', .65));
+      C.wp = 'photo'; mark('photo'); save();
     }catch(x){ toast('Could not use this picture. Try another one.', true); }
   };
 }
@@ -4468,22 +4558,22 @@ function chatRenderPane(){
   $('#chatRoot').classList.add('in-conv'); chatThemeApply();
   pane.innerHTML = `<div class="ch-head">
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
-      <div class="ch-av pf-hit" id="chHAv" onclick="chatProfile()" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
-      <div class="ch-info pf-hit" onclick="chatProfile()"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div><div class="ch-tm" id="chHTime"></div></div>
-      <div class="ch-calls"><button class="ch-cbtn" id="chMore" onclick="chatMoreMenu(event)" aria-label="More options" aria-haspopup="true">⋮</button></div>
+      <div class="ch-who"><div class="ch-av pf-hit" id="chHAv" onclick="chatProfile()" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
+      <div class="ch-info pf-hit" onclick="chatProfile()"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div><div class="ch-tm" id="chHTime"></div></div></div>
+      <div class="ch-calls">${u.isGroup ? '' : `<button class="ch-cbtn" type="button" onclick="vcDial('audio')" aria-label="Voice call"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button><button class="ch-cbtn" type="button" onclick="vcDial('video')" aria-label="Video call"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></button>`}<button class="ch-cbtn" id="chMore" onclick="chatMoreMenu(event)" aria-label="More options" aria-haspopup="true">⋮</button></div>
     </div>
     <div class="ch-sel" id="chSel" style="display:none"></div>
     <div class="ch-msgs" id="chMsgs"></div>
     <div class="ch-ctx" id="chCtx" style="display:none"></div>
-    <div class="ch-comp"><button class="ch-att" type="button" onclick="chatPlusMenu(event)" aria-label="Attach">＋</button><input type="file" id="chFile" accept="image/*,video/*" multiple hidden onchange="chatAttach(this)"><textarea id="chInput" rows="1" placeholder="Type a message" maxlength="2000"></textarea>
-      <button class="ch-send" id="chSend" onclick="chatSend()" aria-label="Send">➤</button></div>`;
+    <div class="ch-comp"><div class="ch-pill"><button class="ch-emo-btn" type="button" onclick="chatEmoji(event)" aria-label="Emoji"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button><textarea id="chInput" rows="1" placeholder="Message" maxlength="2000"></textarea><button class="ch-att" type="button" onclick="chatPlusMenu(event)" aria-label="Attach"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button></div><input type="file" id="chFile" accept="image/*,video/*" multiple hidden onchange="chatAttach(this)">
+      <button class="ch-send" id="chSend" onclick="chatSendOrVoice()" aria-label="Send">➤</button></div>`;
   const ta = $('#chInput');
   ta.value = S.chat.drafts[u.id] || '';
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; };
-  ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); chatTypingPing(u); };
+  ta.oninput = () => { S.chat.drafts[u.id] = ta.value; grow(); chatTypingPing(u); chSyncBtn(); };
   ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches){ e.preventDefault(); chatSend(); } };
   if (S.chat.ed[u.id]){ S.chat.ed[u.id] = null; S.chat.drafts[u.id] = S.chat.eb[u.id] || ''; ta.value = S.chat.drafts[u.id]; }     // an unfinished edit is dropped when the chat is reopened
-  grow(); chatHeader(); chatLangBtn(); chatSelBar(); chatBindMsgs(); S.chat.sig = ''; chatRenderMsgs(true); chatCtxBar();
+  grow(); chatHeader(); chatLangBtn(); chatSelBar(); chatBindMsgs(); S.chat.sig = ''; chatRenderMsgs(true); chatCtxBar(); chSyncBtn();
 }
 function chatHeader(){
   const u = chatPeer(S.chat.with); if (!u) return;
@@ -4497,7 +4587,7 @@ function chatHeader(){
 function chatRenderMsgs(toBottom){
   const box = $('#chMsgs'); if (!box) return;
   const id = S.chat.with, arr = S.chat.msgs[id] || [], pr = S.chat.peerRead[id] || 0, ps = S.chat.peerSeen[id] || 0;
-  const sig = arr.map(m => m.id + (m.state || '') + (m.mine ? (m.t <= pr ? 'r' : m.t <= ps ? 'd' : '') : '')).join(',') + '|' + S.chat.histLoaded[id] + '|' + S.chat.lang + '|' + S.chat.trv;
+  const sig = arr.map(m => m.id + (m.state || '') + (m.mine ? (m.t <= pr ? 'r' : m.t <= ps ? 'd' : '') : '')).join(',') + '|' + S.chat.histLoaded[id] + '|' + S.chat.lang + '|' + S.chat.trv + '|' + ((chatPeer(id) || {}).tz || '') + '|' + chMyTz();
   if (sig === S.chat.sig && !toBottom) return;
   if (!toBottom && [...box.querySelectorAll('video,audio')].some(v => !v.paused && !v.ended)){ S.chat.defer = true; return; }   // never rebuild the chat under a playing video
   S.chat.sig = sig;
@@ -4507,23 +4597,25 @@ function chatRenderMsgs(toBottom){
     return;
   }
   let html = '', day = '';
+  const pu = chatPeer(id);
   arr.forEach(m => {
     const dl = chDayLabel(m.t);
     if (dl !== day){ day = dl; html += `<div class="ch-day">${esc(dl)}</div>`; }
-    let meta = (m.edited ? 'edited · ' : '') + esc(chClock(m.t));
+    let dual = chDual(m, pu), tl = (m.edited ? 'edited · ' : '') + esc(dual ? dual.s : chClock(m.t)), tkh = '', meta = '';
     if (m.mine){
-      if (m.state === 'pending') meta = 'Sending…';
-      else if (m.state === 'failed') meta = 'Not sent · tap to retry';
+      if (m.state === 'pending'){ meta = 'Sending…'; dual = null; }
+      else if (m.state === 'failed'){ meta = 'Not sent · tap to retry'; dual = null; }
       else { const rdn = m.t <= pr, dlv = rdn || m.t <= ps;     // ✓ sent · ✓✓ grey = delivered (they were online) · ✓✓ blue = seen
-        const tk = chTicks(); meta += ` <span class="tick em ${rdn ? 'read' : dlv ? 'dlv' : ''}">${esc(rdn ? tk.read : dlv ? tk.dlv : tk.sent)}</span>`; }
+        const tk = chTicks(); tkh = ` <span class="tick em ${rdn ? 'read' : dlv ? 'dlv' : ''}">${esc(rdn ? tk.read : dlv ? tk.dlv : tk.sent)}</span>`; }
     }
+    if (!meta) meta = dual ? `<span class="tl" title="Time for the sender">${tl}</span><span class="tr" title="Time for the receiver">${esc(dual.r)}${tkh}</span>` : tl + tkh;
     const v = chatView(m), sl = S.chat.sel.has(m.id);
     const tg = v.busy ? '<div class="tg">🌐 Translating…</div>' : v.fail ? '<div class="tg bad">🌐 Could not translate · tap to retry</div>' : v.lang ? `<div class="tg">🌐 ${esc(CH_LANGS[v.lang].short)} · tap for options</div>` : '';
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chRqHtml(m)}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${v.text ? tg : ''}${chRxHtml(m)}<div class="mt">${meta}</div></div>`;
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''} ${dual ? 'd2' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chRqHtml(m)}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${v.text ? tg : ''}${chRxHtml(m)}<div class="mt${dual ? ' dual' : ''}">${meta}</div></div>`;
   });
   box.innerHTML = html;
   if (toBottom || near) box.scrollTop = box.scrollHeight; else box.scrollTop = keepTop;
-  chatNeedTr(); chatNeedMedia();
+  chatNeedTr(); chatNeedMedia(); chSyncBtn();
 }
 function chatMerge(id, list){
   const a = S.chat.msgs[id] || (S.chat.msgs[id] = []); let changed = false;
@@ -4552,7 +4644,7 @@ async function chatLoadUsers(){
       incoming = false;
     }
     all.forEach(u => { seen[u.id] = Math.max(seen[u.id] || 0, u.lastTime || 0); });
-    S.chat.users = r.users.map(u => ({ ...u, at }));
+    S.chat.meTz = r.meTz || ''; S.chat.users = r.users.map(u => ({ ...u, at }));
     S.chat.groups = (r.groups || []).map(g => ({ ...g, at }));
     S.chat.users.concat(S.chat.groups).forEach(u => { if (S.view === 'chat' && S.chat.with === u.id) u.unread = 0; });   // the open chat is being read
     if (S.chat.with && !chatPeer(S.chat.with)){ S.chat.with = null; document.body.classList.remove('chat-conv'); if (S.view === 'chat') chatRenderPane(); }   // group deleted / permission removed
@@ -4665,7 +4757,7 @@ function groupChatForm(id){
     ev.preventDefault(); const f = new FormData(ev.target), btn = ev.submitter; btn.disabled = true;
     try {
       const r = await chatApi('chatGroupSave', { id:g ? g.id : '', name:f.get('name'), members:f.getAll('gm') });
-      const at = Date.now(); S.chat.users = r.users.map(u => ({ ...u, at })); S.chat.groups = (r.groups || []).map(x => ({ ...x, at }));
+      const at = Date.now(); S.chat.meTz = r.meTz || ''; S.chat.users = r.users.map(u => ({ ...u, at })); S.chat.groups = (r.groups || []).map(x => ({ ...x, at }));
       w.remove(); chatRenderList();
       if (!g){ const ng = S.chat.groups.find(x => x.name === String(f.get('name')).trim() && x.mineOwner); if (ng) chatOpen(ng.id); }
       else if (S.chat.with === g.id) chatRenderPane();
@@ -4753,18 +4845,18 @@ function chatMoreMenu(ev){
   const u = chatPeer(S.chat.with), head = $('.ch-head'); if (!u || !head) return;
   const m = document.createElement('div'); m.id = 'chMenu'; m.className = 'ch-menu'; m.setAttribute('role', 'menu');
   const item = (ic, label, fn, sub) => `<button type="button" role="menuitem" data-fn="${fn}"><span class="ic">${ic}</span><span>${label}${sub ? `<small>${sub}</small>` : ''}</span></button>`;
-  m.innerHTML = item('🌐', 'Translate chat', 'tr', S.chat.lang ? 'On · ' + esc(CH_LANGS[S.chat.lang].name) : 'Off')
+  m.innerHTML = item('🖼️', 'Wallpaper', 'wp', 'Doodle, colours or your own photo') + item('🌐', 'Translate chat', 'tr', S.chat.lang ? 'On · ' + esc(CH_LANGS[S.chat.lang].name) : 'Off')
     + item('🎨', 'Chat theme', 'theme', chThemeGet() ? esc((CH_THEMES.find(x => x[0] === chThemeGet()) || [0, ''])[1]) : 'Default')
     + item('💬', 'Message pop-up', 'pop', 'Size, layout, colour, transparency')
     + item('🤩', 'Message ticks', 'ticks', (() => { const k = chTicks(); return k.sent + ' ' + k.dlv + ' ' + k.read; })())
     + item('🎲', 'Play Ludo', 'ludo')
-    + (u.isGroup ? item('ℹ️', 'Group info', 'grp') : item('📞', 'Voice call', 'audio') + item('🎥', 'Video call', 'video'));
+    + (u.isGroup ? item('ℹ️', 'Group info', 'grp') : '');
   head.appendChild(m);
   const close = () => { m.remove(); document.removeEventListener('click', close, true); };
   m.onclick = e => {
     const b = e.target.closest('[data-fn]'); if (!b) return;
     const f = b.dataset.fn; close();
-    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'pop') chatPopMenu(); else if (f === 'ticks') chatTickMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
+    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'pop') chatPopMenu(); else if (f === 'ticks') chatTickMenu(); else if (f === 'wp') chatWallpaperMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
 }

@@ -2842,7 +2842,7 @@ function chatUsers_() {
       unread: o.unread, lastText: o.last ? chatPreview_(o.last.text) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false,
       lastFrom: o.last && o.last.from !== CTX.uid ? (nm[o.last.from] || 'Someone') : '' };
   });
-  return { ok: true, users: users, groups: groups, unread: total, now: now, me: CTX.uid, mePv: avVer_(avm[CTX.uid]) };
+  return { ok: true, users: users, groups: groups, unread: total, now: now, me: CTX.uid, mePv: avVer_(avm[CTX.uid]), meTz: (lcm[CTX.uid] || {}).tz || '' };
 }
 // ---------- my location / time zone (shown under my name in other people's chat as my local time) ----------
 // LOC_<userId> = {"tz":"Asia/Kolkata","loc":"India"}
